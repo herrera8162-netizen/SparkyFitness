@@ -30,8 +30,18 @@
 
 # SparkyFitness
 
+> [!NOTE]
+> **Unified Single-Container Fork**
+> This fork modifies the standard SparkyFitness deployment to host both the React frontend and the Express backend inside a **single, unified container**. 
+> - The Express backend serves the built frontend static assets directly, removing the need for a separate Nginx container.
+> - Relies on a single Node.js process, reducing resources and footprint.
+> - Eases local hosting and reverse proxy configuration since both backend and frontend run on the same port (3010).
+> 
+> To deploy using this unified setup, refer to [docker/docker-compose.unified.yml](file:///Users/pedro/projects/SparkyFitness/docker/docker-compose.unified.yml) and build/deploy using `Dockerfile.unified`.
+
 A self-hosted, privacy-first alternative to MyFitnessPal. Track nutrition, exercise, body metrics, and health data while keeping full control of your data.
 <img width="1280" height="600" alt="image" src="https://github.com/user-attachments/assets/67a5fb86-cc98-42ce-aa1e-ded7c57647c9" />
+
 
 
 
