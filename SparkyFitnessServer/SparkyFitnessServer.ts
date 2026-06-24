@@ -527,7 +527,7 @@ if (fs.existsSync(FRONTEND_DIST_DIR)) {
   );
 
   // Wildcard fallback for React SPA client-side routing
-  app.get('*', (req, res, next) => {
+  app.get(/(.*)/, (req, res, next) => {
     // Only serve index.html for non-API, non-uploads, non-mcp routes
     if (
       req.path.startsWith('/api/') ||
