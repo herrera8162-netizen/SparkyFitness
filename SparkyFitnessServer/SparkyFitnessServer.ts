@@ -497,6 +497,55 @@ app.get(
 );
 app.get('/api/api-docs/json', (_req, res) => res.json(swaggerSpecs));
 app.get('/api/api-docs', (_req, res) => res.redirect('/api/api-docs/swagger'));
+
+// Serve frontend static files if they exist
+const FRONTEND_DIST_DIR =
+  process.env.SPARKY_FITNESS_FRONTEND_DIST_PATH ||
+  path.join(__dirname, '../SparkyFitnessFrontend/dist');
+
+if (fs.existsSync(FRONTEND_DIST_DIR)) {
+  console.log(
+    `[Static] Serving frontend static files from: ${FRONTEND_DIST_DIR}`
+  );
+
+  // Serve static assets with a long cache expiration (1 year), similar to Nginx
+  app.use(
+    '/assets',
+    express.static(path.join(FRONTEND_DIST_DIR, 'assets'), {
+      maxAge: '1y',
+      immutable: true,
+      fallthrough: false, // If an asset is missing under /assets, don't fall through to index.html (return 404)
+    })
+  );
+
+  // Serve other static files (like favicon, icons, manifest etc.)
+  app.use(
+    express.static(FRONTEND_DIST_DIR, {
+      etag: true,
+      lastModified: true,
+    })
+  );
+
+  // Wildcard fallback for React SPA client-side routing
+  app.get('*', (req, res, next) => {
+    // Only serve index.html for non-API, non-uploads, non-mcp routes
+    if (
+      req.path.startsWith('/api/') ||
+      req.path.startsWith('/uploads/') ||
+      req.path.startsWith('/mcp') ||
+      req.path === '/api' ||
+      req.path === '/uploads'
+    ) {
+      return next();
+    }
+    res.sendFile(path.join(FRONTEND_DIST_DIR, 'index.html'));
+  });
+} else {
+  console.log(
+    `[Static] Frontend static directory not found at ${FRONTEND_DIST_DIR}. Skipping static hosting.`
+  );
+}
+
 // Backup scheduling is handled by services/backupScheduler.ts
 // Session cleanup scheduling
 const scheduleSessionCleanup = async () => {

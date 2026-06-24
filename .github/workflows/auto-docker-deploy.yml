@@ -181,3 +181,36 @@ jobs:
           subject-digest: ${{ steps.push-mcp.outputs.digest }}
           push-to-registry: true
 
+      # ── Unified ──────────────────────────────────────────────────────────────
+      - name: Metadata unified
+        id: meta-unified
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ secrets.DOCKER_USERNAME || 'codewithcj' }}/sparkyfitness-unified
+            ghcr.io/${{ steps.repo.outputs.name }}-unified
+          tags: |
+            type=raw,value=${{ steps.get_latest_release.outputs.tag }}
+            type=raw,value=latest
+
+      - name: Build and push unified
+        id: push-unified
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.unified
+          push: true
+          tags: ${{ steps.meta-unified.outputs.tags }}
+          labels: ${{ steps.meta-unified.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate artifact attestation unified
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ghcr.io/${{ steps.repo.outputs.name }}-unified
+          subject-digest: ${{ steps.push-unified.outputs.digest }}
+          push-to-registry: true
+
+
