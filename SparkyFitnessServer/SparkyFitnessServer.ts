@@ -404,15 +404,23 @@ if (isPublicApiDocsEnabled) {
 
 // Apply authentication middleware to all protected routes
 app.use((req, res, next) => {
-  const isPublic = publicRoutes.some((route) => {
-    // Exact match or subpath match with trailing slash to prevent partial matches
-    // e.g. "/api/health" matches "/api/health" and "/api/health/" but NOT "/api/health-data"
-    // e.g. "/api/onboarding" matches "/api/onboarding" and "/api/onboarding/step1"
-    if (req.path === route || req.path.startsWith(route + '/')) {
-      return true;
-    }
-    return false;
-  });
+  // If it's a static frontend route, let it pass (it will be served by express.static later)
+  const isStatic =
+    !req.path.startsWith('/api') &&
+    !req.path.startsWith('/mcp') &&
+    !req.path.startsWith('/uploads');
+
+  const isPublic =
+    isStatic ||
+    publicRoutes.some((route) => {
+      // Exact match or subpath match with trailing slash to prevent partial matches
+      // e.g. "/api/health" matches "/api/health" and "/api/health/" but NOT "/api/health-data"
+      // e.g. "/api/onboarding" matches "/api/onboarding" and "/api/onboarding/step1"
+      if (req.path === route || req.path.startsWith(route + '/')) {
+        return true;
+      }
+      return false;
+    });
   if (isPublic) {
     return next();
   }
