@@ -1,0 +1,57 @@
+name: Auto Sync Upstream & Build
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Runs daily at midnight UTC
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: "Force build Docker containers even if up-to-date"
+        type: boolean
+        default: false
+
+jobs:
+  sync:
+    name: Sync with Upstream
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync Upstream
+        id: sync
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add upstream remote
+          git remote add upstream https://github.com/CodeWithCJ/SparkyFitness.git
+          git fetch upstream main
+          
+          # Check if upstream is ahead of the current branch
+          AHEAD=$(git rev-list --count HEAD..upstream/main)
+          echo "Upstream is ahead by $AHEAD commits."
+          
+          if [ "$AHEAD" -gt 0 ]; then
+            echo "Merging upstream changes..."
+            git merge upstream/main --no-edit
+            git push origin main
+            echo "synced=true" >> $GITHUB_OUTPUT
+          else
+            echo "Already up-to-date."
+            echo "synced=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger Docker Build
+        if: steps.sync.outputs.synced == 'true' || inputs.force_build == true
+        run: |
+          echo "Triggering manual-docker-deploy.yml to build all Docker images..."
+          gh workflow run manual-docker-deploy.yml -f tag=latest -f service=all
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
