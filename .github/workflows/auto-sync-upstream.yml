@@ -17,12 +17,14 @@ jobs:
     permissions:
       contents: write
       actions: write
+      workflows: write
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Sync Upstream
         id: sync
