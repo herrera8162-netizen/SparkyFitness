@@ -5,6 +5,7 @@ import { log } from '../config/logging.js';
 import { getDefaultModel } from '../ai/config.js';
 import {
   dispatchAiRequest,
+  requiresApiKey,
   type DispatchErrorCategory,
   type ProviderConfig,
 } from '../ai/providerDispatch.js';
@@ -15,6 +16,7 @@ import {
   AiServiceSettings,
   SparkyChatHistory,
   SparkyChatHistoryMutator,
+  TestAiServiceConnectionRequest,
 } from '@workspace/shared';
 
 interface ChatMessagePart {
@@ -41,7 +43,7 @@ interface ChatMessage {
 }
 
 import { generateText, streamText, stepCountIs } from 'ai';
-import type { JSONValue, UIMessageChunk } from 'ai';
+import type { JSONValue, LanguageModelUsage, UIMessageChunk } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -75,12 +77,19 @@ async function handleAiServiceSettings(
         const currentPrefs =
           await preferenceRepository.getUserPreferences(authenticatedUserId);
         if (serviceData.is_active) {
-          await preferenceRepository.updateUserPreferences(
-            authenticatedUserId,
-            {
-              active_ai_service_id: result.id,
-            }
-          );
+          // Auto-select this service only when no provider is selected yet, so
+          // the user's first enabled service powers AI features immediately.
+          // Enabling a second service must not hijack an existing selection —
+          // the active-provider dropdown (Settings or chat) is the authoritative
+          // way to *change* the active provider; enable only toggles availability.
+          if (!currentPrefs?.active_ai_service_id) {
+            await preferenceRepository.updateUserPreferences(
+              authenticatedUserId,
+              {
+                active_ai_service_id: result.id,
+              }
+            );
+          }
         } else if (
           currentPrefs &&
           currentPrefs.active_ai_service_id === result.id
@@ -145,7 +154,7 @@ async function getActiveAiServiceSetting(
     if (setting) {
       const source = setting.source || 'unknown';
       log(
-        'info',
+        'debug',
         `Active AI service setting for user ${targetUserId} (source: ${source})`
       );
     }
@@ -590,7 +599,7 @@ async function processChatMessage(
       `Processing chat message for user ${userId} using AI service from ${source} (ID: ${serviceConfigId})`
     );
 
-    if (aiService.service_type !== 'ollama' && !aiService.api_key) {
+    if (requiresApiKey(aiService.service_type) && !aiService.api_key) {
       throw new Error('API key missing for selected AI service.');
     }
 
@@ -992,6 +1001,109 @@ async function processFoodOptionsRequest(
   }
   return { success: true, content: result.text };
 }
+
+// Minimal completion used only to confirm a provider config actually works.
+const TEST_CONNECTION_PROMPT = 'Reply with the single word: OK.';
+// A short timeout so an unreachable custom URL fails in ~15s rather than hanging
+// for the 90s/120s dispatch defaults. Retry behavior is safe: only HTTP 429 is
+// retried; timeouts and 401/403 return immediately.
+const TEST_CONNECTION_TIMEOUT_MS = 15_000;
+// Types without preset models point at user-hosted servers with no reliable
+// default, so a blank effective model would let dispatch substitute a
+// meaningless getDefaultModel default the UI never intends.
+const NO_PRESET_SERVICE_TYPES = new Set([
+  'ollama',
+  'openai_compatible',
+  'custom',
+]);
+
+export type TestConnectionResult =
+  | { ok: true }
+  | { ok: false; category: DispatchErrorCategory; detail: string };
+
+function statusError(message: string, statusCode: number): Error {
+  const err = new Error(message) as Error & { statusCode?: number };
+  err.statusCode = statusCode;
+  return err;
+}
+
+/**
+ * Run a minimal live completion against a provider config to verify it works,
+ * without persisting anything. Returns `{ ok: true }` or `{ ok: false, category,
+ * detail }`; the route returns HTTP 200 for both so the UI can show a friendly,
+ * category-specific toast. Throws (with `.statusCode`) only for the security
+ * gates the UI never legitimately triggers. See routes/chatRoutes for gate #1.
+ */
+async function testAiServiceConnection(
+  payload: TestAiServiceConnectionRequest,
+  userId: string,
+  isAdmin: boolean
+): Promise<TestConnectionResult> {
+  const serviceType = payload.service_type;
+  let apiKey = payload.api_key?.trim() || undefined;
+  let customUrl = payload.custom_url?.trim() || undefined;
+  let modelName = payload.model_name?.trim() || undefined;
+
+  // Stored-key fallback: the api_key field is blank by design on edit (the key
+  // is encrypted server-side and never sent to the browser), so a test on a
+  // saved service must reuse the stored, decrypted key.
+  if (payload.id && !apiKey) {
+    const stored = await chatRepository.getDecryptedAiServiceSettingById(
+      payload.id,
+      userId
+    );
+    if (stored) {
+      // Gate #2 (global-key protection): /chat is authenticate-only and the RLS
+      // SELECT policy returns every is_public row to any authenticated user, so
+      // a non-admin must not be able to make the server decrypt the operator's
+      // global key and POST it to an attacker-supplied custom_url.
+      if (stored.is_public && !isAdmin) {
+        throw statusError(
+          'Only administrators can test global AI service settings.',
+          403
+        );
+      }
+      // Gate #3 (provider-mismatch protection): only reuse the stored key when
+      // the stored row's provider matches the requested one. Switching a saved
+      // OpenAI service to 'custom' and leaving the key blank must NOT send the
+      // stored OpenAI key to a different provider/URL.
+      if (stored.service_type === serviceType) {
+        apiKey = stored.api_key ?? undefined;
+        customUrl = customUrl ?? stored.custom_url ?? undefined;
+        modelName = modelName ?? stored.model_name ?? undefined;
+      }
+    }
+  }
+
+  // Validate after fallback: a no-preset type with a blank effective model would
+  // otherwise dispatch with a meaningless getDefaultModel default.
+  if (NO_PRESET_SERVICE_TYPES.has(serviceType) && !modelName) {
+    throw statusError('A model name is required for this service type.', 400);
+  }
+
+  const provider: ProviderConfig = {
+    service_type: serviceType,
+    api_key: apiKey,
+    model_name: modelName,
+    custom_url: customUrl,
+  };
+
+  const result = await dispatchAiRequest({
+    provider,
+    prompt: TEST_CONNECTION_PROMPT,
+    temperature: 0,
+    timeoutMs: TEST_CONNECTION_TIMEOUT_MS,
+  });
+
+  if (!result.ok) {
+    log(
+      'warn',
+      `Test connection: ${serviceType} failed for user ${userId} (${result.category}): ${result.detail}`
+    );
+    return { ok: false, category: result.category, detail: result.detail };
+  }
+  return { ok: true };
+}
 const EMPTY_RESPONSE_ERROR_TEXT =
   'The AI service returned an empty response. Please try again.';
 
@@ -1026,6 +1138,30 @@ function withEmptyCompletionGuard(
       },
     })
   );
+}
+
+// Shape provider usage into the keys @assistant-ui/react-ai-sdk's
+// getThreadMessageTokenUsage reads off the streamed message metadata, so the
+// chat UI can surface per-message token counts. cacheReadTokens is the
+// cached-input figure; the adapter's normalizeUsage drops undefined fields, so
+// providers reporting partial or no usage stay safe.
+//
+// Nest under `custom`: assistant-ui's fromThreadMessageLike normalization keeps
+// only known metadata keys (`custom`, `steps`, `unstable_*`, ...) and discards
+// unknown top-level keys, so a bare `{ usage }` would be stripped before it
+// reaches the thread message. `metadata.custom.usage` survives, and the adapter
+// reads exactly that path.
+export function mapUsageToMetadata(u: LanguageModelUsage) {
+  return {
+    custom: {
+      usage: {
+        inputTokens: u.inputTokens,
+        outputTokens: u.outputTokens,
+        totalTokens: u.totalTokens,
+        cachedInputTokens: u.inputTokenDetails?.cacheReadTokens,
+      },
+    },
+  };
 }
 
 async function processChatMessageStream(
@@ -1284,7 +1420,16 @@ async function processChatMessageStream(
       },
     });
 
-    return { stream: withEmptyCompletionGuard(result.toUIMessageStream()) };
+    return {
+      stream: withEmptyCompletionGuard(
+        result.toUIMessageStream({
+          messageMetadata: ({ part }) =>
+            part.type === 'finish'
+              ? mapUsageToMetadata(part.totalUsage)
+              : undefined,
+        })
+      ),
+    };
   } catch (error) {
     log(
       'error',
@@ -1307,6 +1452,7 @@ export { clearAllSparkyChatHistory };
 export { saveSparkyChatHistory };
 export { processChatMessage };
 export { processFoodOptionsRequest };
+export { testAiServiceConnection };
 export { processChatMessageStream };
 export default {
   handleAiServiceSettings,
@@ -1322,5 +1468,6 @@ export default {
   saveSparkyChatHistory,
   processChatMessage,
   processFoodOptionsRequest,
+  testAiServiceConnection,
   processChatMessageStream,
 };

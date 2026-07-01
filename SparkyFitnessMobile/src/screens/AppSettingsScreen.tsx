@@ -12,12 +12,9 @@ import {
   setThemePreference,
   type ThemePreference,
 } from '../services/themeService';
-import { useHapticsEnabled, setHapticsEnabled } from '../services/haptics';
-import { useSoundsEnabled, setSoundsEnabled } from '../services/sounds';
-import {
-  useNotificationsEnabled,
-  setNotificationsEnabled,
-} from '../services/notifications';
+import { setNotificationsEnabled } from '../services/notifications';
+import { useAppPreferencesStore } from '../stores/appPreferencesStore';
+import { canUseLiquidGlass } from '../utils/liquidGlass';
 import type { RootStackScreenProps } from '../types/navigation';
 
 type AppSettingsScreenProps = RootStackScreenProps<'AppSettings'>;
@@ -39,9 +36,16 @@ const AppSettingsScreen: React.FC<AppSettingsScreenProps> = ({ navigation }) => 
   ]) as [string, string, string];
 
   const appTheme = useThemePreference();
-  const hapticsEnabled = useHapticsEnabled();
-  const soundsEnabled = useSoundsEnabled();
-  const notificationsEnabled = useNotificationsEnabled();
+  const hapticsEnabled = useAppPreferencesStore((s) => s.hapticsEnabled);
+  const setHapticsEnabled = useAppPreferencesStore((s) => s.setHapticsEnabled);
+  const soundsEnabled = useAppPreferencesStore((s) => s.soundsEnabled);
+  const setSoundsEnabled = useAppPreferencesStore((s) => s.setSoundsEnabled);
+  const notificationsEnabled = useAppPreferencesStore((s) => s.notificationsEnabled);
+  const liquidGlassEnabled = useAppPreferencesStore((s) => s.liquidGlassTabBarEnabled);
+  const setLiquidGlassTabBarEnabled = useAppPreferencesStore(
+    (s) => s.setLiquidGlassTabBarEnabled,
+  );
+  const supportsLiquidGlassTabBar = canUseLiquidGlass();
 
   return (
     <View className="flex-1 bg-background" style={Platform.OS === 'ios' ? undefined : { paddingTop: insets.top }}>
@@ -78,7 +82,22 @@ const AppSettingsScreen: React.FC<AppSettingsScreenProps> = ({ navigation }) => 
             />
           </View>
         </View>
-
+        {supportsLiquidGlassTabBar && (
+          <View className="bg-surface rounded-xl p-4 mb-4 shadow-sm">
+            <View className="flex-row justify-between items-center">
+              <Text className="text-base text-text-primary">Liquid Glass tab bar</Text>
+              <Switch
+                value={liquidGlassEnabled}
+                onValueChange={setLiquidGlassTabBarEnabled}
+                trackColor={{ false: formDisabled, true: formEnabled }}
+                thumbColor="#FFFFFF"
+              />
+            </View>
+            <Text className="text-text-secondary text-sm mt-2">
+              Use the iOS 26 glass tab bar.
+            </Text>
+          </View>
+        )}
         <View className="bg-surface rounded-xl p-4 mb-4 shadow-sm">
           <View className="flex-row justify-between items-center">
             <Text className="text-base text-text-primary">Notifications</Text>
@@ -123,6 +142,8 @@ const AppSettingsScreen: React.FC<AppSettingsScreenProps> = ({ navigation }) => 
             Play a sound when capturing photos.
           </Text>
         </View>
+
+
       </ScrollView>
     </View>
   );

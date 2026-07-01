@@ -98,7 +98,13 @@ async function getAccessibleUsers(userId: string) {
        JOIN "user" u ON u.id = fa.owner_user_id
        WHERE fa.family_user_id = $1
          AND fa.is_active = TRUE
-         AND (fa.access_end_date IS NULL OR fa.access_end_date > NOW())`,
+         AND (fa.access_end_date IS NULL OR fa.access_end_date > NOW())
+         AND (
+           (fa.access_permissions->>'can_manage_diary')::boolean = TRUE OR
+           (fa.access_permissions->>'can_manage_checkin')::boolean = TRUE OR
+           (fa.access_permissions->>'can_view_reports')::boolean = TRUE OR
+           (fa.access_permissions->>'can_manage_medications')::boolean = TRUE
+         )`,
       [userId]
     );
     return result.rows;
@@ -110,7 +116,10 @@ async function getUserProfile(userId: string) {
   const client = await getClient(userId); // User-specific operation
   try {
     const result = await client.query(
-      "SELECT id, full_name, phone_number, TO_CHAR(date_of_birth, 'YYYY-MM-DD') AS date_of_birth, bio, avatar_url, gender FROM profiles WHERE id = $1",
+      `SELECT p.id, p.full_name, p.phone_number, TO_CHAR(p.date_of_birth, 'YYYY-MM-DD') AS date_of_birth, p.bio, p.avatar_url, p.gender, o.target_weight
+       FROM profiles p
+       LEFT JOIN onboarding_data o ON p.id = o.user_id
+       WHERE p.id = $1`,
       [userId]
     );
     return result.rows[0];

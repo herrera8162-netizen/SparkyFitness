@@ -1,17 +1,16 @@
 import { Platform } from 'react-native';
 import { useCSSVariable } from 'uniwind';
-import { supportsNativeIOSTabs } from '../utils/nativeTabs';
+import { useNativeIOSTabsActive } from '../services/nativeTabBarPreference';
 
 export function resolveHeaderActionColors(
   os: string,
-  version: number | string,
+  _version: number | string,
   accentColor: string,
   textColor: string,
+  usesNativeTabs = false,
 ) {
   if (os === 'ios') {
-    const color = supportsNativeIOSTabs(os, version)
-      ? textColor
-      : accentColor;
+    const color = usesNativeTabs ? textColor : accentColor;
     return { defaultColor: color, saveColor: color };
   }
 
@@ -26,12 +25,14 @@ export function useHeaderActionColors() {
     '--color-accent-primary',
     '--color-text-primary',
   ]) as [string, string];
+  const usesNativeTabs = useNativeIOSTabsActive();
 
   const resolved = resolveHeaderActionColors(
     Platform.OS,
     Platform.Version,
     accentColor || '#0A84FF',
     textColor || '#111827',
+    usesNativeTabs,
   );
 
   return {

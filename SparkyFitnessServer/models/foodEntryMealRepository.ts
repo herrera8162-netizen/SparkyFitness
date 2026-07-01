@@ -11,7 +11,7 @@ async function createFoodEntryMeal(
     'info',
     `createFoodEntryMeal in foodEntryMealRepository: foodEntryMealData: ${JSON.stringify(foodEntryMealData)}, createdByUserId: ${createdByUserId}`
   );
-  const client = await getClient(createdByUserId);
+  const client = await getClient(foodEntryMealData.user_id, createdByUserId);
   try {
     let mealTypeId = foodEntryMealData.meal_type_id;
     if (!mealTypeId && foodEntryMealData.meal_type) {
@@ -165,7 +165,7 @@ async function getFoodEntryMealById(foodEntryMealId: any, userId: any) {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getFoodEntryMealsByDate(userId: any, selectedDate: any) {
   log(
-    'info',
+    'debug',
     `getFoodEntryMealsByDate in foodEntryMealRepository: userId: ${userId}, selectedDate: ${selectedDate}`
   );
   const client = await getClient(userId);

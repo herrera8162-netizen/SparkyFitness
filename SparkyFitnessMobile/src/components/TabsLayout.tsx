@@ -16,13 +16,13 @@ import {
   type AppleIcon,
 } from 'react-native-bottom-tabs';
 import { withErrorBoundary } from './ScreenErrorBoundary';
-import ActiveWorkoutBar from './ActiveWorkoutBar';
+import ActiveWorkoutBar, { setActiveWorkoutBarTabBarHeight } from './ActiveWorkoutBar';
 import CustomTabBar from './CustomTabBar';
 import WhatsNewBanner, {
   WhatsNewBannerContent,
   useWhatsNewBannerState,
 } from './WhatsNewBanner';
-import { shouldUseNativeIOSTabs } from '../utils/nativeTabs';
+import { useNativeIOSTabsActive } from '../services/nativeTabBarPreference';
 import { useHeaderActionColors } from '../hooks/useHeaderActionColors';
 
 export const NON_ADD_TABS = ['Dashboard', 'Diary', 'Library', 'Settings'] as const;
@@ -92,6 +92,10 @@ const NativeTabsOverlayContext = React.createContext<ReturnType<
 function NativeTabsBannerOverlay() {
   const whatsNewState = React.useContext(NativeTabsOverlayContext);
   const tabBarHeight = useBottomTabBarHeight();
+  React.useEffect(() => {
+    setActiveWorkoutBarTabBarHeight(tabBarHeight);
+  }, [tabBarHeight]);
+
   if (!whatsNewState) return null;
 
   return (
@@ -105,11 +109,7 @@ function NativeTabsBannerOverlay() {
         zIndex: 50,
       }}
     >
-      <WhatsNewBannerContent
-        reserveAddButtonClearance
-        state={whatsNewState}
-      />
-      <ActiveWorkoutBar variant="embedded" />
+      <WhatsNewBannerContent presentation="glass" state={whatsNewState} />
     </View>
   );
 }
@@ -217,7 +217,10 @@ export function NativeTabsLayout({
   return (
     <NativeTabsOverlayContext.Provider value={whatsNewState}>
       <NativeTab.Navigator
-          initialRouteName="Dashboard"
+          // Start on the last active tab so toggling the Liquid Glass tab bar —
+          // which swaps and remounts this navigator — keeps the user on the tab
+          // they came from. Defaults to Dashboard on a cold start.
+          initialRouteName={getLastActiveTab()}
           tabBarActiveTintColor={activeTintColor}
           tabBarInactiveTintColor={inactiveTintColor}
           screenListeners={{
@@ -291,7 +294,10 @@ export function FallbackTabsLayout({
   // The AddSheet is rendered in App.tsx with proper props
   return (
     <FallbackTab.Navigator
-      initialRouteName="Dashboard"
+      // Start on the last active tab so toggling the Liquid Glass tab bar —
+      // which swaps and remounts this navigator — keeps the user on the tab
+      // they came from. Defaults to Dashboard on a cold start.
+      initialRouteName={getLastActiveTab()}
       screenListeners={{
         state: (event) => {
           const state = event.data?.state;
@@ -330,14 +336,14 @@ export function FallbackTabsLayout({
   );
 }
 
-// Native tabs require the iOS 26 bottom-accessory APIs. Older iOS releases
+// Native Liquid Glass tabs are only used on iOS 26+. Older iOS releases
 // intentionally use the same custom tab bar as Android.
 export function TabsLayout({
   onAddPress,
   rememberActiveTab,
   getLastActiveTab,
 }: { onAddPress?: () => void } & TabTrackingProps) {
-  if (shouldUseNativeIOSTabs()) {
+  if (useNativeIOSTabsActive()) {
     return (
       <NativeTabsLayout
         onAddPress={onAddPress}

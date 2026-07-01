@@ -1,6 +1,7 @@
 export interface UserPreferencesChat {
   auto_clear_history: string;
   active_ai_service_id?: string | null;
+  active_vision_ai_service_id?: string | null;
 }
 
 export type DayOfWeek = 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -48,6 +49,7 @@ export interface FamilyAccess {
     can_view_exercise_library: boolean;
     can_manage_checkin: boolean; // Added can_manage_checkin
     can_view_reports: boolean; // Added can_view_reports
+    can_manage_medications: boolean; // Added can_manage_medications
     share_external_providers: boolean;
   };
   access_end_date: string | null;
@@ -64,6 +66,7 @@ export interface Profile {
   bio: string | null;
   avatar_url: string | null;
   gender: string | null;
+  target_weight?: string | number | null;
 }
 
 export interface ProfileFormState {

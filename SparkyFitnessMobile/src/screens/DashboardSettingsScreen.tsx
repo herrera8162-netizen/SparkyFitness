@@ -16,14 +16,7 @@ import {
 } from '../services/api/preferencesApi';
 import { nutrientDisplayPreferencesQueryKey } from '../hooks/queryKeys';
 import { toggleNutrientVisibility } from '../utils/nutrientUtils';
-import {
-  useFastingCardVisible,
-  setFastingCardVisible,
-} from '../services/fastingCardVisibility';
-import {
-  useHydrationCardVisible,
-  setHydrationCardVisible,
-} from '../services/hydrationCardVisibility';
+import { useAppPreferencesStore } from '../stores/appPreferencesStore';
 import { useHeaderActionColors } from '../hooks/useHeaderActionColors';
 import type { RootStackScreenProps } from '../types/navigation';
 
@@ -53,8 +46,12 @@ const DashboardSettingsScreen: React.FC<DashboardSettingsScreenProps> = ({ navig
   ]) as [string, string, string];
   const { backColor } = useHeaderActionColors();
 
-  const fastingCardVisible = useFastingCardVisible();
-  const hydrationCardVisible = useHydrationCardVisible();
+  const fastingCardVisible = useAppPreferencesStore((s) => s.fastingCardVisible);
+  const setFastingCardVisible = useAppPreferencesStore((s) => s.setFastingCardVisible);
+  const hydrationCardVisible = useAppPreferencesStore((s) => s.hydrationCardVisible);
+  const setHydrationCardVisible = useAppPreferencesStore((s) => s.setHydrationCardVisible);
+  const askSparkyVisible = useAppPreferencesStore((s) => s.askSparkyVisible);
+  const setAskSparkyVisible = useAppPreferencesStore((s) => s.setAskSparkyVisible);
 
   const queryClient = useQueryClient();
   const { isConnected } = useServerConnection();
@@ -194,6 +191,18 @@ const DashboardSettingsScreen: React.FC<DashboardSettingsScreenProps> = ({ navig
 
         <SettingsRowGroup>
           <SettingsRow
+            title="Ask Sparky"
+            subtitle="Show the Ask Sparky chat launcher on the Dashboard"
+            rightAccessory={
+              <Switch
+                value={askSparkyVisible}
+                onValueChange={setAskSparkyVisible}
+                trackColor={{ false: formDisabled, true: formEnabled }}
+                thumbColor="#FFFFFF"
+              />
+            }
+          />          
+          <SettingsRow
             title="Hydration"
             subtitle="Show the hydration card on the Dashboard"
             rightAccessory={
@@ -217,6 +226,7 @@ const DashboardSettingsScreen: React.FC<DashboardSettingsScreenProps> = ({ navig
               />
             }
           />
+
         </SettingsRowGroup>
 
         <Text className="text-base font-semibold text-text-primary mb-4">

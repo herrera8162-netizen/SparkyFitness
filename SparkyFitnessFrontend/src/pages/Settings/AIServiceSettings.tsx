@@ -1,7 +1,15 @@
 import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Bot, Plus } from 'lucide-react';
 import {
   AlertDialog,
@@ -20,9 +28,10 @@ import { UserChatPreferences } from '@/components/ai/UserChatPreferences';
 import { GlobalOverrideBanner } from '@/components/ai/GlobalOverrideBanner';
 import { ServiceForm } from '@/components/ai/ServiceForm';
 import { UserServiceListItem } from '@/components/ai/UserServiceListItem';
-import { getModelOptions } from '@/utils/aiServiceUtils';
+import { getModelOptions, requiresApiKey } from '@/utils/aiServiceUtils';
 import {
   useAIServices,
+  useActiveAIService,
   useUserAIPreferences,
   useAddAIService,
   useUpdateAIService,
@@ -30,6 +39,7 @@ import {
   useUpdateUserAIPreferences,
 } from '@/hooks/AI/useAIServiceSettings';
 import { useUserAiConfigAllowed } from '@/hooks/AI/useUserAiConfigAllowed';
+import { useTestAIServiceConnection } from '@/hooks/AI/useTestAIServiceConnection';
 import { AiServiceSettingsResponse } from '@workspace/shared';
 import {
   CreateAiServiceSettingsFormInput,
@@ -37,6 +47,10 @@ import {
   createAiServiceSettingsFormSchema,
   updateAiServiceSettingsFormSchema,
 } from '@/schemas/form/AiServiceSettings.form.zod';
+
+// Radix Select cannot bind null/'' (an empty SelectItem value throws), so the
+// "Same as default" choice maps to this sentinel and back to null on save.
+const SAME_AS_DEFAULT = '__default__';
 
 const AIServiceSettings = () => {
   const { t } = useTranslation();
@@ -47,7 +61,25 @@ const AIServiceSettings = () => {
   const { data: isUserConfigAllowed = false, isLoading: settingsLoading } =
     useUserAiConfigAllowed();
   const { data: services = [] } = useAIServices();
+  const { data: activeService } = useActiveAIService(!!user);
   const { data: preferencesData } = useUserAIPreferences();
+
+  // Services the user has enabled (many can be on). The active-provider
+  // dropdown and the global "Active" badge both key off the single selection
+  // below, validated against this set so a stale pointer can never win.
+  const enabledServices = services.filter((s) => s.is_active);
+  const activeServiceId =
+    enabledServices.find((s) => s.id === preferencesData?.active_ai_service_id)
+      ?.id ??
+    enabledServices.find((s) => s.id === activeService?.id)?.id ??
+    '';
+
+  // Optional vision override. Validated against enabledServices so a stale or
+  // disabled pointer falls back to "Same as default" rather than a dead value.
+  const visionServiceId =
+    enabledServices.find(
+      (s) => s.id === preferencesData?.active_vision_ai_service_id
+    )?.id ?? null;
 
   // Mutations
   const { mutateAsync: addService, isPending: isAdding } = useAddAIService();
@@ -57,6 +89,12 @@ const AIServiceSettings = () => {
     useDeleteAIService();
   const { mutateAsync: updatePreferences, isPending: isUpdatingPrefs } =
     useUpdateUserAIPreferences();
+  const {
+    testConnection,
+    isPending: isTesting,
+    status: testStatus,
+    reset: resetTestStatus,
+  } = useTestAIServiceConnection();
 
   const loading = isAdding || isUpdating || isDeleting || isUpdatingPrefs;
 
@@ -208,7 +246,7 @@ const AIServiceSettings = () => {
     if (
       !user ||
       !newService.service_name ||
-      (newService.service_type !== 'ollama' && !newService.api_key)
+      (requiresApiKey(newService.service_type) && !newService.api_key)
     ) {
       toast({
         title: t('settings.aiService.userSettings.error'),
@@ -510,6 +548,8 @@ const AIServiceSettings = () => {
       return;
     }
 
+    // Clear any prior service's test result so it never lingers on this form.
+    resetTestStatus();
     setEditingService(service.id ?? null);
     const isCustomModel = service.model_name
       ? !getModelOptions(service.service_type ?? '').includes(
@@ -531,6 +571,7 @@ const AIServiceSettings = () => {
   };
 
   const cancelEditing = () => {
+    resetTestStatus();
     setEditingService(null);
     setEditData({
       showCustomModelInput: false,
@@ -577,7 +618,13 @@ const AIServiceSettings = () => {
         </CardHeader>
         <CardContent className="space-y-4">
           {isUserConfigAllowed && !showAddForm && (
-            <Button onClick={() => setShowAddForm(true)} variant="outline">
+            <Button
+              onClick={() => {
+                resetTestStatus();
+                setShowAddForm(true);
+              }}
+              variant="outline"
+            >
               <Plus className="h-4 w-4 mr-2" />
               {t('settings.aiService.userSettings.addNewService')}
             </Button>
@@ -594,9 +641,22 @@ const AIServiceSettings = () => {
                   setNewService((prev) => ({ ...prev, ...data }))
                 }
                 onSubmit={handleAddService}
-                onCancel={() => setShowAddForm(false)}
+                onCancel={() => {
+                  resetTestStatus();
+                  setShowAddForm(false);
+                }}
                 loading={loading}
                 translationPrefix="settings.aiService.userSettings"
+                onTestConnection={(model) =>
+                  testConnection({
+                    service_type: newService.service_type,
+                    api_key: newService.api_key,
+                    custom_url: newService.custom_url ?? undefined,
+                    model_name: model,
+                  })
+                }
+                testing={isTesting}
+                testStatus={testStatus}
               />
             </div>
           )}
@@ -610,24 +670,109 @@ const AIServiceSettings = () => {
                   : t('settings.aiService.userSettings.availableServices')}
               </h3>
 
+              {/* Active-provider + vision-provider selectors share a row.
+                  active_ai_service_id is the single pointer every AI feature
+                  (chat, food-photo, label scan, unit conversion) reads;
+                  active_vision_ai_service_id optionally overrides it for the
+                  vision tasks (food-photo + label scan, and chat's image tools),
+                  falling back to the active provider. "Same as default" clears it. */}
+              {enabledServices.length > 0 && (
+                <div className="flex flex-col gap-4 sm:flex-row sm:gap-6">
+                  <div className="space-y-2 sm:max-w-sm sm:flex-1">
+                    <Label htmlFor="active-ai-provider-select">
+                      {t(
+                        'settings.aiService.userSettings.activeProvider',
+                        'Active AI provider'
+                      )}
+                    </Label>
+                    <Select
+                      value={activeServiceId}
+                      onValueChange={(id) =>
+                        updatePreferences({
+                          active_ai_service_id: id,
+                          auto_clear_history:
+                            preferencesData?.auto_clear_history || 'never',
+                        })
+                      }
+                    >
+                      <SelectTrigger
+                        id="active-ai-provider-select"
+                        className="w-full"
+                      >
+                        <SelectValue
+                          placeholder={t(
+                            'settings.aiService.userSettings.activeProvider',
+                            'Active AI provider'
+                          )}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {enabledServices.map((service) => (
+                          <SelectItem key={service.id} value={service.id}>
+                            {service.service_name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2 sm:max-w-sm sm:flex-1">
+                    <Label htmlFor="active-vision-ai-provider-select">
+                      {t(
+                        'settings.aiService.userSettings.activeVisionProvider',
+                        'Active vision AI provider'
+                      )}
+                    </Label>
+                    <Select
+                      value={visionServiceId ?? SAME_AS_DEFAULT}
+                      onValueChange={(v) =>
+                        updatePreferences({
+                          active_vision_ai_service_id:
+                            v === SAME_AS_DEFAULT ? null : v,
+                          auto_clear_history:
+                            preferencesData?.auto_clear_history || 'never',
+                        })
+                      }
+                    >
+                      <SelectTrigger
+                        id="active-vision-ai-provider-select"
+                        className="w-full"
+                      >
+                        <SelectValue
+                          placeholder={t(
+                            'settings.aiService.userSettings.activeVisionProvider',
+                            'Active vision AI provider'
+                          )}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={SAME_AS_DEFAULT}>
+                          {t(
+                            'settings.aiService.userSettings.sameAsDefault',
+                            'Same as default'
+                          )}
+                        </SelectItem>
+                        {enabledServices.map((service) => (
+                          <SelectItem key={service.id} value={service.id}>
+                            {service.service_name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-4">
                 {services
                   .filter((service) => isUserConfigAllowed || service.is_public)
                   .map((service) => {
                     const isOwner = service.user_id === user?.id;
-                    const isActive = preferencesData?.active_ai_service_id
-                      ? service.id === preferencesData.active_ai_service_id
-                      : service.is_active;
-
-                    const resolvedService = {
-                      ...service,
-                      is_active: isActive,
-                    };
 
                     return (
                       <UserServiceListItem
                         key={service.id}
-                        service={resolvedService}
+                        service={service}
                         isEditing={editingService === service.id}
                         editData={editData}
                         onEditDataChange={(data) =>
@@ -643,6 +788,19 @@ const AIServiceSettings = () => {
                         loading={loading}
                         isUserConfigAllowed={isUserConfigAllowed}
                         isOwner={isOwner}
+                        isActiveProvider={service.id === activeServiceId}
+                        onTestConnection={(model) =>
+                          testConnection({
+                            id: service.id,
+                            service_type:
+                              editData.service_type || service.service_type,
+                            api_key: editData.api_key,
+                            custom_url: editData.custom_url ?? undefined,
+                            model_name: model,
+                          })
+                        }
+                        testing={isTesting}
+                        testStatus={testStatus}
                       />
                     );
                   })}
