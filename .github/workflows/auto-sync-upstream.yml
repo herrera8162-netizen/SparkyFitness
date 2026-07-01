@@ -53,6 +53,6 @@ jobs:
         if: steps.sync.outputs.synced == 'true' || inputs.force_build == true
         run: |
           echo "Triggering manual-docker-deploy.yml to build all Docker images..."
-          gh workflow run manual-docker-deploy.yml -f tag=latest -f service=all
+          gh workflow run manual-docker-deploy.yml --repo ${{ github.repository }} -f tag=latest -f service=all
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
