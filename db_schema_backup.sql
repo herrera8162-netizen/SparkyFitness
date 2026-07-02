@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict KcGTcGDHZyWodjgtFoGkUDzES5prIhR7m3fDrwHwlGgmFUefVOCgjACXC2y7yoi
+\restrict WBM08FVUEt8ErXgev7ii3g3rIMwVy5pbswVbXNwIJ4R3aXRVUCi6i0XmTzSLk7Z
 
 -- Dumped from database version 18.3
 -- Dumped by pg_dump version 18.4 (Homebrew)
@@ -2329,6 +2329,7 @@ CREATE TABLE public.onboarding_status (
     user_id uuid NOT NULL,
     full_name text,
     onboarding_complete boolean DEFAULT false NOT NULL,
+    onboarding_skipped boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
 );
@@ -2698,7 +2699,8 @@ CREATE TABLE public.user_custom_nutrients (
     name text NOT NULL,
     unit text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    aliases jsonb DEFAULT '[]'::jsonb NOT NULL
 );
 
 
@@ -2942,9 +2944,9 @@ CREATE TABLE public.user_preferences (
     goal_mode_custom_percentage integer DEFAULT 0 NOT NULL,
     use_external_bmr boolean DEFAULT false NOT NULL,
     active_ai_service_id uuid,
-    active_vision_ai_service_id uuid,
     add_exercise_water_to_goal boolean DEFAULT false NOT NULL,
     measurement_decimal_places integer DEFAULT 0 NOT NULL,
+    active_vision_ai_service_id uuid,
     CONSTRAINT check_energy_unit CHECK (((energy_unit)::text = ANY (ARRAY[('kcal'::character varying)::text, ('kJ'::character varying)::text]))),
     CONSTRAINT logging_level_check CHECK ((logging_level = ANY (ARRAY['DEBUG'::text, 'INFO'::text, 'WARN'::text, 'ERROR'::text, 'SILENT'::text]))),
     CONSTRAINT user_preferences_timezone_not_empty CHECK (((timezone IS NULL) OR (timezone <> ''::text)))
@@ -8895,5 +8897,5 @@ ALTER DEFAULT PRIVILEGES FOR ROLE sparky IN SCHEMA public GRANT SELECT,INSERT,DE
 -- PostgreSQL database dump complete
 --
 
-\unrestrict KcGTcGDHZyWodjgtFoGkUDzES5prIhR7m3fDrwHwlGgmFUefVOCgjACXC2y7yoi
+\unrestrict WBM08FVUEt8ErXgev7ii3g3rIMwVy5pbswVbXNwIJ4R3aXRVUCi6i0XmTzSLk7Z
 
