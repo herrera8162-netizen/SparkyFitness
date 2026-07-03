@@ -139,6 +139,8 @@ const MealAddScreen: React.FC<MealAddScreenProps> = ({ navigation, route }) => {
   useEffect(() => {
     if (!isEditMode || !editMeal || initializedMealId === editMeal.id) return;
 
+    // One-time form initialization from the async-loaded meal, guarded by its id.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMealName(editMeal.name);
     setDescription(editMeal.description ?? '');
     const loadedServingSize = editMeal.serving_size ?? 1;
@@ -240,6 +242,17 @@ const MealAddScreen: React.FC<MealAddScreenProps> = ({ navigation, route }) => {
   };
 
   const editIngredient = (ingredient: MealIngredientDraft, ingredientIndex: number) => {
+    // Linked sub-meal ingredients aren't editable in the mobile builder yet
+    // (quantity editing for a linked meal needs a meal-serving picker, not the
+    // food/variant editor below) — remove and re-add via the web app instead.
+    if (ingredient.item_type === 'meal') {
+      Toast.show({
+        type: 'info',
+        text1: 'Linked meal',
+        text2: 'Edit this sub-meal ingredient in the web app.',
+      });
+      return;
+    }
     // Pass the ingredient's stored unit snapshot as a selectedVariantOverride so
     // FoodEntryAdd opens with the actual unit/nutrition rather than the default variant.
     const variantOverride: FoodUnitVariant = {
@@ -392,7 +405,13 @@ const MealAddScreen: React.FC<MealAddScreenProps> = ({ navigation, route }) => {
   const { defaultColor: headerActionColor, saveColor: headerSaveColor, headerTintColor } = useHeaderActionColors();
   const saveLabel = isEditMode ? 'Save Changes' : 'Save Meal';
   const handleSaveMealRef = useRef(handleSaveMeal);
-  handleSaveMealRef.current = handleSaveMeal;
+  // Keep the ref pointing at the latest closure so the native header button
+  // (configured once in the layout effect below) always calls the current
+  // handler. Updated in an effect rather than during render to satisfy
+  // react-hooks/refs.
+  useLayoutEffect(() => {
+    handleSaveMealRef.current = handleSaveMeal;
+  });
 
   useLayoutEffect(() => {
     navigation.setOptions({ headerTintColor });
@@ -652,6 +671,16 @@ const MealAddScreen: React.FC<MealAddScreenProps> = ({ navigation, route }) => {
                               </Text>
                             ) : null}
                           </Text>
+                          {ingredient.item_type === 'meal' ? (
+                            <View
+                              className="self-start rounded-full px-2 py-0.5 mt-1"
+                              style={{ backgroundColor: `${textMuted}1A` }}
+                            >
+                              <Text className="text-xs font-medium" style={{ color: textMuted }}>
+                                Linked meal
+                              </Text>
+                            </View>
+                          ) : null}
                           <Text className="text-text-muted text-sm mt-1">
                             {ingredientProtein}g protein{' \u00b7 '}{ingredientCarbs}g carbs{' \u00b7 '}{ingredientFat}g fat
                           </Text>

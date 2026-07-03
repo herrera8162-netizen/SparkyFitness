@@ -655,6 +655,8 @@
     "noSavedFoodsOrMeals": "No saved foods or meals found.",
     "searchOnlineToImport": "Search to find foods from your online provider.",
     "onlineSearchFailed": "Failed to search the online provider.",
+    "loadMore": "Load more",
+    "loadMoreFailed": "Failed to load more results.",
     "scannedProduct": "Scanned product",
     "recentFoods": "Recent Foods",
     "private": "Private",
@@ -676,7 +678,13 @@
     "addNewFood": "Add New Food",
     "addNewFoodDescription": "Enter the details for a new food item to add to your database.",
     "scanBarcodeDescription": "Position the product barcode in front of your camera.",
-    "importFromCSVDescription": "Import a CSV file to add multiple foods at once."
+    "importFromCSVDescription": "Import a CSV file to add multiple foods at once.",
+    "allProviders": "All Providers",
+    "topMatches": "Top Matches",
+    "bySource": "By Source",
+    "noResults": "No results",
+    "couldntLoad": "Couldn't load",
+    "showAllResults": "Show all {{count}} {{provider}} results"
   },
   "sync": {
     "syncAll": "Sync all active providers",

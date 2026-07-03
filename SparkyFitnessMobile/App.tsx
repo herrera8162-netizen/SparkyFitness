@@ -1,5 +1,5 @@
 import './global.css'
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StatusBar, Platform, Alert, AppState } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 import * as NavigationBar from 'expo-navigation-bar';
@@ -875,10 +875,7 @@ function AppContent() {
             name="FoodSearch"
             component={SafeFoodSearch}
             options={createStackScreenOptions('Add Food', {
-              // The screen renders its own header; without this iOS shows the
-              // native stack header on top of it (double header). Android
-              // already defaults to headerShown: false.
-              headerShown: false,
+              headerBackVisible: false,
               // 'modal' (not 'fullScreenModal') so iOS keeps the swipe-down
               // dismiss gesture — UIModalPresentationFullScreen has no
               // interactive dismissal.
@@ -965,10 +962,7 @@ function AppContent() {
           <Stack.Screen
             name="Chat"
             component={SafeChat}
-            options={{
-              headerShown: false,
-              gestureEnabled: true,
-            }}
+            options={createStackScreenOptions('Sparky', { headerBackButtonDisplayMode: 'minimal' })}
           />
           <Stack.Screen
             name="MealAdd"
@@ -989,7 +983,7 @@ function AppContent() {
           <Stack.Screen
             name="EditLoggedMeal"
             component={SafeEditLoggedMeal}
-            options={createStackScreenOptions('Edit Meal')}
+            options={createStackScreenOptions('Edit Meal', { headerBackTitle: 'Diary' })}
           />
           <Stack.Screen
             name="MealTypeDetail"

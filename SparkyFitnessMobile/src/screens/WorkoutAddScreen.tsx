@@ -1,4 +1,4 @@
-import React, { useRef, useCallback, useEffect, useState } from 'react';
+import React, { useRef, useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -23,6 +23,7 @@ import { useWorkoutForm, getWorkoutDraftSubmission } from '../hooks/useWorkoutFo
 import { useSelectedExercise } from '../hooks/useSelectedExercise';
 import { useExerciseSetEditing } from '../hooks/useExerciseSetEditing';
 import { formatDateLabel } from '../utils/dateUtils';
+import { createNativeHeaderTextButtonItem } from '../utils/nativeHeaderItems';
 import { useCreateWorkout, useUpdateWorkout } from '../hooks/useExerciseMutations';
 import { usePreferences } from '../hooks/usePreferences';
 import { useExerciseImageSource } from '../hooks/useExerciseImageSource';
@@ -56,7 +57,7 @@ const WorkoutAddScreen: React.FC<Props> = ({ navigation, route }) => {
     '--color-text-primary',
     '--color-border-subtle',
   ]) as [string, string, string, string];
-  const { backColor } = useHeaderActionColors();
+  const { backColor, headerTintColor } = useHeaderActionColors();
 
   const [isNameEditing, setIsNameEditing] = useState(false);
 
@@ -125,20 +126,25 @@ const WorkoutAddScreen: React.FC<Props> = ({ navigation, route }) => {
 
   // Populate the edit form once after the preferences query settles so
   // the initial unit conversion is correct without overwriting later edits.
-  const hasPopulatedRef = useRef(false);
+  // Tracked in state (not a ref) so the loading gate below re-renders
+  // deterministically once population completes.
+  const [hasPopulatedEdit, setHasPopulatedEdit] = useState(false);
   useEffect(() => {
     if (
       !isEditMode ||
       !session ||
-      hasPopulatedRef.current ||
+      hasPopulatedEdit ||
       isPreferencesLoading
     ) {
       return;
     }
 
-    hasPopulatedRef.current = true;
+    // One-time initialization from the async-loaded session; setting state
+    // synchronously here is intentional and mirrors the populate() side effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setHasPopulatedEdit(true);
     populate(session, weightUnit as 'kg' | 'lbs');
-  }, [isEditMode, session, isPreferencesLoading, populate, weightUnit]);
+  }, [isEditMode, session, isPreferencesLoading, populate, weightUnit, hasPopulatedEdit]);
 
   // Populate from preset once after preferences load
   const hasPopulatedPresetRef = useRef(false);
@@ -146,6 +152,9 @@ const WorkoutAddScreen: React.FC<Props> = ({ navigation, route }) => {
     if (!preset || isEditMode || hasPopulatedPresetRef.current || isPreferencesLoading) return;
     hasPopulatedPresetRef.current = true;
     const populatedIds = populateFromPreset(preset, weightUnit as 'kg' | 'lbs', initialDate);
+    // One-time initialization from the async-loaded preset; setting state
+    // synchronously here is intentional and mirrors the populateFromPreset side effect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setEligibleIds(prev => {
       const next = new Set(prev);
       populatedIds.forEach(id => next.add(id));
@@ -153,7 +162,7 @@ const WorkoutAddScreen: React.FC<Props> = ({ navigation, route }) => {
     });
   }, [preset, isEditMode, isPreferencesLoading, populateFromPreset, weightUnit, initialDate]);
 
-  const isInitializingEditForm = isEditMode && !hasPopulatedRef.current;
+  const isInitializingEditForm = isEditMode && !hasPopulatedEdit;
 
   useSelectedExercise(route.params, handleAddExercise);
 
@@ -167,6 +176,24 @@ const WorkoutAddScreen: React.FC<Props> = ({ navigation, route }) => {
     }
     navigation.goBack();
   }, [discardDraft, isEditMode, hasDraftData, navigation]);
+
+  useLayoutEffect(() => {
+    if (Platform.OS !== 'ios') return;
+
+    navigation.setOptions({
+      headerBackVisible: false,
+      unstable_headerLeftItems: () => [
+        createNativeHeaderTextButtonItem({
+          label: 'Cancel',
+          identifier: 'workout-add-cancel',
+          tintColor: headerTintColor,
+          onPress: () => {
+            void handleCancel();
+          },
+        }),
+      ],
+    });
+  }, [handleCancel, headerTintColor, navigation]);
 
   const handleFinish = useCallback(() => {
     if (!submission.canSave) {
