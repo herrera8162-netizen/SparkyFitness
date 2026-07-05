@@ -156,13 +156,18 @@ describe('aggregateSleepSessions', () => {
   });
 
   test('maps unknown stage values to unknown', () => {
+    // Two contiguous unknown samples coalesce into one merged 'unknown' segment.
     const records: HKSleepRecord[] = [
       { startTime: '2024-01-15T22:00:00Z', endTime: '2024-01-15T23:00:00Z', value: 999 },
       { startTime: '2024-01-15T23:00:00Z', endTime: '2024-01-16T00:00:00Z', value: 'UnknownStageValue' },
     ];
     const result = aggregateSleepSessions(records);
     const stages = result[0].stage_events.map(e => e.stage_type);
-    expect(stages).toEqual(['unknown', 'unknown']);
+    expect(stages).toEqual(['unknown']);
+    expect(result[0].stage_events[0].start_time).toBe('2024-01-15T22:00:00.000Z');
+    expect(result[0].stage_events[0].end_time).toBe('2024-01-16T00:00:00.000Z');
+    // unknown is excluded from time asleep (matches the server's deep+light+rem definition).
+    expect(result[0].time_asleep_in_seconds).toBe(0);
   });
 
   test('calculates duration for each sleep stage correctly', () => {
@@ -291,125 +296,132 @@ describe('aggregateSleepSessions', () => {
   });
 });
 
-describe('aggregateByDay', () => {
-  test('returns empty array for empty input', () => {
-    const result = aggregateByDay([], 'running_speed', 'm/s', 'min-max-avg');
-    expect(result).toEqual([]);
-  });
+describe('aggregateSleepSessions overlapping sources (issue #1379)', () => {
+  // HealthKit returns raw samples from ALL sources mixed together. The reporter's setup:
+  // an Apple Watch writes fine-grained REM/Deep/Core/Awake segments while the AutoSleep
+  // app writes a coarse "in bed" envelope plus a generic "asleep" span over the same
+  // period. Without de-overlapping, every overlapping minute is counted twice.
 
-  test('min-max-avg with multiple records across 2 days returns 3 records per day', () => {
-    const records: TransformedRecord[] = [
-      { value: 2.5, type: 'running_speed', date: '2024-01-15', unit: 'm/s' },
-      { value: 3.0, type: 'running_speed', date: '2024-01-15', unit: 'm/s' },
-      { value: 4.0, type: 'running_speed', date: '2024-01-15', unit: 'm/s' },
-      { value: 5.0, type: 'running_speed', date: '2024-01-16', unit: 'm/s' },
-      { value: 6.0, type: 'running_speed', date: '2024-01-16', unit: 'm/s' },
+  // Primary invariant: the emitted stage_events form a non-overlapping timeline.
+  const expectNoOverlap = (events: { start_time: string; end_time: string }[]) => {
+    const sorted = [...events].sort(
+      (a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime()
+    );
+    for (let i = 1; i < sorted.length; i++) {
+      expect(new Date(sorted[i].start_time).getTime()).toBeGreaterThanOrEqual(
+        new Date(sorted[i - 1].end_time).getTime()
+      );
+    }
+  };
+
+  const segmentSeconds = (
+    events: { stage_type: string; duration_in_seconds: number }[],
+    stageType: string
+  ) =>
+    events
+      .filter((e) => e.stage_type === stageType)
+      .reduce((sum, e) => sum + e.duration_in_seconds, 0);
+
+  test('Watch detailed stages under an AutoSleep envelope de-overlap to the union, not the sum', () => {
+    // Apple Watch fine-grained stages, contiguous 23:00–03:00.
+    // AutoSleep generic "asleep" spans exactly the same window (adds no asleep beyond
+    // the Watch), and an in-bed envelope extends wider (22:00–04:00).
+    const records: HKSleepRecord[] = [
+      // AutoSleep envelope (coarse), listed first — order must not matter.
+      { startTime: '2024-01-15T22:00:00Z', endTime: '2024-01-16T04:00:00Z', value: 0 }, // in_bed
+      { startTime: '2024-01-15T23:00:00Z', endTime: '2024-01-16T03:00:00Z', value: 1 }, // generic asleep
+      // Apple Watch detailed stages.
+      { startTime: '2024-01-15T23:00:00Z', endTime: '2024-01-16T00:00:00Z', value: 4 }, // deep 1h
+      { startTime: '2024-01-16T00:00:00Z', endTime: '2024-01-16T01:00:00Z', value: 5 }, // rem 1h
+      { startTime: '2024-01-16T01:00:00Z', endTime: '2024-01-16T01:30:00Z', value: 2 }, // awake 30m
+      { startTime: '2024-01-16T01:30:00Z', endTime: '2024-01-16T03:00:00Z', value: 3 }, // core 1.5h
     ];
-
-    const result = aggregateByDay(records, 'running_speed', 'm/s', 'min-max-avg');
-
-    expect(result).toHaveLength(6);
-
-    // Day 1: min=2.5, max=4.0, avg=(2.5+3.0+4.0)/3=3.17
-    expect(result[0]).toEqual({ value: 2.5, type: 'running_speed_min', date: '2024-01-15', unit: 'm/s' });
-    expect(result[1]).toEqual({ value: 4.0, type: 'running_speed_max', date: '2024-01-15', unit: 'm/s' });
-    expect(result[2]).toEqual({ value: 3.17, type: 'running_speed_avg', date: '2024-01-15', unit: 'm/s' });
-
-    // Day 2: min=5.0, max=6.0, avg=(5.0+6.0)/2=5.5
-    expect(result[3]).toEqual({ value: 5.0, type: 'running_speed_min', date: '2024-01-16', unit: 'm/s' });
-    expect(result[4]).toEqual({ value: 6.0, type: 'running_speed_max', date: '2024-01-16', unit: 'm/s' });
-    expect(result[5]).toEqual({ value: 5.5, type: 'running_speed_avg', date: '2024-01-16', unit: 'm/s' });
-  });
-
-  test('min-max-avg with single record on a day sets min/max/avg all equal', () => {
-    const records: TransformedRecord[] = [
-      { value: 3.5, type: 'running_speed', date: '2024-01-15', unit: 'm/s' },
-    ];
-
-    const result = aggregateByDay(records, 'running_speed', 'm/s', 'min-max-avg');
-
-    expect(result).toHaveLength(3);
-    expect(result[0]).toEqual({ value: 3.5, type: 'running_speed_min', date: '2024-01-15', unit: 'm/s' });
-    expect(result[1]).toEqual({ value: 3.5, type: 'running_speed_max', date: '2024-01-15', unit: 'm/s' });
-    expect(result[2]).toEqual({ value: 3.5, type: 'running_speed_avg', date: '2024-01-15', unit: 'm/s' });
-  });
-
-  test('sum strategy returns 1 record per day with summed value', () => {
-    const records: TransformedRecord[] = [
-      { value: 100, type: 'step', date: '2024-01-15', unit: 'count' },
-      { value: 200, type: 'step', date: '2024-01-15', unit: 'count' },
-      { value: 300, type: 'step', date: '2024-01-16', unit: 'count' },
-    ];
-
-    const result = aggregateByDay(records, 'step', 'count', 'sum');
-
-    expect(result).toHaveLength(2);
-    expect(result[0]).toEqual({ value: 300, type: 'step', date: '2024-01-15', unit: 'count' });
-    expect(result[1]).toEqual({ value: 300, type: 'step', date: '2024-01-16', unit: 'count' });
-  });
-
-  test('sum strategy combines same-day hydration drinks into one daily water total (ml)', () => {
-    // Hydration is synced as type 'water', which the server upserts per (date, source),
-    // overwriting on conflict. Summing per day before upload prevents same-day drinks
-    // from overwriting each other.
-    const records: TransformedRecord[] = [
-      { value: 200, type: 'water', date: '2024-01-15', unit: 'ml' },
-      { value: 300, type: 'water', date: '2024-01-15', unit: 'ml' },
-      { value: 250, type: 'water', date: '2024-01-16', unit: 'ml' },
-    ];
-
-    const result = aggregateByDay(records, 'water', 'ml', 'sum');
-
-    expect(result).toHaveLength(2);
-    expect(result[0]).toEqual({ value: 500, type: 'water', date: '2024-01-15', unit: 'ml' });
-    expect(result[1]).toEqual({ value: 250, type: 'water', date: '2024-01-16', unit: 'ml' });
-  });
-
-  test('last strategy returns 1 record per day with the newest value (first in newest-first order)', () => {
-    // Records arrive newest-first from HealthKit/Health Connect queries
-    const records: TransformedRecord[] = [
-      { value: 72, type: 'weight', date: '2024-01-15', unit: 'kg' }, // newest
-      { value: 71, type: 'weight', date: '2024-01-15', unit: 'kg' },
-      { value: 70, type: 'weight', date: '2024-01-15', unit: 'kg' }, // oldest
-    ];
-
-    const result = aggregateByDay(records, 'weight', 'kg', 'last');
-
+    const result = aggregateSleepSessions(records);
     expect(result).toHaveLength(1);
-    expect(result[0]).toEqual({ value: 72, type: 'weight', date: '2024-01-15', unit: 'kg' });
+    const events = result[0].stage_events;
+
+    expectNoOverlap(events);
+
+    // Asleep buckets equal the Watch's union — the generic-asleep overlap is absorbed,
+    // NOT added on top (the buggy "sum of both sources" would double these).
+    expect(result[0].deep_sleep_seconds).toBe(3600);
+    expect(result[0].rem_sleep_seconds).toBe(3600);
+    expect(result[0].light_sleep_seconds).toBe(5400); // core 1.5h
+    expect(result[0].awake_sleep_seconds).toBe(1800);
+    // time asleep = deep + rem + light = 3.5h, not 7.5h (Watch 3.5h + generic 4h).
+    expect(result[0].time_asleep_in_seconds).toBe(3.5 * 3600);
+
+    // The wider in-bed envelope survives only in the margins nothing better covers.
+    expect(segmentSeconds(events, 'in_bed')).toBe(2 * 3600); // 22:00–23:00 + 03:00–04:00
+  });
+
+  test('awake beats generic asleep on the same span', () => {
+    const records: HKSleepRecord[] = [
+      { startTime: '2024-01-16T00:00:00Z', endTime: '2024-01-16T02:00:00Z', value: 1 }, // generic asleep
+      { startTime: '2024-01-16T00:30:00Z', endTime: '2024-01-16T01:00:00Z', value: 2 }, // awake
+    ];
+    const result = aggregateSleepSessions(records);
+    const events = result[0].stage_events;
+    expectNoOverlap(events);
+    // The conflicted 00:30–01:00 span is emitted as awake, not light.
+    const awakeSeg = events.find((e) => e.stage_type === 'awake');
+    expect(awakeSeg).toBeDefined();
+    expect(awakeSeg?.start_time).toBe('2024-01-16T00:30:00.000Z');
+    expect(awakeSeg?.end_time).toBe('2024-01-16T01:00:00.000Z');
+    expect(result[0].awake_sleep_seconds).toBe(1800);
+    // Only the two flanking light slices remain asleep (00:00–00:30 + 01:00–02:00).
+    expect(result[0].time_asleep_in_seconds).toBe(1.5 * 3600);
+  });
+
+  test('deep beats generic asleep on overlap', () => {
+    const records: HKSleepRecord[] = [
+      { startTime: '2024-01-16T00:00:00Z', endTime: '2024-01-16T02:00:00Z', value: 1 }, // generic asleep
+      { startTime: '2024-01-16T00:30:00Z', endTime: '2024-01-16T01:30:00Z', value: 4 }, // deep
+    ];
+    const result = aggregateSleepSessions(records);
+    const events = result[0].stage_events;
+    expectNoOverlap(events);
+    const deepSeg = events.find((e) => e.stage_type === 'deep');
+    expect(deepSeg?.start_time).toBe('2024-01-16T00:30:00.000Z');
+    expect(deepSeg?.end_time).toBe('2024-01-16T01:30:00.000Z');
+    expect(result[0].deep_sleep_seconds).toBe(3600);
+    // deep 1h + surrounding light 1h (00:00–00:30 + 01:30–02:00) = 2h asleep, counted once.
+    expect(result[0].light_sleep_seconds).toBe(3600);
+    expect(result[0].time_asleep_in_seconds).toBe(2 * 3600);
+  });
+
+  test('in-bed margin outside the detailed stages is emitted as in_bed, counted once', () => {
+    // AutoSleep in-bed envelope 22:00–06:00 extends past the Watch's detailed data,
+    // which only covers 23:00–05:00.
+    const records: HKSleepRecord[] = [
+      { startTime: '2024-01-15T22:00:00Z', endTime: '2024-01-16T06:00:00Z', value: 0 }, // in_bed envelope
+      { startTime: '2024-01-15T23:00:00Z', endTime: '2024-01-16T00:00:00Z', value: 4 }, // deep 1h
+      { startTime: '2024-01-16T00:00:00Z', endTime: '2024-01-16T05:00:00Z', value: 3 }, // core 5h
+    ];
+    const result = aggregateSleepSessions(records);
+    const events = result[0].stage_events;
+    expectNoOverlap(events);
+
+    // The two margins (22:00–23:00 and 05:00–06:00) are in_bed, not asleep.
+    const inBed = events.filter((e) => e.stage_type === 'in_bed');
+    const inBedRanges = inBed
+      .map((e) => `${e.start_time}/${e.end_time}`)
+      .sort();
+    expect(inBedRanges).toEqual([
+      '2024-01-15T22:00:00.000Z/2024-01-15T23:00:00.000Z',
+      '2024-01-16T05:00:00.000Z/2024-01-16T06:00:00.000Z',
+    ]);
+    // in_bed total is the 2h of margins, counted once (envelope not double-added).
+    expect(segmentSeconds(events, 'in_bed')).toBe(2 * 3600);
+    // Asleep = deep 1h + core→light 5h = 6h; the in-bed margins are excluded.
+    expect(result[0].time_asleep_in_seconds).toBe(6 * 3600);
+    // The full in-bed envelope still bounds the session duration (22:00–06:00 = 8h).
+    expect(result[0].duration_in_seconds).toBe(8 * 3600);
   });
 });
 
-describe('timezone metadata propagation', () => {
-  test('aggregateByDay propagates record_timezone from input records', () => {
-    const records: TransformedRecord[] = [
-      { value: 100, type: 'step', date: '2024-01-15', unit: 'count', source: 'HealthKit', record_timezone: 'Asia/Tokyo' },
-      { value: 200, type: 'step', date: '2024-01-15', unit: 'count', source: 'HealthKit', record_timezone: 'Asia/Tokyo' },
-    ];
-    const result = aggregateByDay(records, 'step', 'count', 'sum');
-    expect(result).toHaveLength(1);
-    expect(result[0].record_timezone).toBe('Asia/Tokyo');
-  });
-
-  test('aggregateByDay propagates record_utc_offset_minutes from input records', () => {
-    const records: TransformedRecord[] = [
-      { value: 72, type: 'weight', date: '2024-01-15', unit: 'kg', source: 'Health Connect', record_utc_offset_minutes: 540 },
-    ];
-    const result = aggregateByDay(records, 'weight', 'kg', 'last');
-    expect(result).toHaveLength(1);
-    expect(result[0].record_utc_offset_minutes).toBe(540);
-  });
-
-  test('aggregateByDay omits timezone fields when not present on input', () => {
-    const records: TransformedRecord[] = [
-      { value: 100, type: 'step', date: '2024-01-15', unit: 'count', source: 'HealthKit' },
-    ];
-    const result = aggregateByDay(records, 'step', 'count', 'sum');
-    expect(result).toHaveLength(1);
-    expect(result[0].record_timezone).toBeUndefined();
-    expect(result[0].record_utc_offset_minutes).toBeUndefined();
-  });
-});
+// aggregateByDay's behavior is covered in __tests__/services/shared/dataAggregation.test.ts
+// (the implementation is shared; this module re-exports it).
 
 describe('iOS aggregate strategy: device-local bucketing', () => {
   // iOS HealthKit statistics queries (steps, calories, distance, floors) are bounded
