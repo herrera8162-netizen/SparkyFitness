@@ -1935,6 +1935,7 @@
     "invalidTotalAmount": "Total amount must be greater than zero.",
     "invalidDefaultServingSize": "Default serving size must be greater than zero.",
     "cookedWeight": "Cooked Weight (g)",
+    "cookedWeightPlaceholder": "Optional",
     "cookedWeightHelp": "Weigh the finished dish, minus the pan. Lets you log a partial plate by weight without giving up serving-based portions.",
     "invalidCookedWeight": "Cooked weight must be greater than zero.",
     "perServingTab": "Per serving",

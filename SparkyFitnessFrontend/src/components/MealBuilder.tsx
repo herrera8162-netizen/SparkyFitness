@@ -138,6 +138,11 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
   const [servingUnit, setServingUnit] = useState<string>(
     initialServingUnit || 'serving'
   );
+  // Cooked weight (MEAL_WEIGHT_PLAN.md Phase 1/3): mass in grams of the whole
+  // finished dish. An alternate denominator alongside serving_size ×
+  // total_servings — lets a serving-based meal ALSO be logged by plate
+  // weight. Empty string means "not set" (meal-management mode only).
+  const [cookedWeightText, setCookedWeightText] = useState<string>('');
   // Diary-mode meal slot (breakfast/lunch/dinner/snacks/custom). Editable so a
   // logged meal can be moved to a different slot; seeded from the prop.
   const [mealTypeSelection, setMealTypeSelection] = useState<string>(
@@ -248,6 +253,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                 (loadedServingSize * loadedTotalServings).toPrecision(15)
               ).toString()
             );
+            setCookedWeightText(meal.cooked_weight_g?.toString() || '');
             setMealFoods(meal.foods || []);
           }
         } catch (err) {
@@ -739,6 +745,26 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
           )
         );
       }
+
+      // cooked_weight_g is optional and independent of serving_unit; empty
+      // clears a previously-set value, a non-positive number is rejected.
+      let persistedCookedWeightG: number | null = null;
+      if (cookedWeightText.trim() !== '') {
+        const parsedCookedWeight = parseFloat(cookedWeightText);
+        if (!Number.isFinite(parsedCookedWeight) || parsedCookedWeight <= 0) {
+          toast({
+            title: t('mealBuilder.errorTitle', 'Error'),
+            description: t(
+              'mealBuilder.invalidCookedWeight',
+              'Cooked weight must be greater than zero.'
+            ),
+            variant: 'destructive',
+          });
+          return;
+        }
+        persistedCookedWeightG = parsedCookedWeight;
+      }
+
       const mealData: MealPayload = {
         name: mealName,
         description: mealDescription,
@@ -746,6 +772,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
         serving_size: persistedServingSize,
         serving_unit: servingUnit,
         total_servings: persistedTotalServings,
+        cooked_weight_g: persistedCookedWeightG,
         foods: mealFoods.map((mf) => ({
           item_type: mf.item_type || 'food',
           food_id: mf.food_id,
@@ -1287,6 +1314,35 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                 <div />
               </div>
             )}
+            {/* cooked_weight_g is an alternate denominator alongside
+                serving_size × total_servings, independent of serving_unit —
+                shown regardless of which unit is selected above. */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="cookedWeight">
+                  {t('mealBuilder.cookedWeight', 'Cooked Weight (g)')}
+                </Label>
+                <Input
+                  id="cookedWeight"
+                  type="number"
+                  step="any"
+                  min="0"
+                  value={cookedWeightText}
+                  onChange={(e) => setCookedWeightText(e.target.value)}
+                  placeholder={t(
+                    'mealBuilder.cookedWeightPlaceholder',
+                    'Optional'
+                  )}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    'mealBuilder.cookedWeightHelp',
+                    'Weigh the finished dish, minus the pan. Lets you log a partial plate by weight without giving up serving-based portions.'
+                  )}
+                </p>
+              </div>
+              <div />
+            </div>
           </div>
         )}
         <div className="space-y-2">
