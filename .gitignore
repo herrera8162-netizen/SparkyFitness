@@ -73,3 +73,8 @@ dossier sans titre/
 # Nix build outputs
 /result
 /result-*
+
+# Personal scratch/planning notes
+/REVIEW_NOTES.md
+/TODO.md
+/MEAL_WEIGHT_PLAN.md
