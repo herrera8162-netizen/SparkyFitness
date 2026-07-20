@@ -1422,7 +1422,9 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
         </Button>
         <Button onClick={handleSaveMeal}>
           {source === 'food-diary'
-            ? t('mealBuilder.updateEntryButton', 'Update Entry')
+            ? foodEntryId
+              ? t('mealBuilder.updateEntryButton', 'Update Entry')
+              : t('mealBuilder.addToMealButton', 'Add to Meal')
             : t('mealBuilder.saveMealButton', 'Save Meal')}
         </Button>
       </div>
