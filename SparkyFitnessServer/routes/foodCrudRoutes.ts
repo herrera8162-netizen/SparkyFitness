@@ -8,6 +8,7 @@ import labelScanService, {
 import foodPhotoEstimationService from '../services/foodPhotoEstimationService.js';
 import type { FoodPhotoEstimateErrorCode } from '@workspace/shared';
 import { backfillOffAllergens } from '../utils/backfillAllergens.js';
+import { resolveIsAdmin } from '../utils/adminCheck.js';
 const router = express.Router();
 router.use(express.json());
 
@@ -635,7 +636,8 @@ router.get('/barcode/:barcode', authenticate, async (req, res, next) => {
       barcode,
 
       req.userId,
-      req.query.providerId
+      req.query.providerId,
+      req.authenticatedUserId
     );
     res.status(200).json(result);
   } catch (error) {
@@ -647,6 +649,7 @@ const LABEL_SCAN_ERROR_HTTP_STATUS: Record<LabelScanErrorCategory, number> = {
   unsupported_provider: 422,
   api_key_missing: 422,
   custom_url_missing: 422,
+  private_network_forbidden: 403,
   unsupported_media: 400,
   refused: 422,
   truncated: 422,
@@ -662,11 +665,13 @@ router.post('/scan-label', authenticate, async (req, res, next) => {
     return res.status(400).json({ error: 'image and mime_type are required.' });
   }
   try {
+    const isAdmin = await resolveIsAdmin(req.user, req.authenticatedUserId);
     const result = await labelScanService.extractNutritionFromLabel(
       image,
       mime_type,
 
-      req.userId
+      req.userId,
+      isAdmin
     );
     if (!result.success) {
       const status = LABEL_SCAN_ERROR_HTTP_STATUS[result.category] ?? 500;
@@ -711,6 +716,7 @@ const PHOTO_ESTIMATION_ERROR_HTTP_STATUS: Record<
   CONTENT_BLOCKED: 422,
   PARSE_ERROR: 422,
   UPSTREAM_ERROR: 502,
+  PRIVATE_NETWORK_FORBIDDEN: 403,
   TIMEOUT: 504,
 };
 
@@ -764,14 +770,20 @@ router.post(
           .status(400)
           .json({ error: 'mime_type is required.', code: 'INVALID_REQUEST' });
       }
-      if (img.length > MAX_BASE64_IMAGE_LENGTH) {
+      const currentMaxLen = process.env.TEST_MAX_BASE64_IMAGE_LENGTH
+        ? parseInt(process.env.TEST_MAX_BASE64_IMAGE_LENGTH, 10)
+        : MAX_BASE64_IMAGE_LENGTH;
+      if (img.length > currentMaxLen) {
         return res.status(400).json({
           error: 'image exceeds the maximum allowed size of 8MB (base64).',
           code: 'IMAGE_TOO_LARGE',
         });
       }
       totalBase64Length += img.length;
-      if (totalBase64Length > MAX_TOTAL_BASE64_LENGTH) {
+      const currentMaxTotalLen = process.env.TEST_MAX_TOTAL_BASE64_LENGTH
+        ? parseInt(process.env.TEST_MAX_TOTAL_BASE64_LENGTH, 10)
+        : MAX_TOTAL_BASE64_LENGTH;
+      if (totalBase64Length > currentMaxTotalLen) {
         return res.status(400).json({
           error:
             'The combined size of all images exceeds the allowed limit of 24MB (base64).',
@@ -835,12 +847,14 @@ router.post(
     }
 
     try {
+      const isAdmin = await resolveIsAdmin(req.user, req.authenticatedUserId);
       const result =
         await foodPhotoEstimationService.estimateFoodPhotoNutrition({
           images: photoImages,
           userId: req.userId,
           description: typeof description === 'string' ? description : '',
           weightSlot,
+          actorIsAdmin: isAdmin,
         });
       if (result.success) {
         return res.status(200).json(result.estimate);
@@ -1107,12 +1121,12 @@ router.delete('/:id', authenticate, async (req, res, next) => {
  *         description: Food data is required.
  */
 router.post('/import-from-csv', authenticate, async (req, res, next) => {
-  const { foods } = req.body;
+  const { foods, overwrite } = req.body;
   if (!foods) {
     return res.status(400).json({ error: 'Food data is required.' });
   }
   try {
-    await foodService.importFoodsInBulk(req.userId, foods);
+    await foodService.importFoodsInBulk(req.userId, foods, overwrite === true);
     res.status(200).json({ message: 'Food data imported successfully.' });
   } catch (error) {
     next(error);

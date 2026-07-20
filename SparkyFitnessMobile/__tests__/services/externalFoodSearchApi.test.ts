@@ -1333,6 +1333,10 @@ describe('externalFoodSearchApi', () => {
           id: 'ext-123',
           name: 'Chicken Breast',
           brand: 'Farm Fresh',
+          barcode: undefined,
+          provider_type: 'openfoodfacts',
+          provider_external_id: 'ext-123',
+          is_custom: false,
           calories: 50,
           protein: 9,
           carbs: 0,
@@ -2070,6 +2074,7 @@ describe('externalFoodSearchApi', () => {
       ['CONTENT_BLOCKED', 422],
       ['PARSE_ERROR', 422],
       ['UPSTREAM_ERROR', 502],
+      ['PRIVATE_NETWORK_FORBIDDEN', 403],
       ['TIMEOUT', 504],
       ['INVALID_REQUEST', 400],
     ] as const)('maps server %s to FoodPhotoEstimateError', async (code, status) => {

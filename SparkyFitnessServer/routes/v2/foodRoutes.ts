@@ -58,15 +58,6 @@ function normalizeFoodVariantForResponse(variant: unknown): unknown {
     ...record,
     id: nullToUndefined(record.id as string | null | undefined),
     user_id: nullToUndefined(record.user_id as string | null | undefined),
-    serving_description: nullToUndefined(
-      record.serving_description as string | null | undefined
-    ),
-    serving_weight: nullToUndefined(
-      record.serving_weight as number | null | undefined
-    ),
-    serving_weight_unit: nullToUndefined(
-      record.serving_weight_unit as string | null | undefined
-    ),
     saturated_fat: nullToUndefined(
       record.saturated_fat as number | null | undefined
     ),
@@ -174,7 +165,8 @@ const barcodeHandler: RequestHandler<{ barcode: string }> = async (
       barcode,
 
       req.userId,
-      providerId
+      providerId,
+      req.authenticatedUserId
     );
 
     // Ensure barcode is preserved on the food when present
@@ -238,7 +230,8 @@ const searchHandler: RequestHandler<{ providerType: string }> = async (
       req.userId,
       providerType,
       query,
-      { page, pageSize, providerId, autoScale }
+      { page, pageSize, providerId, autoScale },
+      req.authenticatedUserId
     );
 
     await enrichWithCustomNutrients(
@@ -292,7 +285,7 @@ const detailHandler: RequestHandler<{
 
   try {
     const credentials = await resolveProviderCredentials(
-      req.userId,
+      req.authenticatedUserId,
       providerId,
       providerType
     );
@@ -308,7 +301,7 @@ const detailHandler: RequestHandler<{
     switch (providerType) {
       case 'openfoodfacts': {
         const offProviderId = await resolveOpenFoodFactsProviderId(
-          req.userId,
+          req.authenticatedUserId,
           providerId
         );
         const data = await searchOpenFoodFactsByBarcodeFields(
@@ -316,7 +309,7 @@ const detailHandler: RequestHandler<{
           undefined,
           language,
 
-          offProviderId ? req.userId : undefined,
+          offProviderId ? req.authenticatedUserId : undefined,
           offProviderId || undefined
         );
         if (data.status === 1 && data.product) {
@@ -410,6 +403,7 @@ const detailHandler: RequestHandler<{
           username: credentials.app_id,
           password: credentials.app_key,
           baseUrl: credentials.base_url,
+          language,
         });
         break;
       }

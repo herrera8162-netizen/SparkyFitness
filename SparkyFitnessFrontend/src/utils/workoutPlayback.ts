@@ -1,4 +1,5 @@
 import type { CreatePresetSessionRequest } from '@workspace/shared';
+import { instantHourMinute } from '@workspace/shared';
 import type { WorkoutPreset, WorkoutPresetSet } from '@/types/workout';
 
 export const DEFAULT_REST_SECONDS = 90;
@@ -18,6 +19,8 @@ export interface WorkoutPlaybackRestTimer {
 
 export interface WorkoutPlaybackSetDraft extends WorkoutPresetSet {
   completed: boolean;
+  /** ISO timestamp of when the set was checked off; null while incomplete. */
+  completed_at: string | null;
 }
 
 export interface WorkoutPlaybackExerciseDraft {
@@ -311,6 +314,7 @@ export function createWorkoutPlaybackDraftFromPreset(
         notes: set.notes ?? null,
         rpe: set.rpe ?? null,
         completed: false,
+        completed_at: null,
       })),
     })
   );
@@ -476,6 +480,7 @@ export function toggleWorkoutSetCompletion(
   return updateSetAtPointer(draft, pointer, (set) => ({
     ...set,
     completed: !set.completed,
+    completed_at: set.completed ? null : new Date().toISOString(),
   }));
 }
 
@@ -510,6 +515,7 @@ export function addWorkoutSetToExercise(
     notes: lastSet?.notes ?? null,
     rpe: lastSet?.rpe ?? null,
     completed: false,
+    completed_at: null,
   };
 
   const exercises = draft.exercises.map((currentExercise, index) => {
@@ -655,6 +661,7 @@ export function completeCurrentWorkoutSet(
   let nextDraft = updateSetAtPointer(draft, currentPointer, (set) => ({
     ...set,
     completed: true,
+    completed_at: new Date().toISOString(),
   }));
 
   const nextPointer = getNextIncompletePointer(nextDraft, currentPointer);
@@ -701,7 +708,8 @@ function deriveExerciseDurationMinutes(
 }
 
 export function buildPresetSessionCreateRequestFromDraft(
-  draft: WorkoutPlaybackDraft
+  draft: WorkoutPlaybackDraft,
+  timezone: string
 ): CreatePresetSessionRequest {
   const exercises = draft.exercises
     .map((exercise, exerciseIndex) => {
@@ -710,11 +718,23 @@ export function buildPresetSessionCreateRequestFromDraft(
         return null;
       }
 
+      let entryTime: string | null = null;
+      const startTimestamp = draft.started_at;
+      if (startTimestamp) {
+        try {
+          const hm = instantHourMinute(startTimestamp, timezone);
+          entryTime = `${String(hm.hour).padStart(2, '0')}:${String(hm.minute).padStart(2, '0')}`;
+        } catch (e) {
+          console.error('Failed to parse draft started_at:', e);
+        }
+      }
+
       return {
         exercise_id: exercise.exercise_id,
         sort_order: exerciseIndex,
         duration_minutes: deriveExerciseDurationMinutes(exercise),
         notes: exercise.notes ?? null,
+        entry_time: entryTime,
         sets: completedSets.map((set, setIndex) => ({
           set_number: setIndex + 1,
           set_type: set.set_type ?? null,
@@ -724,6 +744,11 @@ export function buildPresetSessionCreateRequestFromDraft(
           rest_time: toNullableNumber(set.rest_time),
           notes: set.notes ?? null,
           rpe: toNullableNumber(set.rpe),
+          // `?? null` also covers persisted drafts that predate the field.
+          completed_at: set.completed_at ?? null,
+          // Web playback makes no PR claims — drafts never carry PRs, and the
+          // server owns PR detection. Always false on create.
+          is_pr: false,
         })),
       };
     })

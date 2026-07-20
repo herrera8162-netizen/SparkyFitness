@@ -6,6 +6,7 @@ import {
   usePreferences,
 } from '@/contexts/PreferencesContext';
 import { ChatbotVisibilityProvider } from '@/contexts/ChatbotVisibilityContext';
+import { ChatToolCategoriesProvider } from '@/contexts/ChatToolCategoriesContext';
 import LanguageHandler from '@/components/LanguageHandler';
 import { WaterContainerProvider } from '@/contexts/WaterContainerContext';
 import {
@@ -58,6 +59,9 @@ const Reports = lazyWithChunkRecovery(() => import('./pages/Reports/Reports'));
 const Medications = lazyWithChunkRecovery(
   () => import('./pages/Medications/Medications')
 );
+const CyclePage = lazyWithChunkRecovery(
+  () => import('./pages/Cycle/CyclePage')
+);
 const ExerciseDatabaseManager = lazyWithChunkRecovery(
   () => import('./pages/Exercises/Exercises')
 );
@@ -83,6 +87,9 @@ const WithingsCallback = lazyWithChunkRecovery(
 );
 const FitbitCallback = lazyWithChunkRecovery(
   () => import('@/pages/Integrations/FitbitCallback')
+);
+const OuraCallback = lazyWithChunkRecovery(
+  () => import('@/pages/Integrations/OuraCallback')
 );
 const GoogleHealthCallback = lazyWithChunkRecovery(
   () => import('@/pages/Integrations/GoogleHealthCallback')
@@ -294,6 +301,11 @@ const router = createBrowserRouter([
         ErrorBoundary: RootErrorBoundary,
       },
       {
+        path: '/oura/callback',
+        Component: OuraCallback,
+        ErrorBoundary: RootErrorBoundary,
+      },
+      {
         path: '/polar/callback',
         Component: PolarCallback,
         ErrorBoundary: RootErrorBoundary,
@@ -363,6 +375,11 @@ const router = createBrowserRouter([
             ErrorBoundary: RouteErrorBoundary,
           },
           {
+            path: 'cycle',
+            Component: CyclePage,
+            ErrorBoundary: RouteErrorBoundary,
+          },
+          {
             path: 'settings',
             Component: Settings,
             ErrorBoundary: RouteErrorBoundary,
@@ -412,7 +429,9 @@ const App = () => {
     <>
       <ReactQueryDevtools buttonPosition="top-left" initialIsOpen={false} />
       <ChatbotVisibilityProvider>
-        <RouterProvider router={router} />
+        <ChatToolCategoriesProvider>
+          <RouterProvider router={router} />
+        </ChatToolCategoriesProvider>
       </ChatbotVisibilityProvider>
     </>
   );

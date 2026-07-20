@@ -14,9 +14,10 @@ import { addSheetRef } from '../components/AddSheet';
 import CalendarSheet, { type CalendarSheetRef } from '../components/CalendarSheet';
 import ServingAdjustSheet, { type ServingAdjustSheetRef } from '../components/ServingAdjustSheet';
 import EmptyDayIllustration from '../components/EmptyDayIllustration';
+import DiaryCalorieMacroSummary from '../components/DiaryCalorieMacroSummary';
 import StatusView from '../components/StatusView';
 import { useActiveWorkoutBarPadding } from '../components/ActiveWorkoutBar';
-import { useServerConnection, useDailySummary } from '../hooks';
+import { useServerConnection, useDailySummary, useCustomNutrients, useNutrientDisplayPreferences } from '../hooks';
 import { useMeasurements } from '../hooks/useMeasurements';
 import { usePreferences } from '../hooks/usePreferences';
 import { useExerciseImageSource } from '../hooks/useExerciseImageSource';
@@ -26,6 +27,7 @@ import {
   type NativeHeaderDatePickerNavigation,
 } from '../utils/nativeHeaderDatePicker';
 import { useNativeIOSTabsActive } from '../services/nativeTabBarPreference';
+import { useActiveWorkoutStore } from '../stores/activeWorkoutStore';
 import type { MealTypeKey } from '../utils/mealNutrition';
 import type { CompositeScreenProps } from '@react-navigation/native';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
@@ -141,6 +143,12 @@ const DiaryScreen: React.FC<DiaryScreenProps> = ({ navigation }) => {
     date: selectedDate,
     enabled: isConnected,
   });
+  const { customNutrients } = useCustomNutrients({ enabled: isConnected });
+  const { preferences: nutrientPrefs } = useNutrientDisplayPreferences({ enabled: isConnected });
+  const diaryNutrientRow = nutrientPrefs.find(
+    (p) => p.view_group === 'diary' && p.platform === 'mobile',
+  );
+  const customNutrientKeys = (diaryNutrientRow?.visible_nutrients ?? []).slice(0, 4);
   const hasAnyMeasurement = useMemo(() => {
     if (!measurements) return false;
     return (
@@ -228,6 +236,14 @@ const DiaryScreen: React.FC<DiaryScreenProps> = ({ navigation }) => {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={accentColor} />
         }
       >
+        {(summary.foodEntries.length > 0 || summary.exerciseEntries.length > 0 || summary.calorieGoal > 0) && (
+          <DiaryCalorieMacroSummary
+            summary={summary}
+            showNetCarbs={preferences?.show_net_carbs === true}
+            customNutrientKeys={customNutrientKeys}
+            customNutrients={customNutrients}
+          />
+        )}
         {summary.foodEntries.length === 0 && summary.exerciseEntries.length === 0 && !hasAnyMeasurement ? (
           <>
             <EmptyDayIllustration />
@@ -256,6 +272,12 @@ const DiaryScreen: React.FC<DiaryScreenProps> = ({ navigation }) => {
               onAddExercise={() => addSheetRef.current?.present({ initialMenu: 'exercise' })}
               onPressWorkout={(session) => {
                 if (session.type === 'preset') {
+                  // The live workout's surface is the active screen; detail is
+                  // for reviewing past or planned sessions.
+                  if (useActiveWorkoutStore.getState().sessionId === session.id) {
+                    navigation.navigate('ActiveWorkout');
+                    return;
+                  }
                   navigation.navigate('WorkoutDetail', { session });
                 } else {
                   navigation.navigate('ActivityDetail', { session });
@@ -281,7 +303,9 @@ const DiaryScreen: React.FC<DiaryScreenProps> = ({ navigation }) => {
     return (
       <>
         <GestureDetector gesture={swipeGesture}>
-          {renderedContent ?? <View className="flex-1 bg-background" />}
+          <View collapsable={false} className="flex-1">
+            {renderedContent ?? <View className="flex-1 bg-background" />}
+          </View>
         </GestureDetector>
         <CalendarSheet ref={calendarRef} selectedDate={selectedDate} onSelectDate={handleCalendarSelect} />
         <ServingAdjustSheet ref={servingSheetRef} onViewEntry={(entry) => navigation.navigate('FoodEntryView', { entry })} />

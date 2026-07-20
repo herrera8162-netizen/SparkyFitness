@@ -4,6 +4,7 @@ import type {
   FoodPhotoEstimateResponse,
   IndividualSessionResponse,
   PresetSessionResponse,
+  SharedPregnancy,
 } from '@workspace/shared';
 import type { FoodInfoItem } from './foodInfo';
 import type { FoodEntry } from './foodEntries';
@@ -33,6 +34,10 @@ export type TabParamList = {
 export type RootStackParamList = {
   Onboarding: undefined;
   Tabs: NavigatorScreenParams<TabParamList>;
+  CycleSettings: undefined;
+  CycleOnboarding: undefined;
+  CycleHub: { initialTab?: 'today' | 'insights' | 'care' } | undefined;
+  PregnancySetup: { pregnancy?: SharedPregnancy } | undefined;
   FoodsLibrary: undefined;
   MealsLibrary: undefined;
   ExercisesLibrary: undefined;
@@ -56,7 +61,14 @@ export type RootStackParamList = {
     pendingScannedBarcode?: string;
     scannedBarcodeNonce?: number;
   };
-  ExerciseDetail: { item: Exercise; updatedItem?: Exercise };
+  ExerciseDetail: {
+    item: Exercise;
+    updatedItem?: Exercise;
+    // Suppress the Start Workout / Log Exercise buttons when opened from within
+    // a workout context (active workout, workout builder/edit, preset form),
+    // where starting or logging this single exercise would be redundant.
+    hideWorkoutActions?: boolean;
+  };
   FoodSearch:
     | {
         date?: string;
@@ -84,6 +96,13 @@ export type RootStackParamList = {
     adjustedCustomNutrients?: Record<string, string | number> | null;
   };
   MealTypeDetail: { date: string; mealType: MealTypeKey; mealLabel?: string };
+  DailyNutritionDetails: { date: string };
+  NutrientTrends: {
+    nutrientKey: string;
+    nutrientLabel: string;
+    unit: string;
+    goal?: number;
+  };
   FoodForm:
     | {
         mode: 'create-food';
@@ -140,7 +159,7 @@ export type RootStackParamList = {
       }
     | undefined;
   ExerciseSearch: { returnKey: string };
-  PresetSearch: { date?: string } | undefined;
+  PresetSearch: { selectedExercise?: Exercise; selectionNonce?: number } | undefined;
   WorkoutAdd: {
     session?: PresetSessionResponse;
     preset?: WorkoutPreset;
@@ -152,6 +171,7 @@ export type RootStackParamList = {
   } | undefined;
   ActivityAdd: { entry?: IndividualSessionResponse; date?: string; popCount?: number; selectedExercise?: Exercise; selectionNonce?: number; skipDraftLoad?: boolean } | undefined;
   WorkoutDetail: { session: PresetSessionResponse; selectedExercise?: Exercise; selectionNonce?: number };
+  ActiveWorkout: { selectedExercise?: Exercise; selectionNonce?: number } | undefined;
   ActivityDetail: { session: IndividualSessionResponse };
   FastingDetail: undefined;
   Chat: undefined;
@@ -161,7 +181,9 @@ export type RootStackParamList = {
   CalorieSettings: undefined;
   FoodSettings: undefined;
   DashboardSettings: undefined;
+  DiarySettings: undefined;
   ServerSettings: undefined;
+  PasskeySettings: undefined;
   AppSettings: undefined;
   About: undefined;
   WhatsNew: undefined;

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,15 +9,15 @@ import {
   Platform,
   LayoutAnimation,
   Alert,
+  type TextInput,
 } from 'react-native';
 import Button from './ui/Button';
-import Clipboard from '@react-native-clipboard/clipboard';
 import { useCSSVariable } from 'uniwind';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import Icon from './Icon';
-import FormInput from './FormInput';
+import FormInput, { UnfocusedInputEcho } from './FormInput';
 import SegmentedControl from './SegmentedControl';
-import MfaForm, { ErrorBanner, PrimaryButton } from './MfaForm';
+import MfaForm, { ErrorBanner, OidcProviderLogo, PrimaryButton } from './MfaForm';
 import {
   login,
   LoginError,
@@ -28,7 +28,12 @@ import {
   verifyEmailOtp,
   setPendingProxyHeaders,
   clearPendingProxyHeaders,
+  fetchAuthSettings,
+  loginWithOidc,
+  loginWithPasskey,
   type MfaFactors,
+  type AuthSettings,
+  type OidcProvider,
 } from '../services/api/authService';
 import {
   saveServerConfig,
@@ -37,13 +42,11 @@ import {
   type ProxyHeader,
 } from '../services/storage';
 import { addLog } from '../services/LogService';
+import { normalizeUrl, getInsecureUrlError } from '../utils/serverUrl';
+import { pasteFromClipboard } from '../utils/keyboardFocus';
+import { CONNECTION_CHECK_TIMEOUT_MS, fetchWithTimeout } from '../utils/concurrency';
 
 type AuthTab = 'signIn' | 'apiKey';
-
-const AUTH_SEGMENTS: { key: AuthTab; label: string }[] = [
-  { key: 'signIn', label: 'Sign In' },
-  { key: 'apiKey', label: 'API Key' },
-];
 
 interface ServerConfigModalProps {
   visible: boolean;
@@ -74,7 +77,12 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   }));
 
   // Form state
+  const scrollViewRef = useRef<ScrollView>(null);
+  const serverUrlInputRef = useRef<TextInput>(null);
+  const apiKeyInputRef = useRef<TextInput>(null);
   const [serverUrl, setServerUrl] = useState('');
+  const [isServerUrlFocused, setIsServerUrlFocused] = useState(false);
+  const [authSettings, setAuthSettings] = useState<AuthSettings | null>(null);
   const [authTab, setAuthTab] = useState<AuthTab>('signIn');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -99,9 +107,19 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   const [mfaCode, setMfaCode] = useState('');
   const [emailOtpSent, setEmailOtpSent] = useState(false);
 
-  // Reset form when modal opens
+  // Reset form when modal opens or closes
   useEffect(() => {
-    if (!visible) return;
+    if (!visible) {
+      setServerUrl('');
+      setError('');
+      setAuthSettings(null);
+      setApiKey('');
+      setProxyHeaders([]);
+      // Closing unmounts the focused input without firing onBlur, which
+      // would leave a stale focus flag suppressing the URL echo on reopen.
+      setIsServerUrlFocused(false);
+      return;
+    }
 
     setError('');
     setLoading(false);
@@ -133,6 +151,70 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     clearPendingProxyHeaders();
   }, [visible, editingConfig, defaultAuthTab, chevronRotation]);
 
+  // Fetch settings dynamically whenever the URL changes
+  useEffect(() => {
+    if (!visible || !serverUrl) {
+      setAuthSettings(null);
+      return;
+    }
+
+    const url = normalizeUrl(serverUrl);
+    const lowerUrl = url.toLowerCase();
+    if (lowerUrl.startsWith('http://') || lowerUrl.startsWith('https://')) {
+      const validationError = getInsecureUrlError(url);
+      if (validationError) {
+        setError(validationError);
+        setAuthSettings(null);
+        return;
+      }
+      
+      // Clear HTTP warning if URL is now secure/valid
+      setError('');
+    } else {
+      setAuthSettings(null);
+      return;
+    }
+
+    let isMounted = true;
+    const fetchSettings = async () => {
+      try {
+        const settings = await fetchAuthSettings(url, proxyHeadersToRecord(cleanedHeaders()));
+        if (isMounted) {
+          setAuthSettings(settings);
+        }
+      } catch {
+        if (isMounted) {
+          setAuthSettings({
+            trusted_origin: null,
+            email: { enabled: true },
+            oidc: { enabled: false, providers: [] },
+            signup_disabled: false,
+          });
+        }
+      }
+    };
+
+    const timeout = setTimeout(fetchSettings, 500);
+    return () => {
+      isMounted = false;
+      clearTimeout(timeout);
+    };
+    // Re-fetch only when the URL or visibility changes; `cleanedHeaders()` is read
+    // at fetch time so proxy-header keystrokes don't re-trigger the debounced fetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverUrl, visible]);
+
+  // On small screens the error banner can push the primary action below the
+  // fold; scroll the bottom of the card back into view once the banner has
+  // laid out.
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => {
+      scrollViewRef.current?.scrollToEnd({ animated: true });
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [error]);
+
   const toggleAdvanced = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     const next = !advancedExpanded;
@@ -151,8 +233,6 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
   const handleChangeHeader = (index: number, field: 'name' | 'value', text: string) => {
     setProxyHeaders(proxyHeaders.map((h, i) => (i === index ? { ...h, [field]: text } : h)));
   };
-
-  const normalizeUrl = (url: string) => url.trim().replace(/\/+$/, '');
 
   /** Strip empty rows so we only persist real headers. */
   const cleanedHeaders = () => proxyHeaders.filter(h => h.name.trim() && h.value.trim());
@@ -173,11 +253,13 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
 
   const handleSignIn = async () => {
     const url = normalizeUrl(serverUrl);
-    if (!url) { setError('Enter a valid SparkyFitness URL'); return; }
+    if (!url) { setError('Enter a valid Frontend URL'); return; }
     if (!email.trim()) { setError('Please enter your email.'); return; }
     if (!password) { setError('Please enter your password.'); return; }
-    if (!__DEV__ && url.toLowerCase().startsWith('http://')) {
-      setError('HTTPS is required for server connections.');
+    
+    const validationError = getInsecureUrlError(url);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -216,6 +298,84 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
         setError(err.message);
       } else {
         setError('Could not connect to server. Check the URL and try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOidcLogin = async (providerId: string) => {
+    const url = normalizeUrl(serverUrl);
+    if (!url) {
+      setError('Please enter your Frontend URL first.');
+      return;
+    }
+
+    const validationError = getInsecureUrlError(url);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    setPendingProxyHeaders(proxyHeadersToRecord(cleanedHeaders()));
+
+    try {
+      const result = await loginWithOidc(url, providerId);
+
+      if (result.type === 'success') {
+        await saveConfig(url, {
+          authType: 'session',
+          sessionToken: result.sessionToken,
+        });
+        clearPendingProxyHeaders();
+        onSuccess();
+      }
+    } catch (err) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError(String(err));
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePasskeyLogin = async () => {
+    const url = normalizeUrl(serverUrl);
+    if (!url) {
+      setError('Please enter your Frontend URL first.');
+      return;
+    }
+    
+    const validationError = getInsecureUrlError(url);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    setPendingProxyHeaders(proxyHeadersToRecord(cleanedHeaders()));
+
+    try {
+      const result = await loginWithPasskey(url);
+
+      if (result.type === 'success') {
+        await saveConfig(url, {
+          authType: 'session',
+          sessionToken: result.sessionToken,
+        });
+        clearPendingProxyHeaders();
+        onSuccess();
+      }
+    } catch (err) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError(String(err));
       }
     } finally {
       setLoading(false);
@@ -308,10 +468,12 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
 
   const handleConnectApiKey = async () => {
     const url = normalizeUrl(serverUrl);
-    if (!url) { setError('Enter a valid SparkyFitness URL'); return; }
+    if (!url) { setError('Enter a valid Frontend URL'); return; }
     if (!apiKey.trim()) { setError('Please enter an API key.'); return; }
-    if (!__DEV__ && url.toLowerCase().startsWith('http://')) {
-      setError('HTTPS is required for server connections.');
+    
+    const validationError = getInsecureUrlError(url);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -319,14 +481,14 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
     setError('');
 
     try {
-      const response = await fetch(`${url}/api/identity/user`, {
+      const response = await fetchWithTimeout(`${url}/api/identity/user`, {
         method: 'GET',
         cache: 'no-store', // skip native HTTP cache to avoid 304 empty bodies (#1353)
         headers: {
           ...proxyHeadersToRecord(cleanedHeaders()),
           Authorization: `Bearer ${apiKey.trim()}`,
         },
-      });
+      }, CONNECTION_CHECK_TIMEOUT_MS);
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
@@ -357,9 +519,11 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
 
   const handleSaveWithoutAuth = async () => {
     const url = normalizeUrl(serverUrl);
-    if (!url) { setError('Enter a valid SparkyFitness URL'); return; }
-    if (!__DEV__ && url.toLowerCase().startsWith('http://')) {
-      setError('HTTPS is required for server connections.');
+    if (!url) { setError('Enter a valid Frontend URL'); return; }
+    
+    const validationError = getInsecureUrlError(url);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -433,73 +597,83 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
 
   const isEditing = editingConfig !== null;
 
-  return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="fade"
-      onRequestClose={handleDismiss}
-    >
-      <KeyboardAvoidingView
-        className="flex-1"
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      >
-        <ScrollView
-          contentContainerClassName="justify-center items-center p-6"
-          contentContainerStyle={{ flexGrow: 1 }}
-          keyboardShouldPersistTaps="handled"
-          style={{ backgroundColor: 'rgba(0, 0, 0, 0.5)' }}
-          bounces={false}
-        >
-          <View className="w-full max-w-90 rounded-2xl p-6 bg-surface shadow-sm">
-            {/* Header */}
-            <View className="items-center mb-5">
-              <Text className="text-[22px] font-bold text-center text-text-primary">
-                {step === 'mfa'
-                  ? 'Two-Factor Authentication'
-                  : isEditing
-                    ? 'Edit Server'
-                    : 'Add Server'}
-              </Text>
+  const getSegments = () => {
+    const segments = [];
+    const hasEmail = authSettings?.email.enabled ?? false;
+    const hasOidc = authSettings?.oidc.enabled && authSettings.oidc.providers.length > 0;
+    
+    if (hasEmail) {
+      segments.push({ key: 'signIn' as const, label: 'Sign In' });
+    } else if (hasOidc) {
+      segments.push({ key: 'signIn' as const, label: 'SSO' });
+    } else {
+      segments.push({ key: 'signIn' as const, label: 'Passkey' });
+    }
+    
+    segments.push({ key: 'apiKey' as const, label: 'API Key' });
+    return segments;
+  };
+
+  const renderForm = () => {
+    const hasEmail = authSettings?.email.enabled ?? false;
+    const hasOidc = authSettings?.oidc.enabled && authSettings.oidc.providers.length > 0;
+
+    return (
+      <>
+        {/* Frontend URL — always visible */}
+        <View className="mb-3">
+          <Text className="text-sm mb-2 text-text-secondary">Frontend URL</Text>
+          <View className="flex-row items-center">
+            {/* While unfocused, the input's own text is transparent and
+                UnfocusedInputEcho renders the value on top; see FormInput.tsx. */}
+            <FormInput
+              ref={serverUrlInputRef}
+              className="flex-1 rounded-lg"
+              placeholder="https://your-server-url.com"
+              value={serverUrl}
+              onChangeText={setServerUrl}
+              onFocus={() => setIsServerUrlFocused(true)}
+              onBlur={() => setIsServerUrlFocused(false)}
+              autoCapitalize="none"
+              keyboardType="url"
+              style={[
+                { paddingRight: 40 },
+                !isServerUrlFocused && !!serverUrl && { color: 'transparent' },
+              ]}
+            />
+            <UnfocusedInputEcho
+              focused={isServerUrlFocused}
+              value={serverUrl}
+              // FormInput's text padding plus its 1px border.
+              style={{ paddingLeft: 13, paddingRight: 41 }}
+            />
+            <Button
+              variant="ghost"
+              onPress={() => pasteFromClipboard(serverUrlInputRef, setServerUrl)}
+              accessibilityLabel="Paste URL from clipboard"
+              className="absolute right-1 p-2 py-2 px-2 rounded-lg"
+            >
+              <Icon name="paste" size={20} color={textSecondary} />
+            </Button>
+          </View>
+        </View>
+
+        {/* Auth options — only shown after settings are fetched */}
+        {authSettings && (
+          <>
+            {/* Auth Mode */}
+            <View className="mb-3">
+              <SegmentedControl
+                segments={getSegments()}
+                activeKey={authTab}
+                onSelect={setAuthTab}
+              />
             </View>
 
-            {step === 'form' ? (
+            {/* Sign In fields */}
+            {authTab === 'signIn' && (
               <>
-                {/* Server URL */}
-                <View className="mb-3">
-                  <Text className="text-sm mb-2 text-text-secondary">Server URL</Text>
-                  <View className="flex-row items-center">
-                    <FormInput
-                      className="flex-1 rounded-lg"
-                      placeholder="https://your-server-url.com"
-                      value={serverUrl}
-                      onChangeText={setServerUrl}
-                      autoCapitalize="none"
-                      keyboardType="url"
-                      style={{ paddingRight: 40 }}
-                    />
-                    <Button
-                      variant="ghost"
-                      onPress={async () => setServerUrl(await Clipboard.getString())}
-                      accessibilityLabel="Paste URL from clipboard"
-                      className="absolute right-1 p-2 py-2 px-2 rounded-lg"
-                    >
-                      <Icon name="paste" size={20} color={textSecondary} />
-                    </Button>
-                  </View>
-                </View>
-
-                {/* Auth Mode */}
-                <View className="mb-3">
-                  <SegmentedControl
-                    segments={AUTH_SEGMENTS}
-                    activeKey={authTab}
-                    onSelect={setAuthTab}
-                  />
-                </View>
-
-                {/* Sign In fields */}
-                {authTab === 'signIn' && (
+                {hasEmail && (
                   <>
                     <View className="mb-3">
                       <Text className="text-sm mb-2 text-text-secondary">Email</Text>
@@ -537,40 +711,144 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                   </>
                 )}
 
-                {/* API Key field */}
-                {authTab === 'apiKey' && (
-                  <View className="mb-4">
-                    <Text className="text-sm mb-2 text-text-secondary">API Key</Text>
-                    <View className="flex-row items-center">
-                      <FormInput
-                        className="flex-1 rounded-lg"
-                        placeholder="Uds3d8i..."
-                        value={apiKey}
-                        onChangeText={setApiKey}
-                        secureTextEntry={!showApiKey}
-                        style={{ paddingRight: 75 }}
-                      />
-                      <Button
-                        variant="ghost"
-                        onPress={async () => setApiKey(await Clipboard.getString())}
-                        accessibilityLabel="Paste API key from clipboard"
-                        className="absolute right-9 p-2 py-2 px-2 rounded-lg"
-                      >
-                        <Icon name="paste" size={20} color={textSecondary} />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        onPress={() => setShowApiKey(!showApiKey)}
-                        accessibilityLabel={showApiKey ? "Hide API key" : "Show API key"}
-                        className="absolute right-1 p-2 py-2 px-2 rounded-lg"
-                      >
-                        <Icon name={showApiKey ? 'eye-off' : 'eye'} size={20} color={textSecondary} />
-                      </Button>
-                    </View>
+                {hasOidc && hasEmail && (
+                  <View className="flex-row items-center mb-4">
+                    <View className="flex-1 h-px bg-border-subtle" />
+                    <Text className="mx-3 text-xs text-text-muted uppercase">Or sign in with</Text>
+                    <View className="flex-1 h-px bg-border-subtle" />
                   </View>
                 )}
 
-                {/* Advanced — Proxy Headers */}
+                <View className="gap-4 mb-4">
+                  {hasOidc &&
+                    authSettings.oidc.providers.map((provider: OidcProvider) => (
+                      <Button
+                        key={provider.id}
+                        variant="outline"
+                        onPress={() => handleOidcLogin(provider.id)}
+                        disabled={loading}
+                        className="w-full flex-row items-center justify-center p-2.5 rounded-lg border border-border-subtle bg-raised"
+                      >
+                        <View className="flex-row items-center">
+                          <OidcProviderLogo logoUrl={provider.logo_url} serverUrl={serverUrl} />
+                          <Text className="text-base font-semibold text-text-primary">
+                            {provider.display_name || `Sign in with ${provider.id}`}
+                          </Text>
+                        </View>
+                      </Button>
+                    ))}
+                  <Button
+                    variant="outline"
+                    onPress={handlePasskeyLogin}
+                    disabled={loading}
+                    className="w-full flex-row items-center justify-center p-2.5 rounded-lg border border-border-subtle bg-raised"
+                  >
+                    <View className="flex-row items-center">
+                      <View className="mr-2">
+                        <Icon name="fingerprint" size={20} color={accentPrimary} />
+                      </View>
+                      <Text className="text-base font-semibold text-text-primary">
+                        Sign in with Passkey
+                      </Text>
+                    </View>
+                  </Button>
+                </View>
+
+                {!hasEmail && !hasOidc && (
+                  <View className="py-6 px-4 items-center bg-raised rounded-lg border border-border-subtle mb-4">
+                    <Text className="text-center text-sm text-text-secondary">
+                      No standard sign-in methods are currently enabled on this server. Please use an API Key or contact an administrator.
+                    </Text>
+                  </View>
+                )}
+              </>
+            )}
+
+            {/* API Key field */}
+            {authTab === 'apiKey' && (
+              <View className="mb-4">
+                <Text className="text-sm mb-2 text-text-secondary">API Key</Text>
+                <View className="flex-row items-center">
+                  <FormInput
+                    ref={apiKeyInputRef}
+                    className="flex-1 rounded-lg"
+                    placeholder="Uds3d8i..."
+                    value={apiKey}
+                    onChangeText={setApiKey}
+                    secureTextEntry={!showApiKey}
+                    style={{ paddingRight: 75 }}
+                  />
+                  <Button
+                    variant="ghost"
+                    onPress={() => pasteFromClipboard(apiKeyInputRef, setApiKey)}
+                    accessibilityLabel="Paste API key from clipboard"
+                    className="absolute right-9 p-2 py-2 px-2 rounded-lg"
+                  >
+                    <Icon name="paste" size={20} color={textSecondary} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onPress={() => setShowApiKey(!showApiKey)}
+                    accessibilityLabel={showApiKey ? "Hide API key" : "Show API key"}
+                    className="absolute right-1 p-2 py-2 px-2 rounded-lg"
+                  >
+                    <Icon name={showApiKey ? 'eye-off' : 'eye'} size={20} color={textSecondary} />
+                  </Button>
+                </View>
+              </View>
+            )}
+          </>
+        )}
+      </>
+    );
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={handleDismiss}
+    >
+      <KeyboardAvoidingView
+        className="flex-1"
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <ScrollView
+          ref={scrollViewRef}
+          className="bg-black/50"
+          contentContainerClassName="justify-center items-center p-6"
+          contentContainerStyle={{ flexGrow: 1 }}
+          keyboardShouldPersistTaps="handled"
+          bounces={false}
+        >
+          <View className="w-full max-w-90 rounded-2xl p-6 bg-surface shadow-sm">
+            {/* Header */}
+            <View className="items-center mb-5">
+              <Text className="text-[22px] font-bold text-center text-text-primary">
+                {step === 'mfa'
+                  ? 'Two-Factor Authentication'
+                  : isEditing
+                    ? 'Edit Server'
+                    : 'Add Server'}
+              </Text>
+              <Button
+                variant="ghost"
+                onPress={handleDismiss}
+                accessibilityLabel="Close"
+                className="absolute p-2 py-2 px-2 rounded-lg"
+                // Sits in the card's corner padding, clear of long titles.
+                style={{ right: -12, top: -12 }}
+              >
+                <Icon name="close" size={22} color={textSecondary} />
+              </Button>
+            </View>
+
+            {step === 'form' ? (
+              <>
+                {renderForm()}
+
+                {/* Advanced — Proxy Headers (always visible) */}
                 <TouchableOpacity
                   className="flex-row items-center gap-1 self-start"
                   onPress={toggleAdvanced}
@@ -652,33 +930,30 @@ const ServerConfigModal: React.FC<ServerConfigModalProps> = ({
                   </View>
                 )}
 
-                <ErrorBanner message={error} />
 
                 {/* Actions */}
-                <View className="gap-2 mt-4">
-                  <PrimaryButton
-                    label="Connect"
-                    onPress={handleConnect}
-                    loading={loading}
-                  />
-                  {isEditing && (
-                    <Button
-                      variant="ghost"
-                      onPress={() => withReservedHeaderCheck(handleSaveWithoutAuth)}
-                      disabled={loading}
-                      className="py-2.5"
-                    >
-                      Save
-                    </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    onPress={handleDismiss}
-                    className="py-2.5"
-                    textClassName="text-text-secondary"
-                  >
-                    Cancel
-                  </Button>
+                <View className="mt-4">
+                  {/* ErrorBanner's own mb-4 is the banner→button gap. */}
+                  <ErrorBanner message={error} />
+                  <View className="gap-2">
+                    {authSettings && (authTab === 'apiKey' || authSettings.email.enabled) && (
+                      <PrimaryButton
+                        label="Connect"
+                        onPress={handleConnect}
+                        loading={loading}
+                      />
+                    )}
+                    {isEditing && (
+                      <Button
+                        variant="ghost"
+                        onPress={() => withReservedHeaderCheck(handleSaveWithoutAuth)}
+                        disabled={loading}
+                        className="py-2.5"
+                      >
+                        Save
+                      </Button>
+                    )}
+                  </View>
                 </View>
               </>
             ) : (

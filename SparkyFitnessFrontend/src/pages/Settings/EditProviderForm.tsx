@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Clipboard } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { ExternalDataProvider } from './ExternalProviderSettings';
 import { toast } from '@/hooks/use-toast';
 import { useExternalProviderTypesQuery } from '@/hooks/Settings/useExternalProviderSettings';
@@ -35,6 +36,7 @@ export const EditProviderForm = ({
   loading,
   isAdminMode = false,
 }: EditProviderFormProps) => {
+  const { t } = useTranslation();
   const { data: providerTypes } = useExternalProviderTypesQuery();
   return (
     <form
@@ -96,6 +98,28 @@ export const EditProviderForm = ({
       </div>
       {editData.provider_type === 'openfoodfacts' && (
         <>
+          <div>
+            <Label>
+              {t(
+                'settings.foodExerciseDataProviders.openFoodFacts.baseUrlLabel'
+              )}
+            </Label>
+            <Input
+              type="text"
+              value={editData.base_url || ''}
+              onChange={(e) =>
+                setEditData((prev) => ({
+                  ...prev,
+                  base_url: e.target.value,
+                }))
+              }
+              placeholder="https://world.openfoodfacts.org"
+              autoComplete="off"
+            />
+          </div>
+          <p className="text-sm text-muted-foreground col-span-2">
+            {t('settings.foodExerciseDataProviders.openFoodFacts.baseUrlHelp')}
+          </p>
           <div>
             <Label>Open Food Facts Username (Optional)</Label>
             <Input
@@ -600,6 +624,75 @@ export const EditProviderForm = ({
           </p>
         </>
       )}
+      {editData.provider_type === 'oura' && (
+        <>
+          <div>
+            <Label>Client ID</Label>
+            <Input
+              type="text"
+              value={editData.app_id || ''}
+              onChange={(e) =>
+                setEditData((prev) => ({
+                  ...prev,
+                  app_id: e.target.value,
+                }))
+              }
+              placeholder="Enter Oura Client ID"
+              autoComplete="off"
+            />
+          </div>
+          <div>
+            <Label>Client Secret</Label>
+            <Input
+              type="password"
+              value={editData.app_key || ''}
+              onChange={(e) =>
+                setEditData((prev) => ({
+                  ...prev,
+                  app_key: e.target.value,
+                }))
+              }
+              placeholder="Enter Oura Client Secret"
+              autoComplete="off"
+            />
+          </div>
+          <p className="text-sm text-muted-foreground col-span-2">
+            Oura integration uses OAuth2. You will be redirected to Oura to
+            authorize access after adding the provider.
+            <br />
+            In your{' '}
+            <a
+              href="https://developer.ouraring.com/applications"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-500 underline"
+            >
+              Oura Developer Portal
+            </a>
+            , you must set your callback URL to:
+            <strong className="flex items-center">
+              {`${window.location.origin}/oura/callback`}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="ml-2 h-5 w-5"
+                onClick={(e) => {
+                  e.preventDefault();
+                  navigator.clipboard.writeText(
+                    `${window.location.origin}/oura/callback`
+                  );
+                  toast({
+                    title: 'Copied!',
+                    description: 'Callback URL copied to clipboard.',
+                  });
+                }}
+              >
+                <Clipboard className="h-4 w-4" />
+              </Button>
+            </strong>
+          </p>
+        </>
+      )}
       {editData.provider_type === 'strava' && (
         <>
           <div>
@@ -773,6 +866,7 @@ export const EditProviderForm = ({
       {(editData.provider_type === 'withings' ||
         editData.provider_type === 'garmin' ||
         editData.provider_type === 'fitbit' ||
+        editData.provider_type === 'oura' ||
         editData.provider_type === 'googlehealth' ||
         editData.provider_type === 'strava' ||
         editData.provider_type === 'polar' ||

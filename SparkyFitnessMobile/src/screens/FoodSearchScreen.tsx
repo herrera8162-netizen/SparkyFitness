@@ -1,4 +1,10 @@
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   View,
   Text,
@@ -15,6 +21,7 @@ import Button from '../components/ui/Button';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCSSVariable } from 'uniwind';
 import Icon from '../components/Icon';
+import VerifiedBadge from '../components/VerifiedBadge';
 import MealLibraryRow from '../components/MealLibraryRow';
 import BottomSheetPicker from '../components/BottomSheetPicker';
 import AnchoredMenu, { AnchorRect } from '../components/AnchoredMenu';
@@ -24,10 +31,14 @@ import {
   useFoods,
   useFoodSearch,
   useMealSearch,
+  useRecentMeals,
+  useTopMeals,
   useExternalProviders,
   useExternalFoodSearch,
   useAllProvidersSearch,
   usePreferences,
+  useDebounce,
+  useFavorites,
 } from '../hooks';
 import { ExternalProvider } from '../types/externalProviders';
 import Toast from 'react-native-toast-message';
@@ -50,16 +61,19 @@ import {
 import { formatServingDescription, formatServingUnit } from '../utils/foodDetails';
 import { useProviderColor } from '../utils/providerColor';
 import { interleaveTopMatches } from '../utils/topMatches';
+import { mergeRecent, mergeFrequent, landingKey } from '../utils/landingLists';
+import type { LandingEntry } from '../utils/landingLists';
 import { useHeaderActionColors } from '../hooks/useHeaderActionColors';
 import { createNativeHeaderIconButtonItem } from '../utils/nativeHeaderItems';
 import { useNativeIOSHeadersActive } from '../services/nativeTabBarPreference';
 
 type FoodSearchScreenProps = RootStackScreenProps<'FoodSearch'>;
 
-// Landing (empty query) sections: recent / top foods.
+// Landing (empty query) sections: recent / top, each a merged timeline of the
+// user's foods and saved meals (a meal is tagged with a "Meal" badge).
 type LandingSection = {
   title: string;
-  data: (FoodItem | TopFoodItem)[];
+  data: LandingEntry[];
 };
 
 // A row in the unified search results. The local foods + meals and the online
@@ -77,8 +91,7 @@ type ResultRow =
   | { type: 'show-all'; provider: ExternalProvider; count: number }
   | { type: 'show-all-local'; section: 'foods' | 'meals'; count: number }
   | { type: 'provider-skeleton' }
-  | { type: 'empty-local' }
-  | { type: 'local-loading' };
+  | { type: 'local-status'; pending: boolean };
 
 type ResultSection = {
   key: string;
@@ -90,7 +103,6 @@ type ResultSection = {
     | 'online-top'
     | 'online-provider'
     | 'label'
-    | 'empty-local'
     | 'status';
   data: ResultRow[];
   provider?: ExternalProvider;
@@ -107,19 +119,25 @@ const ALL_PROVIDERS_VALUE = '__all__';
 // online results are also on screen.
 const LOCAL_RESULT_CAP = 6;
 
+// Fallback cap for each landing section (Recently Logged / Top) when the user's
+// item_display_limit preference is unset. Matches the web food-search landing.
+const LANDING_ITEM_LIMIT = 10;
+
 const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }) => {
   const date = route.params?.date;
   const pickerMode = route.params?.pickerMode ?? 'log-entry';
   const isMealBuilderMode = pickerMode === 'meal-builder';
   const insets = useSafeAreaInsets();
   const { width: windowWidth } = useWindowDimensions();
-  const [accentColor, textMuted, textSecondary] = useCSSVariable([
+  const [accentColor, textMuted, textSecondary, favoriteGold] = useCSSVariable([
     '--color-accent-primary',
     '--color-text-muted',
     '--color-text-secondary',
-  ]) as [string, string, string];
+    // Gold row-star marker; kept distinct from accent so it reads as an
+    // indicator, not a tap target. See MealLibraryRow for the rationale.
+    '--color-cat-amber',
+  ]) as [string, string, string, string];
   const { defaultColor: headerActionColor, saveColor: headerSaveColor } = useHeaderActionColors();
-  const iconSuccess = String(useCSSVariable('--color-icon-success'));
   const usesNativeHeader = useNativeIOSHeadersActive();
 
   const { isConnected } = useServerConnection();
@@ -127,6 +145,53 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
   const { recentFoods, topFoods, isLoading, isError, refetch } = useFoods({
     enabled: isConnected,
   });
+  const { favoriteFoods, favoriteMeals } = useFavorites({
+    enabled: isConnected,
+  });
+
+  // Per-section cap for the landing lists (foods + meals merged). Mirrors web,
+  // which caps each landing section at the user's item_display_limit.
+  const landingLimit = preferences?.item_display_limit ?? LANDING_ITEM_LIMIT;
+
+  // Recent + frequently-logged meals for the landing merge. Excluded while
+  // building a meal (a meal cannot contain a meal), mirroring the typed-search
+  // behaviour. Requested at the section cap so the merge with foods is not
+  // starved.
+  const landingMealsEnabled = isConnected && !isMealBuilderMode;
+  const {
+    recentMeals,
+    isLoading: isRecentMealsLoading,
+    refetch: refetchRecentMeals,
+  } = useRecentMeals({
+    enabled: landingMealsEnabled,
+    limit: landingLimit,
+  });
+  const {
+    topMeals,
+    isLoading: isTopMealsLoading,
+    refetch: refetchTopMeals,
+  } = useTopMeals({
+    enabled: landingMealsEnabled,
+    limit: landingLimit,
+  });
+
+  // The landing spinner waits on foods *and* meals. Rendering foods first and
+  // letting meals pop in afterwards shifts rows under the user's thumb mid-tap.
+  const isLandingLoading =
+    isLoading || (landingMealsEnabled && (isRecentMealsLoading || isTopMealsLoading));
+
+  // The landing error state is driven by the foods query, but a failure is
+  // usually shared: an outage takes down foods and meals together. Retrying
+  // foods alone would clear the error screen and leave the meals half of the
+  // list silently empty, since nothing else refetches it while the screen
+  // stays mounted.
+  const retryLanding = useCallback(() => {
+    refetch();
+    if (landingMealsEnabled) {
+      refetchRecentMeals();
+      refetchTopMeals();
+    }
+  }, [refetch, refetchRecentMeals, refetchTopMeals, landingMealsEnabled]);
 
   const [searchText, setSearchText] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
@@ -436,6 +501,12 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
   // Local results are still settling while the debounced query has not caught up
   // to the typed term, or while a fetch is in flight.
   const localPending = isSearching || isMealSearching || !isSearchActive;
+  // The foods and meals queries settle independently, so localPending can blip
+  // false->true->false within a keystroke or two. Debounce just the
+  // false-going transition so the status row's spinner/text swap doesn't
+  // flicker mid-typing; becoming pending is still immediate via the ||.
+  const debouncedNotPending = useDebounce(!localPending, 150);
+  const stableLocalPending = localPending || !debouncedNotPending;
   const hasLocalResults =
     searchResults.length > 0 || (!isMealBuilderMode && mealResults.length > 0);
   // Only show online results from the currently selected provider. On a swap,
@@ -531,12 +602,111 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
     }
   }, [providerPopoverVisible, onlineHeaderVisible]);
 
-  const landingSections = useMemo<LandingSection[]>(() => {
+  // Favorites: the first landing section, starred foods and meals intermixed,
+  // most recently starred first. Modelled as LandingEntry so every landing
+  // section shares one row renderer and one key space.
+  //
+  // Meals are withheld in meal-builder mode, matching the rest of the screen:
+  // recent/top meals and meal search are both disabled there. Not because a
+  // meal cannot contain a meal — the model supports that (item_type/
+  // child_meal_id) — but because this picker cannot yet EMIT one, and
+  // handleMealBuilderAdd rejects a 'meal' source outright. Without this gate
+  // Favorites is the only surface that offers a meal and then refuses it two
+  // screens later. Drop the gate once the picker learns to emit child_meal_id.
+  const favoriteEntries = useMemo<LandingEntry[]>(() => {
+    const selectableMeals = isMealBuilderMode ? [] : favoriteMeals;
+    const tagged = [
+      ...selectableMeals.map((meal) => ({
+        entry: {
+          kind: 'meal' as const,
+          key: landingKey('meal', meal.id),
+          meal,
+        },
+        // Pre-parsed to a timestamp so the comparator below is a plain numeric
+        // subtraction rather than allocating a Date on every comparison.
+        favoritedAt: meal.favorited_at ? new Date(meal.favorited_at).getTime() : 0,
+      })),
+      ...favoriteFoods.map((food) => ({
+        entry: {
+          kind: 'food' as const,
+          key: landingKey('food', food.id),
+          food,
+        },
+        favoritedAt: food.favorited_at ? new Date(food.favorited_at).getTime() : 0,
+      })),
+    ];
+    // No dedupe needed: a food and a meal never share a key (kind-prefixed),
+    // and the DB's unique constraints stop the same row arriving twice.
+    return tagged
+      .sort((a, b) => b.favoritedAt - a.favoritedAt)
+      .map((t) => t.entry);
+  }, [favoriteFoods, favoriteMeals, isMealBuilderMode]);
+
+  // One notion of "starred", shared by the landing (which excludes favorites
+  // from the sections below Favorites) and the search results (which float them
+  // to the top of their own section).
+  const favoriteKeys = useMemo(
+    () => new Set(favoriteEntries.map((entry) => entry.key)),
+    [favoriteEntries],
+  );
+
+  // Once a query is typed, favorites float to the top of their own section
+  // rather than being pulled into a group of their own: a favorited meal stays
+  // under Your Meals, just first. The rest keep the backend's relevance order,
+  // and filter preserves it, so favorites stay relevance-ordered among
+  // themselves too. This runs before the LOCAL_RESULT_CAP slice below, or a
+  // favorite ranked outside the cap could never float up.
+  const searchFoodsFavFirst = useMemo(() => {
+    const isFavorite = (food: FoodItem) =>
+      favoriteKeys.has(landingKey('food', food.id));
     return [
-      { title: 'Recently Logged', data: recentFoods.slice(0, 6) },
-      { title: 'Top Foods', data: topFoods },
+      ...searchResults.filter(isFavorite),
+      ...searchResults.filter((food) => !isFavorite(food)),
+    ];
+  }, [searchResults, favoriteKeys]);
+  const searchMealsFavFirst = useMemo(() => {
+    const isFavorite = (meal: Meal) =>
+      favoriteKeys.has(landingKey('meal', meal.id));
+    return [
+      ...mealResults.filter(isFavorite),
+      ...mealResults.filter((meal) => !isFavorite(meal)),
+    ];
+  }, [mealResults, favoriteKeys]);
+
+  const landingSections = useMemo<LandingSection[]>(() => {
+    // Each section excludes what the sections above it already show, so the
+    // landing never repeats a row: Recent drops favorites, Top drops favorites
+    // and Recent. The exclusions are passed into the merges rather than applied
+    // to their results, because both merges cap at landingLimit last — filtering
+    // afterwards would shrink a section below its cap.
+    // Recently Logged: foods + meals merged into one recency timeline.
+    const recentEntries = mergeRecent(
+      recentMeals,
+      recentFoods,
+      landingLimit,
+      favoriteKeys,
+    );
+    // Top: foods + meals by usage.
+    const frequentEntries = mergeFrequent(
+      topMeals,
+      topFoods,
+      landingLimit,
+      new Set([...favoriteKeys, ...recentEntries.map((entry) => entry.key)]),
+    );
+    return [
+      { title: 'Favorites', data: favoriteEntries },
+      { title: 'Recently Logged', data: recentEntries },
+      { title: 'Top', data: frequentEntries },
     ].filter((section) => section.data.length > 0);
-  }, [recentFoods, topFoods]);
+  }, [
+    favoriteEntries,
+    favoriteKeys,
+    recentFoods,
+    topFoods,
+    recentMeals,
+    topMeals,
+    landingLimit,
+  ]);
 
   const resultSections = useMemo<ResultSection[]>(() => {
     const sections: ResultSection[] = [];
@@ -548,49 +718,42 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
       : showOnlineSection;
 
     if (hasLocalResults) {
-      if (searchResults.length > 0) {
+      if (searchFoodsFavFirst.length > 0) {
         const capFoods = willShowOnline && !showAllFoods;
         const shown = capFoods
-          ? searchResults.slice(0, LOCAL_RESULT_CAP)
-          : searchResults;
+          ? searchFoodsFavFirst.slice(0, LOCAL_RESULT_CAP)
+          : searchFoodsFavFirst;
         const data: ResultRow[] = shown.map((food) => ({ type: 'food', food }));
-        if (capFoods && searchResults.length > LOCAL_RESULT_CAP) {
+        if (capFoods && searchFoodsFavFirst.length > LOCAL_RESULT_CAP) {
           data.push({
             type: 'show-all-local',
             section: 'foods',
-            count: searchResults.length,
+            count: searchFoodsFavFirst.length,
           });
         }
         sections.push({ key: 'foods', kind: 'food', title: 'Your Foods', data });
       }
-      if (!isMealBuilderMode && mealResults.length > 0) {
+      if (!isMealBuilderMode && searchMealsFavFirst.length > 0) {
         const capMeals = willShowOnline && !showAllMeals;
         const shown = capMeals
-          ? mealResults.slice(0, LOCAL_RESULT_CAP)
-          : mealResults;
+          ? searchMealsFavFirst.slice(0, LOCAL_RESULT_CAP)
+          : searchMealsFavFirst;
         const data: ResultRow[] = shown.map((meal) => ({ type: 'meal', meal }));
-        if (capMeals && mealResults.length > LOCAL_RESULT_CAP) {
+        if (capMeals && searchMealsFavFirst.length > LOCAL_RESULT_CAP) {
           data.push({
             type: 'show-all-local',
             section: 'meals',
-            count: mealResults.length,
+            count: searchMealsFavFirst.length,
           });
         }
         sections.push({ key: 'meals', kind: 'meal', title: 'Your Meals', data });
       }
-    } else if (localPending) {
+    } else {
       sections.push({
         key: 'local-status',
         kind: 'status',
         title: null,
-        data: [{ type: 'local-loading' }],
-      });
-    } else {
-      sections.push({
-        key: 'empty-local',
-        kind: 'empty-local',
-        title: null,
-        data: [{ type: 'empty-local' }],
+        data: [{ type: 'local-status', pending: stableLocalPending }],
       });
     }
 
@@ -663,9 +826,9 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
     return sections;
   }, [
     hasLocalResults,
-    localPending,
-    searchResults,
-    mealResults,
+    stableLocalPending,
+    searchFoodsFavFirst,
+    searchMealsFavFirst,
     isMealBuilderMode,
     showOnlineSection,
     selectedProviderName,
@@ -689,23 +852,55 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
     >
       <View className="flex-row justify-between items-center">
         <View className="flex-1 mr-3">
-          <Text className="text-text-primary text-base font-medium">{item.name}</Text>
+          <View className="flex-row items-start gap-1">
+            <Text className="text-text-primary text-base font-medium flex-shrink">
+              {item.name}
+            </Text>
+            {item.provider_verified ? <VerifiedBadge size="sm" style={{ marginTop: 2 }} /> : null}
+          </View>
           {item.brand ? (
             <Text className="text-text-secondary text-sm mt-0.5">{item.brand}</Text>
           ) : null}
         </View>
         <View className="items-end">
-          <Text className="text-text-primary text-base font-semibold">
-            {item.default_variant.calories} cal
-          </Text>
+          <View className="flex-row items-center gap-1">
+            {favoriteKeys.has(landingKey('food', item.id)) && (
+              <Icon
+                name="star"
+                size={13}
+                color={favoriteGold}
+                style={{ marginTop: 1 }}
+                accessibilityLabel="Favorite"
+              />
+            )}
+            <Text className="text-text-primary text-base font-semibold">
+              {item.default_variant.calories} cal
+            </Text>
+          </View>
           <Text className="text-text-secondary text-xs">
-            {item.default_variant.serving_size}{' '}
-            {formatServingUnit(item.default_variant.serving_unit)}
+            {`${item.default_variant.serving_size} ${formatServingUnit(item.default_variant.serving_unit)}`}
           </Text>
         </View>
       </View>
     </TouchableOpacity>
   );
+
+  // A landing row is either a food or a saved meal (tagged with a "Meal" badge
+  // so it reads as distinct from a food in the merged list).
+  const renderLandingEntry = (entry: LandingEntry) => {
+    if (entry.kind === 'meal') {
+      return (
+        <MealLibraryRow
+          meal={entry.meal}
+          showBadge
+          showDivider
+          isFavorite={favoriteKeys.has(landingKey('meal', entry.meal.id))}
+          onPress={() => showFoodInfo(mealToFoodInfo(entry.meal))}
+        />
+      );
+    }
+    return renderFoodRow(entry.food);
+  };
 
   const renderOnlineRow = (
     item: ExternalFoodItem,
@@ -722,11 +917,11 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
     >
       <View className="flex-row justify-between items-center">
         <View className="flex-1 mr-3">
-          <View className="flex-row items-center gap-1">
-            <Text className="text-text-primary text-base font-medium">{item.name}</Text>
-            {item.provider_verified ? (
-              <Icon name="checkmark" size={14} color={iconSuccess} />
-            ) : null}
+          <View className="flex-row items-start gap-1">
+            <Text className="text-text-primary text-base font-medium flex-shrink">
+              {item.name}
+            </Text>
+            {item.provider_verified ? <VerifiedBadge size="sm" style={{ marginTop: 2 }} /> : null}
           </View>
           {badge || item.brand ? (
             <View className="flex-row items-center gap-1.5 mt-0.5">
@@ -838,6 +1033,7 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
           <MealLibraryRow
             meal={item.meal}
             showDivider
+            isFavorite={favoriteKeys.has(landingKey('meal', item.meal.id))}
             onPress={() => showFoodInfo(mealToFoodInfo(item.meal))}
           />
         );
@@ -851,20 +1047,33 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
         return renderLocalShowAllRow(item.section, item.count);
       case 'provider-skeleton':
         return renderProviderSkeleton();
-      case 'local-loading':
+      case 'local-status':
         return (
-          <View className="py-8 items-center">
-            <ActivityIndicator size="large" color={accentColor} />
-          </View>
-        );
-      case 'empty-local':
-        return (
-          <View className="px-4 py-6">
-            <Text className="text-text-secondary text-base text-center">
+          <View className="px-4 py-6 items-center justify-center">
+            <Text
+              className="text-text-secondary text-base text-center"
+              style={{ opacity: item.pending ? 0 : 1 }}
+              importantForAccessibility={item.pending ? 'no' : 'yes'}
+              accessibilityElementsHidden={item.pending}
+            >
               {isMealBuilderMode
                 ? 'No saved foods found'
                 : 'No saved foods or meals found'}
             </Text>
+            {item.pending ? (
+              <View
+                className="absolute inset-0 items-center justify-center"
+                accessible
+                accessibilityRole="progressbar"
+                accessibilityLabel={
+                  isMealBuilderMode
+                    ? 'Searching saved foods'
+                    : 'Searching saved foods and meals'
+                }
+              >
+                <ActivityIndicator size="small" color={accentColor} />
+              </View>
+            ) : null}
           </View>
         );
     }
@@ -1105,12 +1314,14 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
           borderColor: isSearchFocused ? accentColor : 'transparent',
         }}
       >
-        {!!searchText.trim() &&
-        (isSearching || isMealSearching || isOnlineSearching) ? (
-          <ActivityIndicator size="small" color={textMuted} />
-        ) : (
-          <Icon name="search" size={18} color={textMuted} />
-        )}
+        <View className="w-[20px] h-[20px] items-center justify-center">
+          {!!searchText.trim() &&
+          (isSearching || isMealSearching || isOnlineSearching) ? (
+            <ActivityIndicator size="small" color={textMuted} />
+          ) : (
+            <Icon name="search" size={18} color={textMuted} />
+          )}
+        </View>
         <View className="flex-1 ml-2">
           <TextInput
             className="text-text-primary"
@@ -1197,7 +1408,7 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
     }
 
     // Landing (no/short query): recent + top foods.
-    if (isLoading) {
+    if (isLandingLoading) {
       return (
         <View className="flex-1 justify-center items-center">
           <ActivityIndicator size="large" color={accentColor} />
@@ -1211,7 +1422,7 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
           <Text className="text-text-secondary text-base mt-4 text-center">
             Failed to load foods
           </Text>
-          <Button variant="secondary" onPress={() => refetch()} className="mt-4 px-6">
+          <Button variant="secondary" onPress={retryLanding} className="mt-4 px-6">
             Retry
           </Button>
         </View>
@@ -1230,8 +1441,8 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
     return (
       <SectionList
         sections={landingSections}
-        keyExtractor={(item, index) => `${index}-${item.id}`}
-        renderItem={({ item }) => renderFoodRow(item)}
+        keyExtractor={(item) => item.key}
+        renderItem={({ item }) => renderLandingEntry(item)}
         renderSectionHeader={({ section }) => renderSectionHeaderTitle(section.title)}
         stickySectionHeadersEnabled
         keyboardShouldPersistTaps="handled"

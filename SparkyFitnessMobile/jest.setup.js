@@ -89,6 +89,7 @@ jest.mock('react-native-health-connect', () => ({
   requestPermission: jest.fn().mockResolvedValue([]),
   readRecords: jest.fn().mockResolvedValue({ records: [] }),
   aggregateRecord: jest.fn().mockResolvedValue({}),
+  aggregateGroupByDuration: jest.fn().mockResolvedValue([]),
   aggregateGroupByPeriod: jest.fn().mockResolvedValue([]),
   getSdkStatus: jest.fn().mockResolvedValue(3),
   SdkAvailabilityStatus: {
@@ -125,6 +126,10 @@ jest.mock('expo-notifications', () => {
     scheduleNotificationAsync: jest.fn(async () => `mock-notif-${nextId++}`),
     cancelScheduledNotificationAsync: jest.fn().mockResolvedValue(undefined),
     cancelAllScheduledNotificationsAsync: jest.fn().mockResolvedValue(undefined),
+    setNotificationCategoryAsync: jest.fn().mockResolvedValue(undefined),
+    getPresentedNotificationsAsync: jest.fn().mockResolvedValue([]),
+    dismissNotificationAsync: jest.fn().mockResolvedValue(undefined),
+    addNotificationResponseReceivedListener: jest.fn(() => ({ remove: jest.fn() })),
     AndroidImportance: { HIGH: 4, DEFAULT: 3, LOW: 2, MIN: 1, NONE: 0 },
     SchedulableTriggerInputTypes: {
       CALENDAR: 'calendar',
@@ -189,8 +194,28 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 // Mock react-native-gesture-handler
 jest.mock('react-native-gesture-handler', () => {
   const View = require('react-native').View;
+  // A chainable gesture builder: every method returns the same object so
+  // `.activateAfterLongPress(150).onStart(fn).onEnd(fn)` chains resolve to a
+  // gesture stub (the drag itself is device-verified, not unit-tested).
+  const makeChainableGesture = () => {
+    const gesture = new Proxy({}, { get: () => () => gesture });
+    return gesture;
+  };
   return {
     GestureHandlerRootView: View,
+    GestureDetector: ({ children }) => children,
+    Gesture: {
+      Pan: makeChainableGesture,
+      Tap: makeChainableGesture,
+      LongPress: makeChainableGesture,
+      Fling: makeChainableGesture,
+      Pinch: makeChainableGesture,
+      Rotation: makeChainableGesture,
+      Race: makeChainableGesture,
+      Simultaneous: makeChainableGesture,
+      Exclusive: makeChainableGesture,
+      Native: makeChainableGesture,
+    },
     Swipeable: View,
     TouchableOpacity: View,
     DrawerLayout: View,
@@ -243,18 +268,39 @@ jest.mock('react-native-gesture-handler/ReanimatedSwipeable', () => {
 // Mock react-native-reanimated
 jest.mock('react-native-reanimated', () => {
   const React = require('react');
-  const { View } = require('react-native');
+  const { View, ScrollView } = require('react-native');
   const createAnimationMock = () => ({ duration: () => createAnimationMock() });
   return {
     __esModule: true,
-    default: { View },
+    default: { View, ScrollView, createAnimatedComponent: (Component) => Component },
     useSharedValue: (init) => React.useRef({ value: init }).current,
     useAnimatedStyle: (fn) => fn(),
     useDerivedValue: (fn) => ({ value: fn() }),
+    // Linear map between the first and last stops, clamped — enough for the
+    // synchronous worklet the useAnimatedStyle mock runs.
+    interpolate: (value, input, output) => {
+      const inMin = input[0];
+      const inMax = input[input.length - 1];
+      const outMin = output[0];
+      const outMax = output[output.length - 1];
+      if (inMax === inMin) return outMin;
+      const t = Math.max(0, Math.min(1, (value - inMin) / (inMax - inMin)));
+      return outMin + t * (outMax - outMin);
+    },
+    Extrapolation: { CLAMP: 'clamp', EXTEND: 'extend', IDENTITY: 'identity' },
     withTiming: (toValue) => toValue,
     withSpring: (toValue) => toValue,
     withSequence: (...args) => args[args.length - 1],
+    withRepeat: (animation) => animation,
     useAnimatedReaction: jest.fn(),
+    // Drag-reorder worklet plumbing — runOnJS returns the fn so callers can
+    // invoke it synchronously; the scroll/frame helpers are inert stubs.
+    runOnJS: (fn) => fn,
+    useAnimatedRef: () => React.useRef(null),
+    useAnimatedScrollHandler: (handler) => handler,
+    useFrameCallback: () => ({ setActive: jest.fn() }),
+    scrollTo: jest.fn(),
+    measure: jest.fn(() => null),
     Easing: {
       linear: jest.fn(),
       ease: jest.fn(),
@@ -289,6 +335,24 @@ jest.mock('react-native-keyboard-controller', () => {
     KeyboardStickyView: React.forwardRef(({ children, offset: _offset, enabled: _enabled, ...props }, ref) =>
       React.createElement(View, { ...props, ref }, children),
     ),
+    // Keyboard-closed shared values; tests render with the rail expanded.
+    useReanimatedKeyboardAnimation: () => ({ height: { value: 0 }, progress: { value: 0 } }),
+    // isVisible defaults to true so the Android IME-retry path in
+    // focusSetCellInput stays quiet unless a test opts in.
+    KeyboardController: {
+      setDefaultMode: jest.fn(),
+      setInputMode: jest.fn(),
+      preload: jest.fn(),
+      dismiss: jest.fn(),
+      setFocusTo: jest.fn(),
+      isVisible: jest.fn(() => true),
+      state: jest.fn(() => ({})),
+    },
+    // Subscriptions are inert; tests drive a listener by pulling the callback
+    // out of addListener.mock.calls.
+    KeyboardEvents: {
+      addListener: jest.fn(() => ({ remove: jest.fn() })),
+    },
   };
 });
 
@@ -375,6 +439,15 @@ jest.mock('@shopify/react-native-skia', () => {
           moveTo: jest.fn().mockReturnThis(),
           lineTo: jest.fn().mockReturnThis(),
           close: jest.fn().mockReturnThis(),
+        }),
+      },
+      PathBuilder: {
+        Make: () => ({
+          addArc: jest.fn().mockReturnThis(),
+          moveTo: jest.fn().mockReturnThis(),
+          lineTo: jest.fn().mockReturnThis(),
+          close: jest.fn().mockReturnThis(),
+          build: jest.fn().mockReturnValue(null),
         }),
       },
     },

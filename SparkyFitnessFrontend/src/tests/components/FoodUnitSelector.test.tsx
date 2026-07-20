@@ -14,6 +14,14 @@ jest.mock('@tanstack/react-query', () => ({
   useQueryClient: () => mockQueryClient,
 }));
 
+// The dialog header carries a favorite star. Stub its hooks: this suite's
+// react-query mock deliberately exposes only useQueryClient, and the star's
+// behaviour is covered by its own tests.
+jest.mock('@/hooks/Foods/useFavorites', () => ({
+  useFavoritesQuery: () => ({ data: undefined }),
+  useToggleFavoriteMutation: () => ({ mutate: jest.fn(), isPending: false }),
+}));
+
 jest.mock('@/contexts/PreferencesContext', () => ({
   usePreferences: () => ({
     loggingLevel: 'DEBUG',
@@ -253,6 +261,28 @@ describe('FoodUnitSelector', () => {
 
     expect(screen.queryByText(/These units can/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Add to Meal/i })).toBeEnabled();
+  });
+
+  it('shows provider serving descriptions with gram or milliliter amounts', async () => {
+    const food = createFood(
+      createVariant({
+        id: 'default-variant',
+        serving_size: 1,
+        serving_unit: 'glass',
+        serving_description: '1 glass (200 ml)',
+      })
+    );
+
+    mockFetchQuery.mockResolvedValue([]);
+
+    await renderSelector(food);
+
+    expect(
+      screen.getByRole('button', { name: /1 glass \(200 ml\)/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Nutrition for 1 glass \(200 ml\):/i)
+    ).toBeInTheDocument();
   });
 
   it('does not show compatible-unit checks when the selected saved variant is AI-estimated', async () => {

@@ -36,6 +36,7 @@ BEGIN
     'family_access',
     'food_entries',
     'food_entry_meals',
+    'food_favorites',
     'food_variants',
     'foods',
     'goal_presets',
@@ -72,6 +73,7 @@ BEGIN
     'sleep_entry_stages',
     'fasting_logs',
     'user_custom_nutrients',
+    'user_nutrient_goal_preferences',
     'user_allergen_preferences',
     'user_dashboard_layouts',
     'sleep_need_calculations',
@@ -86,7 +88,21 @@ BEGIN
     'user_custom_symptoms',
     'symptom_entries',
     'user_medication_display_preferences',
-    'user_custom_symptom_locations'
+    'user_custom_symptom_locations',
+    'cycle_settings',
+    'cycle_daily_entries',
+    'cycles',
+    'user_cycle_display_preferences',
+    'cycle_test_entries',
+    'pregnancies',
+    'pregnancy_kick_sessions',
+    'pregnancy_contractions',
+    'pregnancy_photos',
+    'pregnancy_checklist_state',
+    'health_appointments',
+    'user_custom_moods',
+    'user_mood_display_preferences',
+    'passkey_registration_tickets'
   ]::text[])
   LOOP
     EXECUTE 'ALTER TABLE public.' || quote_ident(table_name) || ' ENABLE ROW LEVEL SECURITY;';
@@ -548,7 +564,14 @@ SELECT create_diary_policy('user_goals');
 SELECT create_diary_policy('weekly_goal_plans');
 SELECT create_diary_policy('user_water_containers');
 SELECT create_diary_policy('user_custom_nutrients');
+SELECT create_diary_policy('user_nutrient_goal_preferences');
 SELECT create_diary_policy('user_allergen_preferences');
+-- Starred foods/meals follow the diary context: the favorites routes are mounted
+-- behind checkPermissionMiddleware('diary'), and the food-search screen a delegate
+-- sees is already scoped to the user they are acting for (recent/frequent entries
+-- included). An owner-only policy here would authorize the delegate at the route
+-- layer and then hide every row at the RLS layer.
+SELECT create_diary_policy('food_favorites');
 
 -- Nutrient display preferences: delegates can read but only owner can rearrange their own columns.
 CREATE POLICY select_policy ON public.user_nutrient_display_preferences FOR SELECT TO PUBLIC USING (has_profile_read_access(user_id));
@@ -611,6 +634,33 @@ SELECT create_library_policy('workout_presets', 'is_public', ARRAY['can_view_exe
 -- These tables are managed by create_medication_policy at the bottom of this file (Tier 3).
 -- Do NOT apply create_library_policy or create_diary_policy to medication tables.
 SELECT create_owner_policy('user_medication_display_preferences');
+
+-- Cycle & Pregnancy hub (see migration 20260702180000_add_cycle_tracking_schema.sql).
+-- Tier 1 — owner-only. Deliberately stricter than medications: this reproductive
+-- health data is NEVER shared or delegated in v1 (no family/caregiver access).
+SELECT create_owner_policy('cycle_settings');
+SELECT create_owner_policy('cycle_daily_entries');
+SELECT create_owner_policy('cycles');
+SELECT create_owner_policy('user_cycle_display_preferences');
+SELECT create_owner_policy('cycle_test_entries');
+
+-- Pregnancy mode (see migration 20260702200000_add_pregnancy_schema.sql). Tier 1
+-- owner-only. health_appointments is generic but still owner-only in v1.
+SELECT create_owner_policy('pregnancies');
+SELECT create_owner_policy('pregnancy_kick_sessions');
+SELECT create_owner_policy('pregnancy_contractions');
+SELECT create_owner_policy('pregnancy_photos');
+SELECT create_owner_policy('pregnancy_checklist_state');
+SELECT create_owner_policy('health_appointments');
+
+-- User-defined mood tags. Mood is check-in data (mood_entries uses the check-in
+-- policy), and custom check-in definitions like custom_categories are shared with
+-- check-in delegates — so custom moods follow the same check-in policy for
+-- consistency (a delegate managing the owner's check-in sees the owner's moods).
+SELECT create_checkin_policy('user_custom_moods');
+
+-- Mood display preferences: personal picker config, owner-only.
+SELECT create_owner_policy('user_mood_display_preferences');
 
 
 -- Custom policies for special cases
@@ -848,3 +898,9 @@ SELECT create_medication_policy('user_custom_symptom_locations');
 -- Medications Display Preferences (Tier 2 - Owner-Only Write, Delegate Read)
 CREATE POLICY select_policy ON public.user_medication_display_preferences FOR SELECT TO PUBLIC USING (has_medication_read_access(user_id));
 CREATE POLICY modify_policy ON public.user_medication_display_preferences FOR ALL TO PUBLIC USING (authenticated_user_id() = user_id) WITH CHECK (authenticated_user_id() = user_id);
+
+-- Passkey registration tickets (Tier 3 - system/internal). These short-lived,
+-- single-use rows are only ever read/written by getSystemClient (which bypasses
+-- RLS). Deny the app role entirely as defense-in-depth so a stray GRANT can
+-- never expose session material to user-scoped queries.
+CREATE POLICY deny_all_policy ON public.passkey_registration_tickets FOR ALL TO PUBLIC USING (false) WITH CHECK (false);

@@ -14,6 +14,8 @@ export const waterContainersQueryKey = ['waterContainers'] as const;
 
 export const foodsQueryKey = ['foods'] as const;
 
+export const favoritesQueryKey = ['favorites'] as const;
+
 export const foodSearchQueryKey = (searchTerm: string) => ['foodSearch', searchTerm] as const;
 
 export const foodsLibraryQueryKey = (searchTerm: string) => ['foodsLibrary', searchTerm] as const;
@@ -28,6 +30,10 @@ export const foodEntryMealDetailQueryKey = (id: string) =>
 export const recentMealsQueryKeyRoot = ['recentMeals'] as const;
 
 export const recentMealsQueryKey = (limit: number) => [...recentMealsQueryKeyRoot, limit] as const;
+
+export const topMealsQueryKeyRoot = ['topMeals'] as const;
+
+export const topMealsQueryKey = (limit: number) => [...topMealsQueryKeyRoot, limit] as const;
 
 export const mealSearchQueryKeyRoot = ['mealSearch'] as const;
 
@@ -55,12 +61,22 @@ export const measurementsRangeQueryKey = (startDate: string, endDate: string) =>
 
 export const exerciseHistoryQueryKey = ['exerciseHistory'] as const;
 
+/** Per-exercise filtered history; extends the root so prefix invalidation covers it. */
+export const exerciseHistoryForExerciseQueryKey = (exerciseId: string) =>
+  [...exerciseHistoryQueryKey, exerciseId] as const;
+
 export const exerciseHistoryResetQueryKey = ['exerciseHistoryReset'] as const;
 
 export const exerciseStatsQueryKeyRoot = ['exerciseStats'] as const;
 
-export const exerciseStatsQueryKey = (exerciseId: string) =>
-  [...exerciseStatsQueryKeyRoot, exerciseId] as const;
+export const exerciseStatsQueryKey = (
+  exerciseId: string,
+  excludePresetEntryId?: string,
+) =>
+  [...exerciseStatsQueryKeyRoot, exerciseId, excludePresetEntryId ?? null] as const;
+
+export const exerciseDetailQueryKey = (exerciseId: string) =>
+  ['exerciseDetail', exerciseId] as const;
 
 export const suggestedExercisesQueryKey = ['suggestedExercises'] as const;
 
@@ -91,3 +107,28 @@ export const customNutrientsQueryKey = ['customNutrients'] as const;
 export const nutrientDisplayPreferencesQueryKey = ['nutrientDisplayPreferences'] as const;
 
 export const chatHistoryQueryKey = ['chatHistory'] as const;
+
+export const nutritionTrendsQueryKey = (startDate: string, endDate: string) =>
+  ['nutritionTrends', startDate, endDate] as const;
+
+// --- Cycle & Pregnancy ---
+export const cycleSettingsQueryKey = ['cycleSettings'] as const;
+export const cycleLogQueryKey = (date: string) => ['cycleLog', date] as const;
+export const cycleLogsRangeQueryKey = (start: string, end: string) => ['cycleLogsRange', start, end] as const;
+export const cyclesQueryKey = ['cycles'] as const;
+export const cycleOverviewQueryKey = ['cycleOverview'] as const;
+export const cycleInsightsQueryKey = ['cycleInsights'] as const;
+export const cycleFertilityQueryKey = ['cycleFertility'] as const;
+export const cycleTestsQueryKey = ['cycleTests'] as const;
+export const cycleCorrelationsQueryKey = ['cycleCorrelations'] as const;
+export const cycleDisplayPreferencesQueryKey = ['cycleDisplayPreferences'] as const;
+
+export const pregnancyCurrentQueryKey = ['pregnancyCurrent'] as const;
+export const pregnancyOverviewQueryKey = ['pregnancyOverview'] as const;
+export const pregnancyKicksQueryKey = (sessionId?: string) => ['pregnancyKicks', sessionId ?? 'current'] as const;
+export const pregnancyContractionsQueryKey = ['pregnancyContractions'] as const;
+export const pregnancyChecklistQueryKey = ['pregnancyChecklist'] as const;
+export const pregnancyAppointmentsQueryKey = ['healthAppointments'] as const;
+export const pregnancyPhotosQueryKey = ['pregnancyPhotos'] as const;
+
+export const symptomEntriesQueryKey = (fromDate: string, toDate: string) => ['symptomEntries', fromDate, toDate] as const;

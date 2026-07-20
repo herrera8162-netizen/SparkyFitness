@@ -6,7 +6,7 @@ export interface FoodUnitVariant {
   is_default?: boolean;
   serving_size: number;
   serving_unit: string;
-  serving_description?: string;
+  serving_description?: string | null;
   calories: number;
   protein: number;
   carbs: number;
@@ -37,6 +37,7 @@ export interface EquivalentUnit {
   serving_size: number;
   serving_unit: string;
   _clientKey?: string;
+  _sizeText?: string;
 }
 
 export type FoodUnitSelectionResult =

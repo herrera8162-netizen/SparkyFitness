@@ -5,7 +5,15 @@ import chatService from '../services/chatService.js';
 import type { FoodOptionsErrorCategory } from '../services/chatService.js';
 import globalSettingsRepository from '../models/globalSettingsRepository.js';
 import { resolveIsAdmin } from '../utils/adminCheck.js';
-import { testAiServiceConnectionRequestSchema } from '@workspace/shared';
+import {
+  assertOutboundUrlShapeAndLiteralAllowed,
+  deriveAiNetworkPolicy,
+  OutboundUrlBlockedError,
+} from '../utils/outboundUrlPolicy.js';
+import {
+  testAiServiceConnectionRequestSchema,
+  normalizeChatToolCategories,
+} from '@workspace/shared';
 const router = express.Router();
 /**
  * @swagger
@@ -52,6 +60,10 @@ const router = express.Router();
  */
 router.post('/', authenticate, async (req, res, next) => {
   const { messages, service_config_id, action, service_data } = req.body;
+  // Optional runtime tool-category selection from the client; normalized to
+  // known slugs (unknown/empty -> undefined so the service falls back to the
+  // per-service profile default rather than loading zero tools).
+  const toolCategories = normalizeChatToolCategories(req.body?.toolCategories);
   try {
     if (action === 'save_ai_service_settings') {
       // Check if user AI config is allowed
@@ -86,6 +98,36 @@ router.post('/', authenticate, async (req, res, next) => {
             .json({ error: 'service_data.service_name is required.' });
         }
       }
+      // SSRF guard: a non-admin must not be able to point the server's outbound
+      // AI request at a private/internal address (localhost, RFC1918, link-local,
+      // cloud metadata). The admin is the trusted operator, so their own
+      // self-hosted URLs (e.g. local Ollama) are allowed; an operator who wants
+      // regular users to reach a shared private AI service opts in explicitly
+      // with ALLOW_PRIVATE_NETWORK_AI=true.
+      if (service_data.custom_url) {
+        const isAdmin = await resolveIsAdmin(req.user, req.authenticatedUserId);
+        const networkPolicy = deriveAiNetworkPolicy(
+          { source: 'user' },
+          isAdmin
+        );
+        try {
+          assertOutboundUrlShapeAndLiteralAllowed(
+            service_data.custom_url,
+            networkPolicy
+          );
+        } catch (error) {
+          // Policy denials (private/internal address) are 403; a URL fetch could
+          // never use (malformed, wrong scheme, credentials) is a plain 400.
+          return res
+            .status(error instanceof OutboundUrlBlockedError ? 403 : 400)
+            .json({
+              error:
+                error instanceof Error
+                  ? error.message
+                  : 'Custom AI service URLs must be public http(s) endpoints. Private or internal addresses are not allowed.',
+            });
+        }
+      }
       const result = await chatService.handleAiServiceSettings(
         action,
         service_data,
@@ -94,6 +136,7 @@ router.post('/', authenticate, async (req, res, next) => {
       );
       return res.status(200).json(result);
     }
+    const isAdmin = await resolveIsAdmin(req.user, req.authenticatedUserId);
     const {
       content,
       action: actionType,
@@ -102,7 +145,9 @@ router.post('/', authenticate, async (req, res, next) => {
       messages,
       service_config_id,
       req.userId,
-      req.authenticatedUserId
+      req.authenticatedUserId,
+      isAdmin,
+      toolCategories
     );
     return res.status(200).json({ content, action: actionType, executedTools });
   } catch (error) {
@@ -155,12 +200,16 @@ router.post('/', authenticate, async (req, res, next) => {
 });
 router.post('/stream', authenticate, async (req, res, next) => {
   const { messages, service_config_id } = req.body;
+  const toolCategories = normalizeChatToolCategories(req.body?.toolCategories);
   try {
+    const isAdmin = await resolveIsAdmin(req.user, req.authenticatedUserId);
     const { stream } = await chatService.processChatMessageStream(
       messages,
       service_config_id,
       req.userId,
-      req.authenticatedUserId
+      req.authenticatedUserId,
+      isAdmin,
+      toolCategories
     );
 
     pipeUIMessageStreamToResponse({ response: res, stream });
@@ -771,6 +820,7 @@ const FOOD_OPTIONS_ERROR_HTTP_STATUS: Record<FoodOptionsErrorCategory, number> =
     no_ai_configured: 404,
     api_key_missing: 404,
     custom_url_missing: 404,
+    private_network_forbidden: 403,
     unsupported_provider: 422,
     unsupported_media: 422, // unreachable (no images sent); required for exhaustiveness
     refused: 422,
@@ -789,12 +839,14 @@ router.post('/food-options', authenticate, async (req, res, next) => {
       .json({ error: 'AI service configuration ID is required.' });
   }
   try {
+    const isAdmin = await resolveIsAdmin(req.user, req.authenticatedUserId);
     const result = await chatService.processFoodOptionsRequest(
       foodName,
       unit,
 
       req.userId,
-      service_config_id
+      service_config_id,
+      isAdmin
     );
     if (!result.success) {
       const status = FOOD_OPTIONS_ERROR_HTTP_STATUS[result.category] ?? 500;

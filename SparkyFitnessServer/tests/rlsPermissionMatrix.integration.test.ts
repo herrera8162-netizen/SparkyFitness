@@ -166,15 +166,29 @@ describe.runIf(RUN)('RLS permission matrix', () => {
     sparky_chat_history: 'owner',
     user_ignored_updates: 'owner',
     user_oidc_links: 'owner',
+    cycle_daily_entries: 'owner',
+    cycle_settings: 'owner',
+    cycle_test_entries: 'owner',
+    cycles: 'owner',
+    health_appointments: 'owner',
+    pregnancies: 'owner',
+    pregnancy_checklist_state: 'owner',
+    pregnancy_contractions: 'owner',
+    pregnancy_kick_sessions: 'owner',
+    pregnancy_photos: 'owner',
+    user_cycle_display_preferences: 'owner',
+    user_mood_display_preferences: 'owner',
     // diary
     exercise_entries: 'diary',
     exercise_preset_entries: 'diary',
     food_entry_meals: 'diary',
+    food_favorites: 'diary',
     goal_presets: 'diary',
     meal_plans: 'diary',
     user_allergen_preferences: 'diary',
     user_custom_nutrients: 'diary',
     user_goals: 'diary',
+    user_nutrient_goal_preferences: 'diary',
     user_meal_visibilities: 'diary',
     user_water_containers: 'diary',
     water_intake: 'diary',
@@ -189,6 +203,7 @@ describe.runIf(RUN)('RLS permission matrix', () => {
     day_classification_cache: 'checkin',
     fasting_logs: 'checkin',
     mood_entries: 'checkin',
+    user_custom_moods: 'checkin',
     sleep_entries: 'checkin',
     sleep_entry_stages: 'checkin',
     sleep_need_calculations: 'checkin',
@@ -232,6 +247,9 @@ describe.runIf(RUN)('RLS permission matrix', () => {
     workout_plan_template_assignments: 'custom',
     workout_preset_exercise_sets: 'custom',
     workout_preset_exercises: 'custom',
+    // system/internal: RLS-enabled with an explicit deny-all policy; only
+    // getSystemClient (which bypasses RLS) touches it.
+    passkey_registration_tickets: 'custom',
   };
 
   // Expected helper substrings for the generic-policy domains.

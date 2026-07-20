@@ -13,6 +13,7 @@ import { useDeleteFoodEntry } from '../hooks/useDeleteFoodEntry';
 import { useDeleteFoodEntryMeal } from '../hooks/useDeleteFoodEntryMeal';
 import type { FoodEntry } from '../types/foodEntries';
 import type { EntryNutrition } from '../utils/mealNutrition';
+import { formatTimeLabel } from '../utils/entryTimeDisplay';
 
 interface SwipeableFoodRowProps {
   entry: FoodEntry;
@@ -100,6 +101,7 @@ const SwipeableFoodRow: React.FC<SwipeableFoodRowProps> = ({ entry, nutrition, o
 
   const canQuickAdjust = !isMealComponent && !!onAdjustServing && Number(entry.serving_size) > 0;
   const name = entry.food_name || 'Unknown food';
+  const timeLabel = formatTimeLabel(entry.entry_time);
 
   const handlePress = () => {
     if (isMealComponent && entry.food_entry_meal_id) {
@@ -140,11 +142,16 @@ const SwipeableFoodRow: React.FC<SwipeableFoodRowProps> = ({ entry, nutrition, o
           >
             <View className="flex-row flex-wrap items-baseline">
               <Text className="text-md text-text-primary" numberOfLines={1}>
-                {name}{' · '}
+                {name}
               </Text>
               <Text className="text-sm text-text-secondary" numberOfLines={1}>
-                {entry.quantity} {entry.unit}
+                {' · '}{entry.quantity} {entry.unit}
               </Text>
+              {timeLabel && (
+                <Text className="text-xs text-text-link ml-1.5" numberOfLines={1}>
+                  {timeLabel}
+                </Text>
+              )}
             </View>
           </TouchableOpacity>
           {canQuickAdjust ? (

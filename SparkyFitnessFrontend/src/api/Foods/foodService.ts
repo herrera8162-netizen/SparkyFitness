@@ -21,6 +21,7 @@ interface FoodPayload {
   shared_with_public?: boolean;
   provider_external_id?: string;
   provider_type?: string;
+  provider_verified?: boolean;
   saturated_fat?: number;
   polyunsaturated_fat?: number;
   monounsaturated_fat?: number;
@@ -150,11 +151,12 @@ export const searchDatabaseFoods = async (
 };
 
 export const importFoodsFromCsv = async (
-  foods: FoodDataForBackend[]
+  foods: FoodDataForBackend[],
+  overwrite = false
 ): Promise<void> => {
   await apiCall('/foods/import-from-csv', {
     method: 'POST',
-    body: JSON.stringify({ foods }),
+    body: JSON.stringify({ foods, overwrite }),
   });
 };
 

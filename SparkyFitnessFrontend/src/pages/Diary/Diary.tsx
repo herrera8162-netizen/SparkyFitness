@@ -43,7 +43,7 @@ import {
   useFoodEntries,
   useFoodEntryMeals,
 } from '@/hooks/Diary/useFoodEntries';
-import { todayInZone } from '@workspace/shared';
+import { todayInZone, prefillEntryTime } from '@workspace/shared';
 import { useDailySummary } from '@/hooks/Diary/useDailyProgress';
 
 const Diary = () => {
@@ -86,6 +86,8 @@ const Diary = () => {
   const [openFoodSearchForMealType, setOpenFoodSearchForMealType] = useState<
     string | null
   >(null);
+  const [toolbarContainer, setToolbarContainer] =
+    useState<HTMLDivElement | null>(null);
 
   const currentUserId = activeUserId;
   const { data: customNutrients, isLoading: customNutrientsLoading } =
@@ -231,7 +233,8 @@ const Diary = () => {
     food: Food,
     quantity: number,
     unit: string,
-    selectedVariant: FoodVariant
+    selectedVariant: FoodVariant,
+    entryTime?: string | null
   ) => {
     if (!currentUserId) {
       return;
@@ -241,6 +244,7 @@ const Diary = () => {
       quantity,
       unit,
       selectedVariant,
+      entryTime,
     });
     try {
       await createFoodEntry({
@@ -252,6 +256,7 @@ const Diary = () => {
         unit: unit,
         variant_id: selectedVariant.id,
         entry_date: selectedDate,
+        entry_time: entryTime || null,
       });
       info(loggingLevel, 'Food entry added successfully.');
     } catch (err) {
@@ -432,15 +437,27 @@ const Diary = () => {
   if (loading) return <div>Loading...</div>;
   return (
     <div className="space-y-6">
-      <DayNavigator
-        selectedDate={selectedDate}
-        onDateChange={(dateString) => {
-          setSelectedDate(dateString);
-          setSearchParams({ date: dateString });
-        }}
-      />
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b">
+        <div />
+        <div className="flex items-center gap-2 sm:ml-auto">
+          <div ref={setToolbarContainer} className="flex items-center gap-2" />
+          <DayNavigator
+            selectedDate={selectedDate}
+            onDateChange={(dateString) => {
+              setSelectedDate(dateString);
+              setSearchParams({ date: dateString });
+            }}
+            className="grid-cols-none flex mb-0 items-center gap-2"
+          />
+        </div>
+      </div>
 
-      {effectiveGoals && <DiaryWidgetGrid widgets={widgets} />}
+      {effectiveGoals && (
+        <DiaryWidgetGrid
+          widgets={widgets}
+          toolbarContainer={toolbarContainer}
+        />
+      )}
 
       {/* Food Unit Selector Dialog */}
       {selectedFood && (
@@ -450,6 +467,19 @@ const Diary = () => {
           onOpenChange={setIsUnitSelectorOpen}
           onSelect={handleFoodUnitSelect}
           showUnitSelector={true}
+          showTimeInput={true}
+          defaultMealTime={
+            availableMealTypes?.find(
+              (t) => t.name.toLowerCase() === selectedMealType.toLowerCase()
+            )?.default_time
+          }
+          initialTime={prefillEntryTime({
+            defaultTime: availableMealTypes?.find(
+              (t) => t.name.toLowerCase() === selectedMealType.toLowerCase()
+            )?.default_time,
+            isToday: selectedDate === todayInZone(timezone),
+            tz: timezone,
+          })}
         />
       )}
 
@@ -489,6 +519,13 @@ const Diary = () => {
         onOpenChange={setIsLogMealDialogOpen}
         date={selectedDate}
         mealType={selectedMealType}
+        initialEntryTime={prefillEntryTime({
+          defaultTime: availableMealTypes?.find(
+            (t) => t.name.toLowerCase() === selectedMealType.toLowerCase()
+          )?.default_time,
+          isToday: selectedDate === todayInZone(timezone),
+          tz: timezone,
+        })}
       />
 
       {/* Convert to Meal Dialog */}

@@ -6,10 +6,24 @@ export interface WorkoutDraftSet {
   restTime?: number | null;
   weight: string;
   reps: string;
-  /** Round-tripped from the preset on edit; the form has no UI for these. */
+  /** Editable in the card forms via long-press (set type) and the RPE column. */
   setType?: string;
+  rpe?: number | null;
+  /** Round-tripped from the preset/session on edit; the form has no UI for these. */
   duration?: number | null;
   notes?: string | null;
+  /** Round-tripped opaquely; the form has no completion UI. */
+  completedAt?: string | null;
+  /** Round-tripped opaquely; the form has no PR UI. Preserves earned PRs on edit. */
+  isPr?: boolean;
+}
+
+/** Patch shape for the form hooks' `updateSetMeta` action. */
+export interface WorkoutSetMetaPatch {
+  setType?: string;
+  rpe?: number | null;
+  /** ISO string to mark the set complete, null to clear it. */
+  completedAt?: string | null;
 }
 
 export interface WorkoutDraftExercise {
@@ -21,6 +35,14 @@ export interface WorkoutDraftExercise {
   exerciseCategory: string | null;
   images: string[];
   sets: WorkoutDraftSet[];
+  /** Round-tripped from the session on edit; the form has no duration UI. */
+  durationMinutes?: number | null;
+  /** Calories input text; seeded from the session's calories_burned on edit. */
+  calories?: string;
+  /** Sent as a manual server override only when the user edited the field. */
+  caloriesManuallySet?: boolean;
+  /** Superset group id; edited via the form lists' grouping actions. */
+  supersetGroup?: number | null;
   /** Present only when editing an existing session — not persisted to drafts. */
   snapshot?: import('@workspace/shared').ExerciseSnapshotResponse | null;
 }

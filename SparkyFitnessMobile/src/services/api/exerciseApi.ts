@@ -3,6 +3,7 @@ import { ApiError } from './errors';
 import { getActiveServerConfig, proxyHeadersToRecord } from '../storage';
 import { getAuthHeaders, notifySessionExpired } from './authService';
 import { addLog } from '../LogService';
+import { UPLOAD_TIMEOUT_MS, fetchWithTimeout } from '../../utils/concurrency';
 import type { Exercise, SuggestedExercisesResponse } from '../../types/exercise';
 import type {
   ExerciseHistoryResponse,
@@ -26,9 +27,13 @@ export const fetchExerciseEntries = async (date: string): Promise<ExerciseSessio
 export const fetchExerciseHistory = async (
   page: number = 1,
   pageSize: number = 20,
+  exerciseId?: string,
 ): Promise<ExerciseHistoryResponse> => {
+  const exerciseFilter = exerciseId
+    ? `&exerciseId=${encodeURIComponent(exerciseId)}`
+    : '';
   return apiFetch<ExerciseHistoryResponse>({
-    endpoint: `/api/v2/exercise-entries/history?page=${page}&pageSize=${pageSize}`,
+    endpoint: `/api/v2/exercise-entries/history?page=${page}&pageSize=${pageSize}${exerciseFilter}`,
     serviceName: 'Exercise API',
     operation: 'fetch exercise history',
   });
@@ -36,9 +41,15 @@ export const fetchExerciseHistory = async (
 
 export const fetchExerciseStats = async (
   exerciseId: string,
+  excludePresetEntryId?: string,
 ): Promise<ExerciseStatsResponse> => {
+  // The live active-workout card passes its session id so today's in-progress
+  // (or pre-persisted planned) sets are excluded from the historical baseline.
+  const query = excludePresetEntryId
+    ? `?excludePresetEntryId=${encodeURIComponent(excludePresetEntryId)}`
+    : '';
   return apiFetch<ExerciseStatsResponse>({
-    endpoint: `/api/v2/exercises/${encodeURIComponent(exerciseId)}/stats`,
+    endpoint: `/api/v2/exercises/${encodeURIComponent(exerciseId)}/stats${query}`,
     serviceName: 'Exercise API',
     operation: 'fetch exercise stats',
   });
@@ -221,6 +232,20 @@ export const transformExerciseRow = (row: Record<string, unknown>): Exercise => 
 });
 
 /**
+ * Fetch a single exercise's full catalog record by id. Used to hydrate the
+ * Exercise Detail screen when it was opened from a workout/preset row that only
+ * carried a sparse snapshot (name/category/images).
+ */
+export const fetchExerciseById = async (id: string): Promise<Exercise> => {
+  const response = await apiFetch<Record<string, unknown>>({
+    endpoint: `/api/exercises/${encodeURIComponent(id)}`,
+    serviceName: 'Exercise API',
+    operation: 'fetch exercise by id',
+  });
+  return transformExerciseRow(response);
+};
+
+/**
  * Creates a custom exercise. The server endpoint is multipart-only, so this
  * bypasses {@link apiFetch} (which always JSON-stringifies) and uses raw
  * fetch with FormData, mirroring the auth/proxy header injection pattern in
@@ -241,7 +266,7 @@ export async function createExercise(payload: CreateExercisePayload): Promise<Ex
   const form = new FormData();
   form.append('exerciseData', JSON.stringify(exerciseData));
 
-  const response = await fetch(`${baseUrl}/api/exercises/`, {
+  const response = await fetchWithTimeout(`${baseUrl}/api/exercises/`, {
     method: 'POST',
     headers: {
       ...proxyHeadersToRecord(config.proxyHeaders),
@@ -249,7 +274,7 @@ export async function createExercise(payload: CreateExercisePayload): Promise<Ex
       // Do NOT set Content-Type — fetch will add the multipart boundary.
     },
     body: form,
-  });
+  }, UPLOAD_TIMEOUT_MS);
 
   if (!response.ok) {
     if (response.status === 401 && config.authType === 'session') {
@@ -299,6 +324,7 @@ export interface CreateExerciseEntryPayload {
     rest_time?: number | null;
     notes?: string | null;
     rpe?: number | null;
+    completed_at?: string | null;
   }[];
 }
 
@@ -375,14 +401,14 @@ export async function updateExercise(
   const form = new FormData();
   form.append('exerciseData', JSON.stringify(payload));
 
-  const response = await fetch(`${baseUrl}/api/exercises/${id}`, {
+  const response = await fetchWithTimeout(`${baseUrl}/api/exercises/${id}`, {
     method: 'PUT',
     headers: {
       ...proxyHeadersToRecord(config.proxyHeaders),
       ...getAuthHeaders(config),
     },
     body: form,
-  });
+  }, UPLOAD_TIMEOUT_MS);
 
   if (!response.ok) {
     if (response.status === 401 && config.authType === 'session') {

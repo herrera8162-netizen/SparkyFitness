@@ -4,7 +4,7 @@ import Toast from 'react-native-toast-message';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { useCSSVariable } from 'uniwind';
-import { useServerConnection, useServerConfigs, usePreferences, queryClient } from '../hooks';
+import { useServerConnection, useServerConfigs, usePreferences, queryClient, useCycleMode } from '../hooks';
 import DevTools from '../components/DevTools';
 import PrivacyPolicyModal from '../components/PrivacyPolicyModal';
 import SettingsRow, { SettingsRowGroup } from '../components/SettingsRow';
@@ -36,6 +36,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
   const { isConnected } = useServerConnection();
   const { activeConfig } = useServerConfigs();
   const { preferences: userPreferences } = usePreferences({ enabled: isConnected });
+  const { discreetMode } = useCycleMode();
   const [isSharing, setIsSharing] = useState<boolean>(false);
   const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null);
 
@@ -55,7 +56,7 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
     ? `Last synced ${formatRelativeTime(new Date(lastSyncedTime))}`
     : 'Never synced';
 
-  const [success, danger, catSlate, catPink, catViolet, catOrange, catCalories, hydration, macroGreen] = useCSSVariable([
+  const [success, danger, catSlate, catPink, catViolet, catOrange, catCalories, hydration, macroGreen, catTeal] = useCSSVariable([
     '--color-icon-success',
     '--color-bg-danger',
     '--color-cat-slate',
@@ -65,7 +66,8 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
     '--color-calories',
     '--color-hydration',
     '--color-cat-green',
-  ]) as [string, string, string, string, string, string, string, string, string];
+    '--color-cat-teal',
+  ]) as [string, string, string, string, string, string, string, string, string, string];
 
   const serverSubtitle = activeConfig ? (
     <View className="flex-row items-center">
@@ -159,6 +161,14 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
             />
 
             <SettingsRowGroup>
+              {isConnected && activeConfig?.authType === 'session' && (
+                <SettingsRow
+                  icon="fingerprint"
+                  title="Passkeys"
+                  onPress={() => navigation.navigate('PasskeySettings')}
+                  iconColor={catSlate}
+                />
+              )}
               {isConnected && (
                 <SettingsRow
                   icon="calorie-settings"
@@ -181,6 +191,22 @@ const SettingsScreen: React.FC<SettingsScreenProps> = ({ navigation }) => {
                   title="Dashboard Settings"
                   onPress={() => navigation.navigate('DashboardSettings')}
                   iconColor={macroGreen}
+                />
+              )}
+              {isConnected && (
+                <SettingsRow
+                  icon="diary-settings"
+                  title="Diary Settings"
+                  onPress={() => navigation.navigate('DiarySettings')}
+                  iconColor={catTeal}
+                />
+              )}
+              {isConnected && (
+                <SettingsRow
+                  icon="wellness"
+                  title={discreetMode ? 'Wellness Settings' : 'Cycle & Pregnancy'}
+                  onPress={() => navigation.navigate('CycleSettings')}
+                  iconColor={catPink}
                 />
               )}
               <SettingsRow

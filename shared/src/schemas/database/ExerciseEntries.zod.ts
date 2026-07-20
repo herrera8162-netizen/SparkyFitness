@@ -22,6 +22,7 @@ export const exerciseEntriesSchema = z.object({
   duration_minutes: z.number(),
   calories_burned: z.number(),
   entry_date: z.date().nullable(),
+  entry_time: z.string().nullable(),
   notes: z.string().nullable(),
   created_at: z.date().nullable(),
   updated_at: z.date(),
@@ -46,6 +47,7 @@ export const exerciseEntriesSchema = z.object({
   avg_heart_rate: z.number().nullable(),
   exercise_preset_entry_id: exercisePresetEntriesIdSchema.nullable(),
   sort_order: z.number().nullable(),
+  superset_group: z.number().nullable(),
 });
 
 export const exerciseEntriesInitializerSchema = z.object({
@@ -55,6 +57,7 @@ export const exerciseEntriesInitializerSchema = z.object({
   duration_minutes: z.number(),
   calories_burned: z.number(),
   entry_date: z.date().optional().nullable(),
+  entry_time: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
   created_at: z.date().optional().nullable(),
   updated_at: z.date().optional(),
@@ -81,6 +84,7 @@ export const exerciseEntriesInitializerSchema = z.object({
   avg_heart_rate: z.number().optional().nullable(),
   exercise_preset_entry_id: exercisePresetEntriesIdSchema.optional().nullable(),
   sort_order: z.number().optional().nullable(),
+  superset_group: z.number().optional().nullable(),
 });
 
 export const exerciseEntriesMutatorSchema = z.object({
@@ -90,6 +94,7 @@ export const exerciseEntriesMutatorSchema = z.object({
   duration_minutes: z.number().optional(),
   calories_burned: z.number().optional(),
   entry_date: z.date().optional().nullable(),
+  entry_time: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
   created_at: z.date().optional().nullable(),
   updated_at: z.date().optional(),
@@ -116,6 +121,7 @@ export const exerciseEntriesMutatorSchema = z.object({
   avg_heart_rate: z.number().optional().nullable(),
   exercise_preset_entry_id: exercisePresetEntriesIdSchema.optional().nullable(),
   sort_order: z.number().optional().nullable(),
+  superset_group: z.number().optional().nullable(),
 });
 
 export type ExerciseEntries = z.infer<typeof exerciseEntriesSchema>;

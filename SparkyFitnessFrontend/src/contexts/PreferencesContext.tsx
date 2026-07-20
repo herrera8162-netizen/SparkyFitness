@@ -15,6 +15,7 @@ import {
   MineralCalculationAlgorithm,
   VitaminCalculationAlgorithm,
   SugarCalculationAlgorithm,
+  AddedSugarAlgorithm,
 } from '@/types/nutrientAlgorithms';
 import { BmrAlgorithm } from '@/services/bmrService';
 import { BodyFatAlgorithm } from '@/services/bodyCompositionService';
@@ -103,6 +104,7 @@ interface PreferencesContextType {
   mineralCalculationAlgorithm: MineralCalculationAlgorithm;
   vitaminCalculationAlgorithm: VitaminCalculationAlgorithm;
   sugarCalculationAlgorithm: SugarCalculationAlgorithm;
+  addedSugarAlgorithm: AddedSugarAlgorithm;
   exerciseCaloriePercentage: number;
   activityLevel: ActivityLevel;
   tdeeAllowNegativeAdjustment: boolean;
@@ -151,6 +153,7 @@ interface PreferencesContextType {
     algorithm: VitaminCalculationAlgorithm
   ) => void;
   setSugarCalculationAlgorithm: (algorithm: SugarCalculationAlgorithm) => void;
+  setAddedSugarAlgorithm: (algorithm: AddedSugarAlgorithm) => void;
   setSelectedDiet: (diet: string) => void;
   setFirstDayOfWeek: (day: DayOfWeek) => void;
   convertWeight: (value: number, from: WeightUnit, to: WeightUnit) => number;
@@ -186,7 +189,6 @@ export interface DefaultPreferences {
   default_weight_unit: WeightUnit;
   default_measurement_unit: MeasurementUnit;
   default_distance_unit: DistanceUnit;
-  system_prompt: string;
   auto_clear_history: string;
   logging_level: LoggingLevel;
   timezone: string;
@@ -216,6 +218,7 @@ export interface DefaultPreferences {
   mineral_calculation_algorithm: MineralCalculationAlgorithm;
   vitamin_calculation_algorithm: VitaminCalculationAlgorithm;
   sugar_calculation_algorithm: SugarCalculationAlgorithm;
+  added_sugar_algorithm: AddedSugarAlgorithm;
   first_day_of_week: number;
   measurement_decimal_places: number;
   goal_mode: GoalMode;
@@ -318,6 +321,8 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
     useState<SugarCalculationAlgorithm>(
       SugarCalculationAlgorithm.WHO_GUIDELINES
     );
+  const [addedSugarAlgorithm, setAddedSugarAlgorithmState] =
+    useState<AddedSugarAlgorithm>(AddedSugarAlgorithm.WHO_IDEAL);
   const [selectedDiet, setSelectedDietState] = useState<string>('balanced');
   const [firstDayOfWeek, setFirstDayOfWeekState] = useState<DayOfWeek>(0);
   const [measurementDecimalPlaces, setMeasurementDecimalPlacesState] =
@@ -573,8 +578,6 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
         default_weight_unit: 'kg',
         default_measurement_unit: 'cm',
         default_distance_unit: 'km',
-        system_prompt:
-          'You are Sparky, a helpful AI assistant for health and fitness tracking.',
         auto_clear_history: 'never',
         logging_level: 'ERROR' as const,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -698,6 +701,9 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
         setSugarCalculationAlgorithmState(
           data.sugar_calculation_algorithm ||
             SugarCalculationAlgorithm.WHO_GUIDELINES
+        );
+        setAddedSugarAlgorithmState(
+          data.added_sugar_algorithm || AddedSugarAlgorithm.WHO_IDEAL
         );
         setSelectedDietState(data.selected_diet || 'balanced');
         setFirstDayOfWeekState(data.first_day_of_week ?? 0);
@@ -864,6 +870,8 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
           newPrefs?.vitaminCalculationAlgorithm ?? vitaminCalculationAlgorithm,
         sugar_calculation_algorithm:
           newPrefs?.sugarCalculationAlgorithm ?? sugarCalculationAlgorithm,
+        added_sugar_algorithm:
+          newPrefs?.addedSugarAlgorithm ?? addedSugarAlgorithm,
         selected_diet: newPrefs?.selectedDiet ?? selectedDiet,
         first_day_of_week: newPrefs?.firstDayOfWeek ?? firstDayOfWeek,
         measurement_decimal_places:
@@ -923,6 +931,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       mineralCalculationAlgorithm,
       vitaminCalculationAlgorithm,
       sugarCalculationAlgorithm,
+      addedSugarAlgorithm,
       selectedDiet,
       firstDayOfWeek,
       measurementDecimalPlaces,
@@ -1158,6 +1167,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       mineralCalculationAlgorithm,
       vitaminCalculationAlgorithm,
       sugarCalculationAlgorithm,
+      addedSugarAlgorithm,
       selectedDiet,
       firstDayOfWeek,
       measurementDecimalPlaces,
@@ -1199,6 +1209,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       setMineralCalculationAlgorithm: setMineralCalculationAlgorithmState,
       setVitaminCalculationAlgorithm: setVitaminCalculationAlgorithmState,
       setSugarCalculationAlgorithm: setSugarCalculationAlgorithmState,
+      setAddedSugarAlgorithm: setAddedSugarAlgorithmState,
       setSelectedDiet: setSelectedDietState,
       setFirstDayOfWeek: setFirstDayOfWeekState,
       convertWeight,
@@ -1246,6 +1257,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       mineralCalculationAlgorithm,
       vitaminCalculationAlgorithm,
       sugarCalculationAlgorithm,
+      addedSugarAlgorithm,
       selectedDiet,
       firstDayOfWeek,
       measurementDecimalPlaces,

@@ -6,6 +6,7 @@ import { debug, info, error } from '@/utils/logging';
 import {
   Home,
   Activity, // Used for Check-In
+  CalendarHeart,
   BarChart3,
   Utensils, // Used for Foods
   Settings as SettingsIcon,
@@ -40,6 +41,7 @@ import { usePreferences } from '@/contexts/PreferencesContext';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useMealTypes } from '@/hooks/Diary/useMealTypes';
 import { useCurrentVersionQuery } from '@/hooks/useGeneralQueries';
+import { useCycleSettings } from '@/hooks/useCycle';
 import { cn } from '@/lib/utils';
 import { getGridClassNormal } from '@/utils/layout';
 
@@ -81,6 +83,9 @@ const MainLayout: React.FC<MainLayoutProps> = ({
   // Fetch meal types for quick log menu
   const { data: mealTypes } = useMealTypes();
 
+  // Fetch cycle settings to determine tab visibility
+  const { data: cycleSettings } = useCycleSettings();
+
   const handleSignOut = async () => {
     info(loggingLevel, 'MainLayout: Attempting to sign out.');
     try {
@@ -103,8 +108,26 @@ const MainLayout: React.FC<MainLayoutProps> = ({
   const addCompItems: AddCompItem[] = useMemo(() => {
     const items: AddCompItem[] = [];
     if (!isActingOnBehalf) {
+      // Keep this order consistent with the desktop tab order in availableTabs:
+      // Check-In, Cycle, Medications, Foods, Exercises, Goals.
+      items.push({ value: 'checkin', label: 'Check-In', icon: Activity });
+      if (cycleSettings?.enabled) {
+        items.push({
+          value: 'cycle',
+          label: cycleSettings.discreet_mode
+            ? t('nav.wellness', 'Wellness')
+            : cycleSettings.mode === 'pregnant'
+              ? t('nav.pregnancy', 'Pregnancy')
+              : t('nav.cycle', 'Cycle'),
+          icon: cycleSettings.discreet_mode ? Activity : CalendarHeart,
+        });
+      }
       items.push(
-        { value: 'checkin', label: 'Check-In', icon: Activity },
+        {
+          value: 'medications',
+          label: t('nav.medications', 'Medications'),
+          icon: Pill,
+        },
         { value: 'foods', label: 'Foods', icon: Utensils },
         {
           value: 'exercises',
@@ -133,7 +156,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({
       }
     }
     return items;
-  }, [isActingOnBehalf, hasWritePermission, t]);
+  }, [isActingOnBehalf, hasWritePermission, cycleSettings, t]);
 
   // Map meal type names to icons
   const getMealTypeIcon = useCallback((name: string): LucideIcon => {
@@ -196,7 +219,20 @@ const MainLayout: React.FC<MainLayoutProps> = ({
     if (!isActingOnBehalf) {
       tabs.push(
         { value: '/', label: t('nav.diary'), icon: Home },
-        { value: '/checkin', label: t('nav.checkin'), icon: Activity },
+        { value: '/checkin', label: t('nav.checkin'), icon: Activity }
+      );
+      if (cycleSettings?.enabled) {
+        tabs.push({
+          value: '/cycle',
+          label: cycleSettings.discreet_mode
+            ? t('nav.wellness', 'Wellness')
+            : cycleSettings.mode === 'pregnant'
+              ? t('nav.pregnancy', 'Pregnancy')
+              : t('nav.cycle', 'Cycle'),
+          icon: cycleSettings.discreet_mode ? Activity : CalendarHeart,
+        });
+      }
+      tabs.push(
         {
           value: '/medications',
           label: t('nav.medications', 'Medications'),
@@ -249,6 +285,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({
     loggingLevel,
     user?.role,
     t,
+    cycleSettings,
   ]);
 
   const availableMobileTabs = useMemo(() => {
@@ -259,6 +296,8 @@ const MainLayout: React.FC<MainLayoutProps> = ({
       isAddCompOpen,
     });
     const mobileTabs = [];
+    // Cycle/Pregnancy and Medications live in the "+" Add menu on mobile
+    // (see addCompItems), not the bottom bar, to keep the bar uncluttered.
     if (!isActingOnBehalf) {
       mobileTabs.push(
         { value: '/', label: t('nav.diary'), icon: Home },
@@ -288,6 +327,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({
           icon: BarChart3,
         });
       }
+      // Delegates have no "+" Add menu on mobile, so medications stays in the bar.
       if (hasWritePermission('can_manage_medications')) {
         mobileTabs.push({
           value: '/medications',

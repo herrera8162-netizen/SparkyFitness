@@ -30,13 +30,16 @@ const ICON_MAP = {
   'remove': { sf: 'minus', ion: 'remove' },
   'arrow-up': { sf: 'arrow.up', ion: 'arrow-up' },
   'close': { sf: 'xmark', ion: 'close' },
+  'ellipsis-horizontal': { sf: 'ellipsis', ion: 'ellipsis-horizontal' },
   'search': { sf: 'magnifyingglass', ion: 'search-outline' },
   'save': { sf: 'square.and.arrow.down', ion: 'save-outline' },
   'share': { sf: 'square.and.arrow.up', ion: 'share-outline' },
   'bookmark': { sf: 'bookmark', ion: 'bookmark-outline' },
   'bookmark-filled': { sf: 'bookmark.fill', ion: 'bookmark' },
+  'star': { sf: 'star.fill', ion: 'star' },
   'link': { sf: 'link', ion: 'link-outline' },
   'checkmark-circle': { sf: 'checkmark.circle', ion: 'checkmark-circle-outline' },
+  'checkmark-circle-filled': { sf: 'checkmark.circle.fill', ion: 'checkmark-circle' },
   'radio-button-on': { sf: 'circle.inset.filled', ion: 'radio-button-on' },
   'radio-button-off': { sf: 'circle', ion: 'radio-button-off' },
   'camera-reverse': { sf: 'camera.rotate', ion: 'camera-reverse-outline' },
@@ -47,8 +50,13 @@ const ICON_MAP = {
   'play': { sf: 'play.fill', ion: 'play' },
   'stop': { sf: 'stop.fill', ion: 'stop' },
   'forward': { sf: 'forward.fill', ion: 'play-skip-forward' },
+  'skip-forward': { sf: 'forward.end.fill', ion: 'play-skip-forward' },
   'measurements': { sf: 'ruler', ion: 'analytics-outline' },
   'scale': { sf: 'scalemass', ion: 'scale-outline' },
+  // Android uses -outline variants for stroke-weight consistency with the set.
+  'reorder-handle': { sf: 'line.3.horizontal', ion: 'reorder-three-outline' },
+  'swap-vertical': { sf: 'arrow.up.arrow.down', ion: 'swap-vertical-outline' },
+  'arrow-undo': { sf: 'arrow.uturn.backward', ion: 'arrow-undo-outline' },
 
   // Status
   'shield-checkmark': { sf: 'checkmark.shield', ion: 'shield-checkmark-outline' },
@@ -73,6 +81,8 @@ const ICON_MAP = {
 
   // Exercise
   'timer': { sf: 'timer', ion: 'timer-outline' },
+  'history': { sf: 'clock.arrow.circlepath', ion: 'time-outline' },
+  'trophy': { sf: 'trophy.fill', ion: 'trophy' },
   'exercise': { sf: 'flame.fill', ion: 'flame' },
   'exercise-running': { sf: 'figure.run', ion: 'walk-outline' },
   'exercise-running-filled': { sf: 'figure.run', ion: 'walk' },
@@ -113,6 +123,7 @@ const ICON_MAP = {
   'calorie-settings': { sf: 'flame', ion: 'flame-outline' },
   'food-search-settings': { sf: 'magnifyingglass', ion: 'search-outline' },
   'dashboard-settings': { sf: 'square.grid.2x2', ion: 'grid-outline' },
+  'diary-settings': { sf: 'book', ion: 'book-outline' },
   'app-settings': { sf: 'slider.horizontal.3', ion: 'options-outline' },
   'logs': { sf: 'doc.plaintext', ion: 'document-text-outline' },
   'about': { sf: 'info.circle', ion: 'information-circle-outline' },
@@ -120,6 +131,14 @@ const ICON_MAP = {
 
   // AI features
   'sparkles': { sf: 'sparkles', ion: 'sparkles' },
+
+  // Biometrics/Security
+  'fingerprint': { sf: 'touchid', ion: 'finger-print-outline' },
+  'lock-closed': { sf: 'lock.fill', ion: 'lock-closed-outline' },
+
+  // Wellness / Cycle
+  'wellness': { sf: 'heart.circle', ion: 'heart-circle-outline' },
+  'calendar': { sf: 'calendar', ion: 'calendar-outline' },
 } as const;
 
 export type IconName = keyof typeof ICON_MAP;
@@ -130,6 +149,9 @@ interface IconProps {
   color?: string;
   style?: StyleProp<ViewStyle>;
   weight?: SymbolViewProps['weight'];
+  // Forwarded to the underlying glyph so a meaningful icon (e.g. the favorite
+  // star) is announced. Omit for purely decorative icons sitting next to text.
+  accessibilityLabel?: string;
 }
 
 /**
@@ -142,6 +164,7 @@ const Icon: React.FC<IconProps> = ({
   color = '#000000',
   style,
   weight = 'regular',
+  accessibilityLabel,
 }) => {
   const mapping = ICON_MAP[name];
 
@@ -153,6 +176,7 @@ const Icon: React.FC<IconProps> = ({
         tintColor={color}
         style={style}
         weight={weight}
+        accessibilityLabel={accessibilityLabel}
       />
     );
   }
@@ -163,6 +187,7 @@ const Icon: React.FC<IconProps> = ({
       size={size}
       color={color}
       style={style}
+      accessibilityLabel={accessibilityLabel}
     />
   );
 };

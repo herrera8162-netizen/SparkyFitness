@@ -7,12 +7,21 @@ const dateStringSchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Entry date must be in YYYY-MM-DD format.");
 
+const timeStringSchema = z
+  .string()
+  .regex(
+    /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/,
+    "Entry time must be in HH:MM (24h) format.",
+  );
+
 /** Query params for the paginated exercise history endpoint */
 export const exerciseHistoryQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).default(1),
     pageSize: z.coerce.number().int().min(1).max(100).default(20),
     userId: z.string().uuid().optional(),
+    /** Only sessions containing this exercise (standalone entries or preset children). */
+    exerciseId: z.string().uuid().optional(),
     // RN's fetch (whatwg-fetch) appends `_=<timestamp>` to GET URLs when a
     // caller passes `cache: 'no-store'`, so the strict schema must tolerate it.
     _: z.string().optional(),
@@ -64,6 +73,8 @@ export const exerciseEntrySetResponseSchema = z
     rest_time: z.number().nullable(),
     notes: z.string().nullable(),
     rpe: z.number().nullable(),
+    completed_at: z.string().nullable(),
+    is_pr: z.boolean(),
   })
   .strict();
 
@@ -90,6 +101,8 @@ export const exerciseEntrySetRequestSchema = z
     rest_time: z.number().nullable().optional(),
     notes: z.string().nullable().optional(),
     rpe: z.number().nullable().optional(),
+    completed_at: z.iso.datetime().nullable().optional(),
+    is_pr: z.boolean().optional(),
   })
   .strict();
 
@@ -99,8 +112,13 @@ export const presetSessionExerciseRequestSchema = z
     exercise_id: z.string().uuid(),
     sort_order: z.number().int().min(0).default(0),
     duration_minutes: z.number().min(0).default(0),
+    // Manual per-exercise override; when omitted the server recomputes
+    // calories from duration and sets.
+    calories_burned: z.number().min(0).optional(),
     notes: z.string().nullable().optional(),
+    superset_group: z.number().int().nullable().optional(),
     sets: z.array(exerciseEntrySetRequestSchema).default([]),
+    entry_time: timeStringSchema.nullish(),
   })
   .strict();
 
@@ -169,6 +187,7 @@ export const createExerciseEntryRequestSchema = z
     duration_minutes: z.coerce.number().min(0).default(0),
     calories_burned: z.coerce.number().min(0).default(0),
     entry_date: dateStringSchema,
+    entry_time: timeStringSchema.nullish(),
     notes: z.string().nullable().optional(),
     sets: z.array(exerciseEntrySetRequestSchema).optional(),
     reps: z.coerce.number().nullable().optional(),
@@ -194,6 +213,7 @@ export const exerciseEntryResponseSchema = z
     duration_minutes: z.number(),
     calories_burned: z.number(),
     entry_date: z.string().nullable(),
+    entry_time: z.string().nullish(),
     notes: z.string().nullable(),
     distance: z.number().nullable(),
     avg_heart_rate: z.number().nullable(),
@@ -206,6 +226,7 @@ export const exerciseEntryResponseSchema = z
     activity_details: z.array(activityDetailResponseSchema),
     steps: z.number().nullable().optional(),
     category: z.string().nullable().optional(),
+    superset_group: z.number().int().nullable(),
   })
   .strict();
 
@@ -265,6 +286,36 @@ export const exerciseHistoryResponseSchema = z
   })
   .strict();
 
+// --- FIT file import endpoint ---
+
+/** Outcome for a single uploaded FIT file within an import batch */
+export const importFitFileResultSchema = z
+  .object({
+    fileName: z.string(),
+    status: z.enum(["created", "updated", "failed"]),
+    reason: z.string().optional(),
+    warning: z.string().optional(),
+    exerciseEntryId: z.string().optional(),
+    entryDate: dateStringSchema.optional(),
+    activityName: z.string().optional(),
+    sport: z.string().optional(),
+  })
+  .strict();
+
+/**
+ * FIT import responses are always 200 with mixed per-file results; per-file
+ * failures are ordinary rows, not HTTP errors.
+ */
+export const importFitResponseSchema = z
+  .object({
+    message: z.string(),
+    created: z.number().int().min(0),
+    updated: z.number().int().min(0),
+    failed: z.number().int().min(0),
+    results: z.array(importFitFileResultSchema),
+  })
+  .strict();
+
 // --- Per-exercise stats endpoint ---
 
 export const exerciseSetStatsSchema = z
@@ -276,10 +327,30 @@ export const exerciseSetStatsSchema = z
   })
   .strict();
 
+export const exerciseRecentSessionSetSchema = z
+  .object({
+    setNumber: z.number().int(),
+    setType: z.string().nullable(),
+    weight: z.number().nullable(),
+    reps: z.number().int().nullable(),
+  })
+  .strict()
+  .refine((s) => s.weight != null || s.reps != null, {
+    message: "Recent-session sets must have weight or reps",
+  });
+
+export const exerciseRecentSessionSchema = z
+  .object({
+    entryDate: dateStringSchema,
+    sets: z.array(exerciseRecentSessionSetSchema).min(1),
+  })
+  .strict();
+
 export const exerciseStatsResponseSchema = z
   .object({
     bestSet: exerciseSetStatsSchema.nullable(),
     lastSet: exerciseSetStatsSchema.nullable(),
+    recentSessions: z.array(exerciseRecentSessionSchema).max(3),
   })
   .strict();
 
@@ -328,4 +399,12 @@ export type ExerciseProgressResponse = z.infer<
   typeof exerciseProgressResponseSchema
 >;
 export type ExerciseSetStats = z.infer<typeof exerciseSetStatsSchema>;
+export type ExerciseRecentSessionSet = z.infer<
+  typeof exerciseRecentSessionSetSchema
+>;
+export type ExerciseRecentSession = z.infer<
+  typeof exerciseRecentSessionSchema
+>;
 export type ExerciseStatsResponse = z.infer<typeof exerciseStatsResponseSchema>;
+export type ImportFitFileResult = z.infer<typeof importFitFileResultSchema>;
+export type ImportFitResponse = z.infer<typeof importFitResponseSchema>;

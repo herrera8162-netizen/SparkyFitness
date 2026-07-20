@@ -1,8 +1,15 @@
 # AGENTS.md
 
-_Last updated: 2026-06-11_
+_Last updated: 2026-07-16_
 
 SparkyFitness Server is the backend API package for the SparkyFitness monorepo. Use this file as the primary guide for work inside `SparkyFitnessServer/`.
+
+**Quick Links for AI Tools:** See `../agent-docs/README.md` for:
+
+- `file-and-domain-reference.md` — Where to find server code by feature
+- `testing-patterns.md` — How to test routes, services, repositories, and RLS
+- `architecture-permissions.md` — Permission types and RLS patterns
+- `new-migration-checklist.md` — 8-step database change checklist
 
 If a task also touches `shared/`, the frontend, or the mobile app, read the relevant package guide before editing outside this directory. Use `../AGENTS.md` for monorepo-level context.
 
@@ -21,7 +28,7 @@ If a task also touches `shared/`, the frontend, or the mobile app, read the rele
 - Stack: Express 5, PostgreSQL via `pg`, Better Auth, Zod, TypeScript 5, Vitest 4, ESLint 10
 - Module system: ESM with `type: "module"` and `moduleResolution: "NodeNext"`
 - The package is now effectively TypeScript-first; almost all source files are `.ts`
-- Main domains: food and meal tracking, exercise logging, health and sleep data, reporting, AI chat, onboarding, identity, admin tooling, and external provider integrations
+- Main domains: food and meal tracking, exercise logging, health and sleep data, sleep science, fasting, medications, mood, menstrual cycle and pregnancy, reporting, AI chat, onboarding, identity, admin tooling, and external provider integrations
 
 ## Verified Commands
 
@@ -116,7 +123,8 @@ When searching, ignore noisy/generated directories unless you explicitly need th
   - `SPARKY_FITNESS_FRONTEND_URL`
   - `SPARKY_FITNESS_API_ENCRYPTION_KEY`
 - `BETTER_AUTH_SECRET` is currently soft-required: startup will generate a temporary value if it is missing, but that is only appropriate for throwaway local runs because sessions will not survive restarts
-- Common operational toggles include `SPARKY_FITNESS_SERVER_PORT`, `SPARKY_FITNESS_ADMIN_EMAIL`, `ALLOW_PRIVATE_NETWORK_CORS`, `SPARKY_FITNESS_EXTRA_TRUSTED_ORIGINS`, and `BETTER_AUTH_URL`
+- Common operational toggles include `SPARKY_FITNESS_SERVER_PORT`, `SPARKY_FITNESS_ADMIN_EMAIL`, `ALLOW_PRIVATE_NETWORK_CORS`, `ALLOW_PRIVATE_NETWORK_AI`, `SPARKY_FITNESS_EXTRA_TRUSTED_ORIGINS`, and `BETTER_AUTH_URL`
+- `ALLOW_PRIVATE_NETWORK_AI=true` lets non-admin users use custom AI service URLs (`custom`/`ollama`/`openai_compatible`) that resolve to private/internal addresses; default off is an SSRF guard enforced by `utils/outboundUrlPolicy.ts` at save/test time and again in the runtime guarded fetch path. Current admins and global admin-created AI settings can use private URLs for self-hosted providers like Ollama
 
 ### TypeScript and Module Conventions
 
@@ -140,12 +148,14 @@ When searching, ignore noisy/generated directories unless you explicitly need th
 - `getClient(...)` sets `public.set_app_context(...)`; that is what makes row-level security work correctly
 - Use `getSystemClient()` only for admin, migration, startup, or policy-management work that intentionally bypasses RLS
 - Always release database clients in a `finally` block
+- To learn a table's current shape, read `../shared/src/schemas/database/<Table>.zod.ts` (one small Zod file per table) instead of reading `../db_schema_backup.sql` or reconstructing it from the 185 migration files
 - New migrations belong in `db/migrations/` and must use `YYYYMMDDHHMMSS_description.sql`
-- If you add or change a migration, also update `../db_schema_backup.sql` in the same change
-- If you add a new table or change user-visible access behavior, you MUST:
+- **Never manually edit `../db_schema_backup.sql`** — use the backup script instead: `./db_backup.sh` (Mac/Linux) or `DB Backup.cmd` (Windows) from repo root. Boot the server first to apply the migration, then run the script to sync the backup.
+- If you add a new table or change user-visible access behavior, follow `../agent-docs/new-migration-checklist.md`. In short, you MUST:
   1. Add/modify the RLS policies in `db/rls_policies.sql`.
   2. Update the user-facing documentation in `../docs/content/2.features/9.family-friends-sharing.md`.
   3. Update the developer-facing documentation in `../docs/content/8.developer/11.database-security-tiers.md` to define its security tier (Tier 1, Tier 2, or Tier 3).
+  4. Add or update the matching Zod schema in `../shared/src/schemas/database/`.
 - Startup automatically applies migrations and then reapplies RLS policies; do not create alternate migration mechanisms
 
 ### Auth and Request Context
@@ -179,8 +189,8 @@ When searching, ignore noisy/generated directories unless you explicitly need th
 ### Integrations and Background Work
 
 - Provider-specific adapters live under `integrations/`; coordinating logic usually lives in `services/` and persistence in `models/`
-- Current adapters span food/nutrition (OpenFoodFacts, FatSecret, Nutritionix, USDA, Mealie, Tandoor, Norish, SwissFood, Yazio), fitness devices (Garmin, Withings, Fitbit, Polar, Strava, Hevy), exercise databases (Wger, FreeExerciseDB), and health-data import (Google Health, generic/mobile health data)
-- Scheduled jobs currently include backups, session cleanup, and hourly sync loops for Withings, Garmin, Fitbit, Polar, and Strava
+- Current adapters span food/nutrition (OpenFoodFacts, FatSecret, Nutritionix, USDA, Mealie, Tandoor, Norish, SwissFood, Yazio), fitness devices (Garmin Connect sync plus FIT file import via `integrations/garminfit/` + `services/fitImportService.ts`, Withings, Fitbit, Oura, Polar, Strava, Hevy), exercise databases (Wger, FreeExerciseDB), and health-data import (Google Health, generic/mobile health data)
+- Scheduled jobs currently include backups, session cleanup, and hourly sync loops for Withings, Garmin, Fitbit, Oura, Polar, and Strava
 - Integration work often spans route, service, repository, cron, and external-provider settings code; inspect the whole path before calling the work complete
 
 ### AI Services
@@ -188,7 +198,7 @@ When searching, ignore noisy/generated directories unless you explicitly need th
 - AI calls go through the Vercel `ai` SDK (v6) with provider adapters for OpenAI, Anthropic, and Google, plus OpenAI-compatible, Mistral, Groq, OpenRouter, and Ollama service types
 - `ai/config.ts` holds default model and vision-model selection per provider; `ai/providerDispatch.ts` is the unified dispatch helper used by chat, food-photo analysis, nutrition-label scan, and unit conversion
 - Prefer routing new AI features through `providerDispatch.ts` instead of calling provider SDKs directly
-- Chatbot tool calls run in-process through the registry in `ai/tools/`; the chat path does not use the external `SparkyFitnessMCP/` server (that package now serves external MCP clients only)
+- Chatbot tool calls run in-process through the registry in `ai/tools/`
 - `ai/tools/index.ts` exposes `buildChatbotTools(userId, tz)`, composing the per-domain builders (`build<Domain>Tools` in `ai/tools/<domain>Tools.ts`); handlers close over the authenticated user — so two-actor services receive `(userId, userId, ...)` — and the user's IANA timezone, used for "today" defaults and day bucketing
 - Tool handlers follow a fixed contract: publish a flat Zod schema, validate with a strict union `safeParse` inside `execute`, orchestrate through existing services and repositories, and never throw - errors come back as `ERRORS.*` strings from `ai/tools/errors.ts`
 - Tool output text is a parity contract with the MCP tool set; golden tests in `tests/chatbotTools*.test.ts` assert exact returned strings, so do not reword tool output casually
@@ -217,12 +227,32 @@ When searching, ignore noisy/generated directories unless you explicitly need th
   inspect the relevant `integrations/*` code, then the matching service and repository files
 - Health data or date bucketing issue:
   inspect `integrations/healthData/healthDataRoutes.ts`, `services/measurementService.ts`, and `utils/timezoneLoader.ts`
+- Self-service "delete synced data by source" issue:
+  inspect `routes/syncedDataRoutes.ts`, `services/syncedDataService.ts`, and `models/syncedDataRepository.ts` (the `SYNCED_SOURCE_TABLES` whitelist)
 - AI chat or chatbot tool issue:
   inspect `services/chatService.ts`, `ai/tools/`, and the matching domain service and repository
+- Fasting or mood issue:
+  inspect `routes/fastingRoutes.ts` / `routes/moodRoutes.ts` and `models/fastingRepository.ts` / `models/moodRepository.ts`
+- Medications, cycle, or pregnancy issue:
+  inspect the matching v2 route (`routes/v2/medicationRoutes.ts`, `routes/v2/cycleRoutes.ts`, `routes/v2/pregnancyRoutes.ts`), its Zod schema in `schemas/`, then `services/cycleService.ts` / `services/pregnancyService.ts` and the `models/medication*Repository.ts` / `models/cycleRepository.ts` / `models/pregnancyRepository.ts` files
+- Sleep or sleep-science issue:
+  inspect `routes/sleepRoutes.ts`, `routes/sleepScienceRoutes.ts`, `services/sleepAnalyticsService.ts`, `services/sleepScienceService.ts`, and the sleep repositories
+
+## Architecture Resources
+
+Before adding a feature or changing auth/permission behavior, read:
+
+- `../docs/content/8.developer/4.database.md` — Quick table index (all ~120 tables with purpose) + migration best practices
+- `../docs/content/8.developer/11.database-security-tiers.md` — Security tier, permission type, and RLS rules for every table (authoritative)
+- `../agent-docs/architecture-permissions.md` — Permission types, links to tier classification doc
+- `../agent-docs/data-flow-patterns.md` — Data flow from frontend through server to database, safe RLS patterns
+- `../agent-docs/new-domain-template.md` — Checklist for adding a major feature domain
+- `../agent-docs/anti-patterns.md` — Common mistakes (using getSystemClient(), forgetting RLS, cache invalidation, timezone bugs, cross-package contract mismatches)
 
 ## Working Rules
 
 - Match the existing service/repository/middleware layering instead of introducing parallel abstractions
+- If your change adds a new domain, route family, or table, update this file's Snapshot, Source Map, and Quick Routing sections (and the `Last updated` date) in the same change
 - If you add persisted or user-visible data, think through migration, RLS, permissions, tests, API docs, and downstream client contracts together
 - Validate shared-contract changes from the affected consumers, not just from this package
 - Keep package-specific guidance here; use `../AGENTS.md` only for cross-package context
@@ -236,7 +266,7 @@ When searching, ignore noisy/generated directories unless you explicitly need th
 
 ## Planning
 
-- Before exiting plan mode or presenting a plan, run the plan-reviewer agent first and address its feedback before showing the plan.
+- Before presenting a plan for server work, self-review it against `../agent-docs/plan-review-checklist.md` and fix any gaps first.
 
 ## Priority Rule
 

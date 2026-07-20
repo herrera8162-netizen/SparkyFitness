@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  getOpenFoodFactsSessionCookie,
+  resolveOpenFoodFactsProvider,
   invalidateOpenFoodFactsSession,
+  DEFAULT_OFF_BASE_URL,
 } from '../integrations/openfoodfacts/openFoodFactsAuth.js';
 import {
   mapOpenFoodFactsProduct,
@@ -10,8 +11,9 @@ import {
 } from '../integrations/openfoodfacts/openFoodFactsService.js';
 
 vi.mock('../integrations/openfoodfacts/openFoodFactsAuth.js', () => ({
-  getOpenFoodFactsSessionCookie: vi.fn(),
+  resolveOpenFoodFactsProvider: vi.fn(),
   invalidateOpenFoodFactsSession: vi.fn(),
+  DEFAULT_OFF_BASE_URL: 'https://world.openfoodfacts.org',
 }));
 
 global.fetch = vi.fn();
@@ -20,7 +22,10 @@ describe('openFoodFactsService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
-    getOpenFoodFactsSessionCookie.mockResolvedValue(null);
+    resolveOpenFoodFactsProvider.mockResolvedValue({
+      session: null,
+      baseUrl: DEFAULT_OFF_BASE_URL,
+    });
   });
 
   describe('searchOpenFoodFacts', () => {
@@ -82,7 +87,10 @@ describe('openFoodFactsService', () => {
   describe('authenticated request path', () => {
     it('attaches a session cookie when providerId+userId are supplied', async () => {
       // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
-      getOpenFoodFactsSessionCookie.mockResolvedValue('SESS_TOKEN');
+      resolveOpenFoodFactsProvider.mockResolvedValue({
+        session: 'SESS_TOKEN',
+        baseUrl: DEFAULT_OFF_BASE_URL,
+      });
       // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
       fetch.mockResolvedValue({
         ok: true,
@@ -97,7 +105,7 @@ describe('openFoodFactsService', () => {
         'prov-1'
       );
 
-      expect(getOpenFoodFactsSessionCookie).toHaveBeenCalledWith(
+      expect(resolveOpenFoodFactsProvider).toHaveBeenCalledWith(
         'user-A',
         'prov-1'
       );
@@ -117,7 +125,7 @@ describe('openFoodFactsService', () => {
 
       await searchOpenFoodFactsByBarcodeFields('12345678');
 
-      expect(getOpenFoodFactsSessionCookie).not.toHaveBeenCalled();
+      expect(resolveOpenFoodFactsProvider).not.toHaveBeenCalled();
       // @ts-expect-error TS(2339): Property 'mock' does not exist on type '{ (input: ... Remove this comment to see the full error message
       const headers = fetch.mock.calls[0][1].headers;
       expect(headers.Cookie).toBeUndefined();
@@ -125,7 +133,10 @@ describe('openFoodFactsService', () => {
 
     it('on 429 with cookie, invalidates and retries unauthenticated once', async () => {
       // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
-      getOpenFoodFactsSessionCookie.mockResolvedValue('SESS_TOKEN');
+      resolveOpenFoodFactsProvider.mockResolvedValue({
+        session: 'SESS_TOKEN',
+        baseUrl: DEFAULT_OFF_BASE_URL,
+      });
       fetch
         // @ts-expect-error TS(2339): Property 'mockResolvedValueOnce' does not exist on... Remove this comment to see the full error message
         .mockResolvedValueOnce({
@@ -161,7 +172,10 @@ describe('openFoodFactsService', () => {
 
     it('on 503 with cookie, retries unauthenticated and returns final response', async () => {
       // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
-      getOpenFoodFactsSessionCookie.mockResolvedValue('SESS_TOKEN');
+      resolveOpenFoodFactsProvider.mockResolvedValue({
+        session: 'SESS_TOKEN',
+        baseUrl: DEFAULT_OFF_BASE_URL,
+      });
       fetch
         // @ts-expect-error TS(2339): Property 'mockResolvedValueOnce' does not exist on... Remove this comment to see the full error message
         .mockResolvedValueOnce({
@@ -193,6 +207,74 @@ describe('openFoodFactsService', () => {
         searchOpenFoodFactsByBarcodeFields('12345678')
       ).rejects.toThrow('OpenFoodFacts API error');
       expect(fetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('self-hosted base_url resolution', () => {
+    it('builds the search URL from a resolved custom base_url', async () => {
+      // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+      resolveOpenFoodFactsProvider.mockResolvedValue({
+        session: null,
+        baseUrl: 'http://sparkyfitness-foodfacts:8080',
+      });
+      // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+      fetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ products: [], count: 0 }),
+      });
+
+      await searchOpenFoodFacts('pizza', 1, 'en', 'user-A', 'prov-1');
+
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /^http:\/\/sparkyfitness-foodfacts:8080\/cgi\/search\.pl/
+        ),
+        expect.any(Object)
+      );
+    });
+
+    it('builds the barcode URL from a resolved custom base_url', async () => {
+      // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+      resolveOpenFoodFactsProvider.mockResolvedValue({
+        session: null,
+        baseUrl: 'http://sparkyfitness-foodfacts:8080',
+      });
+      // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+      fetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ status: 1, product: {} }),
+      });
+
+      await searchOpenFoodFactsByBarcodeFields(
+        '12345678',
+        undefined,
+        'en',
+        'user-A',
+        'prov-1'
+      );
+
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /^http:\/\/sparkyfitness-foodfacts:8080\/api\/v2\/product\/12345678\.json/
+        ),
+        expect.any(Object)
+      );
+    });
+
+    it('falls back to the public default URL when no provider/base_url is configured', async () => {
+      // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+      fetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ products: [], count: 0 }),
+      });
+
+      await searchOpenFoodFacts('pizza', 1, 'en');
+
+      expect(resolveOpenFoodFactsProvider).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledWith(
+        expect.stringContaining(DEFAULT_OFF_BASE_URL),
+        expect.any(Object)
+      );
     });
   });
 
@@ -261,6 +343,159 @@ describe('openFoodFactsService', () => {
       const result = mapOpenFoodFactsProduct(product);
       expect(result.default_variant.allergens).toEqual(['soy']);
       expect(result.default_variant.traces).toBeNull();
+    });
+  });
+
+  describe('mapOpenFoodFactsProduct serving unit derivation', () => {
+    const solidBaseProduct = {
+      product_name: 'Test Bread',
+      brands: 'TestBrand',
+      code: '1234567890123',
+      serving_quantity: 50,
+      nutriments: {
+        'energy-kcal_100g': 250,
+        proteins_100g: 8,
+        carbohydrates_100g: 45,
+        fat_100g: 3,
+      },
+    };
+
+    // Real shape returned by world.openfoodfacts.org for Coca-Cola
+    // (barcode 5449000000996), verified against the live API.
+    const cocaColaProduct = {
+      product_name: 'Coca-Cola',
+      brands: 'Coca-Cola',
+      code: '5449000000996',
+      serving_size: '1 portion (330 ml)',
+      serving_quantity: 330,
+      serving_quantity_unit: 'ml',
+      product_quantity_unit: 'ml',
+      nutrition_data_per: '100g', // deliberately misleading; must be ignored
+      nutriments: {
+        'energy-kcal_100g': 42,
+        proteins_100g: 0,
+        carbohydrates_100g: 10.6,
+        fat_100g: 0,
+      },
+    };
+
+    it('uses serving_quantity_unit for a beverage, keeping nutrient values unconverted', () => {
+      const result = mapOpenFoodFactsProduct(cocaColaProduct);
+      expect(result.default_variant.serving_unit).toBe('ml');
+      expect(result.default_variant.serving_size).toBe(330);
+      // 42 kcal/100 * 330 = 138.6 -> rounds to 139, matching OFF's own
+      // energy-kcal_serving value for this product.
+      expect(result.default_variant.calories).toBe(139);
+    });
+
+    it('falls back to product_quantity_unit when serving_quantity_unit is absent', () => {
+      const { serving_quantity_unit: _omit, ...rest } = cocaColaProduct;
+      const result = mapOpenFoodFactsProduct(rest);
+      expect(result.default_variant.serving_unit).toBe('ml');
+    });
+
+    it('falls back to parsing serving_size text when no unit field is present', () => {
+      const {
+        serving_quantity_unit: _omit1,
+        product_quantity_unit: _omit2,
+        ...rest
+      } = cocaColaProduct;
+      const result = mapOpenFoodFactsProduct(rest);
+      expect(result.default_variant.serving_unit).toBe('ml');
+    });
+
+    it('defaults to g for a solid product with no unit signal (regression guard)', () => {
+      const result = mapOpenFoodFactsProduct(solidBaseProduct);
+      expect(result.default_variant.serving_unit).toBe('g');
+    });
+
+    it('ignores nutrition_data_per even though it says "100g" for a liquid', () => {
+      // Guards against reintroducing nutrition_data_per as a signal: OFF sets
+      // it to "100g" on this real beverage, so trusting it would regress the
+      // exact bug being fixed here.
+      const result = mapOpenFoodFactsProduct(cocaColaProduct);
+      expect(result.default_variant.serving_unit).not.toBe('g');
+    });
+
+    it('respects an explicit g unit for a solid product', () => {
+      const solidProduct = {
+        ...solidBaseProduct,
+        serving_quantity_unit: 'g',
+        product_quantity_unit: 'g',
+      };
+      const result = mapOpenFoodFactsProduct(solidProduct);
+      expect(result.default_variant.serving_unit).toBe('g');
+    });
+  });
+
+  describe('mapOpenFoodFactsProduct household serving variant', () => {
+    // Real shape for Pepperidge Farm Milano Double Dark Chocolate
+    // (barcode 0014100054214), verified against the live API.
+    const milanoProduct = {
+      product_name: 'Milano Double Dark Chocolate',
+      brands: 'Pepperidge Farm',
+      code: '0014100054214',
+      serving_size: '2 cookies (28 g)',
+      serving_quantity: 28,
+      serving_quantity_unit: 'g',
+      nutrition_data_per: '100g',
+      nutriments: {
+        'energy-kcal_100g': 500,
+        proteins_100g: 5,
+        carbohydrates_100g: 64,
+        fat_100g: 25,
+      },
+    };
+
+    it('adds a household variant reusing the metric nutrient values, unscaled', () => {
+      const result = mapOpenFoodFactsProduct(milanoProduct);
+      expect(result.variants).toHaveLength(2);
+
+      const metric = result.variants!.find((v) => v.serving_unit === 'g');
+      const household = result.variants!.find(
+        (v) => v.serving_unit === 'cookies'
+      );
+      expect(metric).toBeDefined();
+      expect(household).toBeDefined();
+
+      // Metric stays the default; household is non-default.
+      expect(metric!.serving_size).toBe(28);
+      expect(metric!.is_default).toBe(true);
+      expect(household!.serving_size).toBe(2);
+      expect(household!.is_default).toBe(false);
+      expect(result.default_variant.serving_unit).toBe('g');
+
+      // Same physical serving -> identical nutrient values, no rescaling.
+      expect(household!.calories).toBe(metric!.calories);
+      expect(household!.fat).toBe(metric!.fat);
+    });
+
+    it('does not add a variants array for a plain metric serving_size', () => {
+      const product = { ...milanoProduct, serving_size: '28 g' };
+      const result = mapOpenFoodFactsProduct(product);
+      expect(result.variants).toBeUndefined();
+      expect(result.default_variant.serving_unit).toBe('g');
+    });
+
+    it('handles a household volume serving like "1 cup (240 ml)"', () => {
+      const product = {
+        ...milanoProduct,
+        serving_size: '1 cup (240 ml)',
+        serving_quantity: 240,
+        serving_quantity_unit: 'ml',
+      };
+      const result = mapOpenFoodFactsProduct(product);
+      const household = result.variants?.find((v) => v.serving_unit === 'cup');
+      expect(household).toBeDefined();
+      expect(household!.serving_size).toBe(1);
+      expect(result.default_variant.serving_unit).toBe('ml');
+    });
+
+    it('does not duplicate the metric variant when the household unit is metric', () => {
+      // "28 g (28 g)" would parse a household unit of 'g' — must be skipped.
+      const product = { ...milanoProduct, serving_size: '28 g (28 g)' };
+      const result = mapOpenFoodFactsProduct(product);
+      expect(result.variants).toBeUndefined();
     });
   });
 });

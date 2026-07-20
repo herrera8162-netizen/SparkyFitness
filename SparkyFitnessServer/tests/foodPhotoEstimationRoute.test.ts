@@ -19,6 +19,10 @@ vi.mock('../services/foodService.js', () => ({
   default: { lookupBarcode: vi.fn() },
 }));
 
+vi.mock('../utils/adminCheck.js', () => ({
+  resolveIsAdmin: vi.fn(async () => false),
+}));
+
 let authenticateBehavior: 'success' | 'reject' = 'success';
 
 vi.mock('../middleware/authMiddleware.js', () => ({
@@ -69,6 +73,7 @@ const sampleEstimate = {
 describe('POST /food-crud/estimate-food-photo', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
     authenticateBehavior = 'success';
   });
 
@@ -108,7 +113,8 @@ describe('POST /food-crud/estimate-food-photo', () => {
   });
 
   it('returns 400 IMAGE_TOO_LARGE when base64 image exceeds 8MB', async () => {
-    const huge = 'a'.repeat(8 * 1024 * 1024 + 1);
+    vi.stubEnv('TEST_MAX_BASE64_IMAGE_LENGTH', '10');
+    const huge = 'a'.repeat(11);
     const res = await request(app)
       .post('/food-crud/estimate-food-photo')
       .send({ image: huge, mime_type: 'image/jpeg' });
@@ -190,6 +196,7 @@ describe('POST /food-crud/estimate-food-photo', () => {
     ['CONTENT_BLOCKED', 422],
     ['PARSE_ERROR', 422],
     ['UPSTREAM_ERROR', 502],
+    ['PRIVATE_NETWORK_FORBIDDEN', 403],
     ['TIMEOUT', 504],
   ])('maps service code %s to HTTP %i', async (code, status) => {
     // @ts-expect-error mocked
@@ -340,7 +347,8 @@ describe('POST /food-crud/estimate-food-photo', () => {
   });
 
   it('returns 400 IMAGE_TOO_LARGE when one image in the set is too large', async () => {
-    const huge = 'a'.repeat(8 * 1024 * 1024 + 1);
+    vi.stubEnv('TEST_MAX_BASE64_IMAGE_LENGTH', '10');
+    const huge = 'a'.repeat(11);
     const res = await request(app)
       .post('/food-crud/estimate-food-photo')
       .send({
@@ -356,9 +364,9 @@ describe('POST /food-crud/estimate-food-photo', () => {
   it('returns 400 IMAGE_TOO_LARGE when the combined image size exceeds the cap', async () => {
     // Each image is within the 8MB per-image limit, but four of them together
     // exceed the 24MB cumulative cap.
-    const sevenMb = 'a'.repeat(7 * 1024 * 1024);
+    vi.stubEnv('TEST_MAX_TOTAL_BASE64_LENGTH', '10');
     const images = Array.from({ length: 4 }, () => ({
-      image: sevenMb,
+      image: 'aGVsbG8=',
       mime_type: 'image/jpeg',
     }));
     const res = await request(app)

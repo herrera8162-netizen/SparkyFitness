@@ -1,7 +1,9 @@
 import { getClient } from '../db/poolManager.js';
 import exerciseRepository from '../models/exerciseRepository.js';
 import exerciseDb from '../models/exercise.js';
-import exerciseEntryDb from '../models/exerciseEntry.js';
+import exerciseEntryDb, {
+  type RecentSessionRow,
+} from '../models/exerciseEntry.js';
 import activityDetailsRepository from '../models/activityDetailsRepository.js';
 import exercisePresetEntryRepository from '../models/exercisePresetEntryRepository.js';
 import preferenceRepository from '../models/preferenceRepository.js';
@@ -211,15 +213,58 @@ function mapSetStatsRow(row: any) {
     setNumber: row.set_number,
   };
 }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getExerciseStats(userId: any, exerciseId: any) {
-  const [bestRow, lastRow] = await Promise.all([
-    exerciseEntryDb.getBestSetForExercise(userId, exerciseId),
-    exerciseEntryDb.getLastSetForExercise(userId, exerciseId),
+// The DB holds cross-source set_type variants ('Warm-up', 'Warm-up Set', ...);
+// mirror the fuzzy SQL warmup match so clients can compare against 'warmup'.
+function normalizeSetType(setType: string | null): string | null {
+  if (setType === null) {
+    return null;
+  }
+  return setType
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .startsWith('warmup')
+    ? 'warmup'
+    : setType;
+}
+function mapRecentSessionRow(row: RecentSessionRow) {
+  return {
+    entryDate: row.entry_date,
+    sets: (row.sets ?? []).map((s) => ({
+      setNumber: s.set_number,
+      setType: normalizeSetType(s.set_type),
+      weight: s.weight,
+      reps: s.reps,
+    })),
+  };
+}
+async function getExerciseStats(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  userId: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  exerciseId: any,
+  excludePresetEntryId: string | null = null
+) {
+  const [bestRow, lastRow, recentRows] = await Promise.all([
+    exerciseEntryDb.getBestSetForExercise(
+      userId,
+      exerciseId,
+      excludePresetEntryId
+    ),
+    exerciseEntryDb.getLastSetForExercise(
+      userId,
+      exerciseId,
+      excludePresetEntryId
+    ),
+    exerciseEntryDb.getRecentSessionsForExercise(
+      userId,
+      exerciseId,
+      excludePresetEntryId
+    ),
   ]);
   return {
     bestSet: bestRow ? mapSetStatsRow(bestRow) : null,
     lastSet: lastRow ? mapSetStatsRow(lastRow) : null,
+    recentSessions: recentRows.map(mapRecentSessionRow),
   };
 }
 async function getAvailableEquipment() {
@@ -485,6 +530,16 @@ async function updateExerciseEntry(
         steps: updateData.steps ?? existingEntry.steps,
         sort_order: updateData.sort_order ?? existingEntry.sort_order,
         exercise_name: updateData.exercise_name ?? existingEntry.exercise_name,
+        // Preserve when omitted; explicit null clears (leaving a superset).
+        superset_group:
+          updateData.superset_group === undefined
+            ? (existingEntry.superset_group ?? null)
+            : updateData.superset_group,
+        // Preserve when omitted; explicit null clears the time of day.
+        entry_time:
+          updateData.entry_time === undefined
+            ? (existingEntry.entry_time ?? null)
+            : updateData.entry_time,
       }
     );
     if (!updatedEntry) {
@@ -1028,6 +1083,17 @@ async function addExternalExerciseToUserExercises(
   language: string = 'en'
 ) {
   try {
+    // Import is idempotent: re-adding an already-imported exercise returns the
+    // user's existing copy instead of violating the (user_id, source, source_id)
+    // unique index.
+    const existingExercise = await exerciseDb.getExerciseBySourceAndSourceId(
+      'wger',
+      String(wgerExerciseId),
+      authenticatedUserId
+    );
+    if (existingExercise) {
+      return existingExercise;
+    }
     const wgerExerciseDetails =
       await wgerService.getWgerExerciseDetails(wgerExerciseId);
     if (!wgerExerciseDetails) {
@@ -1082,7 +1148,12 @@ async function addExternalExerciseToUserExercises(
       user_id: authenticatedUserId,
       is_custom: true,
       shared_with_public: false,
-      source_external_id: wgerExerciseDetails.id.toString(),
+      // createExercise persists source_id (not source_external_id); the unique
+      // index and the dedup lookup above both key on it. Store the id the
+      // lookup queries by (the caller's id), not the fetched detail's id —
+      // if the two ever diverge, dedup would miss and the insert would hit
+      // the unique index.
+      source_id: String(wgerExerciseId),
       source: 'wger',
       level: 'intermediate',
       force: mappedForce,
@@ -1190,6 +1261,17 @@ async function addFreeExerciseDBExerciseToUserExercises(
   const { default: freeExerciseDBService } =
     await import('../integrations/freeexercisedb/FreeExerciseDBService.js');
   try {
+    // Import is idempotent: re-adding an already-imported exercise returns the
+    // user's existing copy instead of violating the (user_id, source, source_id)
+    // unique index.
+    const existingExercise = await exerciseDb.getExerciseBySourceAndSourceId(
+      'free-exercise-db',
+      freeExerciseDBId,
+      authenticatedUserId
+    );
+    if (existingExercise) {
+      return existingExercise;
+    }
     const exerciseDetails =
       await freeExerciseDBService.getExerciseById(freeExerciseDBId);
     if (!exerciseDetails) {
@@ -1209,8 +1291,9 @@ async function addFreeExerciseDBExerciseToUserExercises(
     const exerciseData = {
       id: uuidv4(), // Generate a new UUID for the local exercise
       source: 'free-exercise-db',
-      // @ts-expect-error TS(2571): Object is of type 'unknown'.
-      source_id: exerciseDetails.id,
+      // Store the id the dedup lookup above queries by (the caller's id) so
+      // the two can never diverge and miss dedup on re-import.
+      source_id: String(freeExerciseDBId),
       // @ts-expect-error TS(2571): Object is of type 'unknown'.
       name: exerciseDetails.name,
       // @ts-expect-error TS(2571): Object is of type 'unknown'.
@@ -1646,24 +1729,38 @@ async function createGroupedExerciseEntriesWithClient(
     });
 
     const preparedEntry = await prepareExerciseEntryForCreate(userId, {
+      // A client-minted entry uuid (create-in-reconcile for a mid-workout add)
+      // is inserted as-is so the entry keeps its identity across saves. Only a
+      // string id is forwarded: preset exercise definitions carry a numeric
+      // `id`, and the delete-and-recreate path sends none — neither must reach
+      // the uuid `exercise_entries.id` column.
+      ...(typeof exercise.id === 'string' ? { id: exercise.id } : {}),
       exercise_id: exercise.exercise_id,
       entry_date: entryDate,
       notes: exercise.notes ?? null,
       sets: exercise.sets || [],
       duration_minutes: durationMinutes,
+      // A client-provided value is a manual override; omitting it lets
+      // prepareExerciseEntryForCreate recompute from duration and sets.
+      ...(typeof exercise.calories_burned === 'number'
+        ? { calories_burned: exercise.calories_burned }
+        : {}),
       sort_order: exercise.sort_order ?? 0,
+      superset_group: exercise.superset_group ?? null,
       workout_plan_assignment_id: workoutPlanAssignmentId,
       distance: exercise.distance,
       avg_heart_rate: exercise.avg_heart_rate,
+      entry_time: exercise.entry_time ?? null,
     });
-    const createdEntry = await exerciseEntryDb._createExerciseEntryWithClient(
-      client,
-      userId,
-      preparedEntry,
-      actingUserId,
-      entrySource,
-      presetEntryId
-    );
+    const { entry: createdEntry } =
+      await exerciseEntryDb._createExerciseEntryWithClient(
+        client,
+        userId,
+        preparedEntry,
+        actingUserId,
+        entrySource,
+        presetEntryId
+      );
     createdEntries.push(createdEntry);
   }
   return createdEntries;
@@ -1853,19 +1950,6 @@ async function updateGroupedWorkoutSession(
           existingExercises.map((e: any) => [e.id, e])
         );
 
-        for (const ex of incomingExercises) {
-          if (!existingById.has(ex.id)) {
-            log(
-              'warn',
-              `Rejected reconcile: exercise id ${ex.id} not in session ${presetEntryId} for user ${userId}`
-            );
-            throw createServiceError(
-              400,
-              'Exercise entry does not belong to this session.'
-            );
-          }
-        }
-
         const incomingIdSet = new Set(
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           incomingExercises.map((e: any) => e.id)
@@ -1883,6 +1967,27 @@ async function updateGroupedWorkoutSession(
         }
 
         for (const ex of incomingExercises) {
+          // An incoming id the session doesn't already have is a client-added
+          // exercise: a new app mints a uuid on add and sends it through the
+          // reconcile path. Create the entry under this preset entry with that
+          // client uuid, then skip the update/reconcile-sets path below — the
+          // create already inserts its sets, so falling through would
+          // double-insert them.
+          if (!existingById.has(ex.id)) {
+            await createGroupedExerciseEntriesWithClient(
+              client,
+              userId,
+              actingUserId,
+              presetEntryId,
+              targetEntryDate,
+              [ex],
+              {
+                entrySource: existingSession.source,
+              }
+            );
+            continue;
+          }
+
           // Reuse prepareExerciseEntryForCreate so calories_burned is
           // recomputed from the new duration/sets the same way the legacy
           // delete-and-recreate path does — otherwise the helper would
@@ -1893,7 +1998,11 @@ async function updateGroupedWorkoutSession(
             notes: ex.notes ?? null,
             sets: ex.sets || [],
             duration_minutes: deriveDurationMinutes(ex),
+            ...(typeof ex.calories_burned === 'number'
+              ? { calories_burned: ex.calories_burned }
+              : {}),
             sort_order: ex.sort_order ?? 0,
+            superset_group: ex.superset_group ?? null,
             distance: ex.distance,
             avg_heart_rate: ex.avg_heart_rate,
           });
@@ -1906,11 +2015,13 @@ async function updateGroupedWorkoutSession(
               exercise_id: preparedEntry.exercise_id,
               notes: preparedEntry.notes,
               sort_order: preparedEntry.sort_order ?? 0,
+              superset_group: preparedEntry.superset_group ?? null,
               distance: preparedEntry.distance,
               avg_heart_rate: preparedEntry.avg_heart_rate,
               duration_minutes: preparedEntry.duration_minutes,
               calories_burned: preparedEntry.calories_burned,
               entry_date: targetEntryDate,
+              entry_time: ex.entry_time ?? null,
             },
             actingUserId,
             existingSession.source

@@ -19,6 +19,8 @@ import {
   mapFatSecretFood,
 } from '../integrations/fatsecret/fatsecretService.js';
 import { searchYazioByBarcode } from '../integrations/yazio/yazioService.js';
+import type { BulkImportFoodData } from '../models/food.js';
+
 async function searchFoods(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   authenticatedUserId: any,
@@ -56,7 +58,10 @@ async function searchFoods(
         limit,
         mealType
       );
-      return { recentFoods, topFoods };
+      return {
+        recentFoods,
+        topFoods,
+      };
     } else {
       // Otherwise, perform a regular search
       const userPreferences = await preferenceService.getUserPreferences(
@@ -84,6 +89,42 @@ async function searchFoods(
   }
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function refreshExistingExternalFoodMetadata(
+  authenticatedUserId: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  existingFood: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  foodData: any
+) {
+  const metadata: Record<string, unknown> = {};
+  const sameProviderIdentity =
+    foodData.provider_type &&
+    foodData.provider_external_id &&
+    existingFood.provider_type === foodData.provider_type &&
+    existingFood.provider_external_id === foodData.provider_external_id;
+
+  if (
+    sameProviderIdentity &&
+    foodData.provider_verified === true &&
+    existingFood.provider_verified !== true
+  ) {
+    metadata.provider_verified = true;
+  }
+
+  if (Object.keys(metadata).length === 0) {
+    return existingFood;
+  }
+
+  await foodRepository.updateFood(
+    existingFood.id,
+    authenticatedUserId,
+    metadata
+  );
+
+  return { ...existingFood, ...metadata };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function createFood(authenticatedUserId: any, foodData: any) {
   try {
     if (foodData.barcode) {
@@ -92,7 +133,27 @@ async function createFood(authenticatedUserId: any, foodData: any) {
         authenticatedUserId
       );
       if (existingFood) {
-        return existingFood;
+        return refreshExistingExternalFoodMetadata(
+          authenticatedUserId,
+          existingFood,
+          foodData
+        );
+      }
+    }
+    // Dedup by provider (e.g. Yazio product ID) — catches duplicate saves of
+    // the same external food even when no barcode is present on the package.
+    if (foodData.provider_external_id && foodData.provider_type) {
+      const existingFood = await foodRepository.findFoodByProviderExternalId(
+        authenticatedUserId,
+        foodData.provider_external_id,
+        foodData.provider_type
+      );
+      if (existingFood) {
+        return refreshExistingExternalFoodMetadata(
+          authenticatedUserId,
+          existingFood,
+          foodData
+        );
       }
     }
     const newFood = await foodRepository.createFood({
@@ -630,8 +691,11 @@ async function getFoodDeletionImpact(authenticatedUserId: any, foodId: any) {
     throw error;
   }
 }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function importFoodsInBulk(authenticatedUserId: any, foodDataArray: any) {
+async function importFoodsInBulk(
+  authenticatedUserId: string,
+  foodDataArray: BulkImportFoodData[],
+  overwrite = false
+) {
   try {
     if (!foodDataArray) {
       log('error', 'importFoodsInBulk: No food data provided.');
@@ -639,12 +703,12 @@ async function importFoodsInBulk(authenticatedUserId: any, foodDataArray: any) {
     }
     return await foodRepository.createFoodsInBulk(
       authenticatedUserId,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      foodDataArray.map((food: any) => ({
+      foodDataArray.map((food) => ({
         ...food,
         glycemic_index: food.glycemic_index || null,
         custom_nutrients: sanitizeCustomNutrients(food.custom_nutrients),
-      }))
+      })),
+      overwrite
     );
   } catch (error) {
     log(
@@ -755,8 +819,21 @@ async function updateFoodEntriesSnapshot(
     throw error;
   }
 }
+// `userId` is the active (possibly switched) data context — used to search the
+// local food library and load preferences. `credentialUserId` is the real
+// authenticated actor whose stored provider secrets and OpenFoodFacts session
+// are used, so a delegate can't decrypt a family member's provider keys.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function lookupBarcode(barcode: any, userId: any, providerId: any) {
+async function lookupBarcode(
+  barcode: any,
+  userId: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  providerId: any,
+  // Defaults to the data-context user for non-delegated callers; routes pass
+  // the real authenticated actor so a delegate can't use a family member's keys.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  credentialUserId: any = userId
+) {
   // Providers are tried in turn, each failure caught so the next can run.
   // Capture the first failure carrying an HTTP status (a surfaceable
   // misconfiguration, e.g. FatSecret's IP error) to report instead of a
@@ -787,7 +864,7 @@ async function lookupBarcode(barcode: any, userId: any, providerId: any) {
       if (resolvedProviderId) {
         const details =
           await externalProviderService.getExternalDataProviderDetails(
-            userId,
+            credentialUserId,
             resolvedProviderId
           );
         if (details?.is_active) {
@@ -880,6 +957,7 @@ async function lookupBarcode(barcode: any, userId: any, providerId: any) {
           username: provider.app_id,
           password: provider.app_key,
           baseUrl: provider.base_url,
+          language,
         });
         if (yazioFood) {
           return {
@@ -901,7 +979,7 @@ async function lookupBarcode(barcode: any, userId: any, providerId: any) {
           barcode,
           undefined,
           language,
-          userId,
+          credentialUserId,
           provider.id
         );
         if (offData?.status === 1 && offData.product) {
@@ -941,7 +1019,7 @@ async function lookupBarcode(barcode: any, userId: any, providerId: any) {
         try {
           offProviderId =
             await externalProviderService.getActiveOpenFoodFactsProviderId(
-              userId
+              credentialUserId
             );
         } catch (fallbackError) {
           log(
@@ -956,7 +1034,7 @@ async function lookupBarcode(barcode: any, userId: any, providerId: any) {
           barcode,
           undefined,
           language,
-          offProviderId ? userId : undefined,
+          offProviderId ? credentialUserId : undefined,
           offProviderId || undefined
         );
         if (offData?.status === 1 && offData.product) {
@@ -991,7 +1069,29 @@ async function lookupBarcode(barcode: any, userId: any, providerId: any) {
     throw error;
   }
 }
+async function addFoodFavorite(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  authenticatedUserId: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  foodId: any
+) {
+  // Ensure the food exists and is accessible to this user before starring it.
+  // getFoodById throws 'Food not found.' for inaccessible/invalid ids.
+  await getFoodById(authenticatedUserId, foodId);
+  await foodRepository.addFoodFavorite(authenticatedUserId, foodId);
+  return { food_id: foodId, is_favorite: true };
+}
+async function removeFoodFavorite(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  authenticatedUserId: any,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  foodId: any
+) {
+  await foodRepository.removeFoodFavorite(authenticatedUserId, foodId);
+  return { food_id: foodId, is_favorite: false };
+}
 export { searchFoods };
+export { addFoodFavorite, removeFoodFavorite };
 export { createFood };
 export { getFoodById };
 export { updateFood };
@@ -1013,6 +1113,8 @@ export { mapFatSecretFood };
 export { mapUsdaBarcodeProduct };
 export default {
   searchFoods,
+  addFoodFavorite,
+  removeFoodFavorite,
   createFood,
   getFoodById,
   updateFood,

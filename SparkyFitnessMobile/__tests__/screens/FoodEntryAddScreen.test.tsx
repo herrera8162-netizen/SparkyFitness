@@ -1,10 +1,13 @@
 import React from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react-native';
-import { pressActionByAccessibilityLabel } from './helpers/nativeHeaderTestUtils';
+import {
+  findHeaderItemByAccessibilityLabel,
+  pressActionByAccessibilityLabel,
+} from './helpers/nativeHeaderTestUtils';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
 import FoodEntryAddScreen from '../../src/screens/FoodEntryAddScreen';
-import { useMealTypes } from '../../src/hooks';
+import { useMealTypes, useToggleFavorite } from '../../src/hooks';
 import {
   useCreateFoodVariant,
   useFoodVariants,
@@ -46,6 +49,8 @@ jest.mock('../../src/hooks', () => ({
   useMealTypes: jest.fn(),
   usePreferences: jest.fn(() => ({ preferences: undefined, isLoading: false, isError: false, refetch: jest.fn() })),
   useServerConnection: jest.fn(() => ({ isConnected: true, isLoading: false })),
+  useFavorites: jest.fn(() => ({ favoriteFoods: [], favoriteMeals: [], isLoading: false, isError: false, refetch: jest.fn() })),
+  useToggleFavorite: jest.fn(() => ({ toggleFavorite: jest.fn(), isPending: false })),
 }));
 
 jest.mock('../../src/hooks/useFoodVariants', () => ({
@@ -190,6 +195,20 @@ jest.mock('../../src/components/CalendarSheet', () => {
   };
 });
 
+jest.mock('../../src/components/TimeSheet', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  const MockTimeSheet = React.forwardRef((_props: any, ref: any) => {
+    React.useImperativeHandle(ref, () => ({ present: jest.fn() }));
+    return <View testID="time-sheet" />;
+  });
+  MockTimeSheet.displayName = 'MockTimeSheet';
+  return {
+    __esModule: true,
+    default: MockTimeSheet,
+  };
+});
+
 jest.mock('../../src/utils/mealBuilderDraft', () => {
   const actual = jest.requireActual('../../src/utils/mealBuilderDraft');
   return {
@@ -201,6 +220,9 @@ jest.mock('../../src/utils/mealBuilderDraft', () => {
 
 const { useQuery } = jest.requireMock('@tanstack/react-query') as { useQuery: jest.Mock };
 const mockUseMealTypes = useMealTypes as jest.MockedFunction<typeof useMealTypes>;
+const mockUseToggleFavorite = useToggleFavorite as jest.MockedFunction<
+  typeof useToggleFavorite
+>;
 const mockUseFoodVariants = useFoodVariants as jest.MockedFunction<typeof useFoodVariants>;
 const mockUseCreateFoodVariant =
   useCreateFoodVariant as jest.MockedFunction<typeof useCreateFoodVariant>;
@@ -705,11 +727,113 @@ describe('FoodEntryAddScreen', () => {
         quantity: 1,
         unit: 'cup',
         entry_date: '2026-04-23',
+        entry_time: null,
         food_id: 'food-1',
         variant_id: 'variant-1',
       },
     });
     expect(mockSetPendingMealIngredientSelection).not.toHaveBeenCalled();
+  });
+
+  it('shows grams for a grouped local portion instead of only the named unit', () => {
+    mockUseFoodVariants.mockReturnValueOnce({
+      variants: [
+        {
+          id: 'variant-piece',
+          food_id: 'food-1',
+          serving_size: 1,
+          serving_unit: 'piece',
+          calories: 100,
+          protein: 15,
+          carbs: 6,
+          fat: 0,
+        },
+        {
+          id: 'variant-grams',
+          food_id: 'food-1',
+          serving_size: 15,
+          serving_unit: 'g',
+          calories: 100,
+          protein: 15,
+          carbs: 6,
+          fat: 0,
+        },
+      ],
+      isLoading: false,
+      isError: false,
+    } as any);
+
+    const screen = renderScreen({
+      item: {
+        ...baseLocalItem,
+        servingUnit: 'piece',
+        variantId: 'variant-piece',
+      },
+      date: '2026-04-23',
+    });
+
+    expect(screen.getByText('piece (15 g)')).toBeTruthy();
+    expect(screen.getByText(/piece \(15 g\) per serving/)).toBeTruthy();
+  });
+
+  it('keeps a 100 g reference available alongside a named local portion', () => {
+    mockUseFoodVariants.mockReturnValue({
+      variants: [
+        {
+          id: 'variant-portion',
+          food_id: 'food-1',
+          serving_size: 1,
+          serving_unit: 'portion',
+          serving_description: 'portion (150 g)',
+          calories: 180,
+          protein: 15,
+          carbs: 6,
+          fat: 0,
+        },
+        {
+          id: 'variant-reference',
+          food_id: 'food-1',
+          serving_size: 100,
+          serving_unit: 'g',
+          serving_description: '100 g',
+          calories: 120,
+          protein: 10,
+          carbs: 4,
+          fat: 0,
+        },
+        {
+          id: 'variant-portion-grams',
+          food_id: 'food-1',
+          serving_size: 150,
+          serving_unit: 'g',
+          serving_description: '150 g',
+          calories: 180,
+          protein: 15,
+          carbs: 6,
+          fat: 0,
+        },
+      ],
+      isLoading: false,
+      isError: false,
+    } as any);
+
+    const screen = renderScreen({
+      item: {
+        ...baseLocalItem,
+        servingSize: 100,
+        servingUnit: 'g',
+        servingDescription: '100 g',
+        calories: 120,
+        protein: 10,
+        carbs: 4,
+        fat: 0,
+        variantId: 'variant-reference',
+      },
+      date: '2026-04-23',
+    });
+
+    expect(screen.getByText('1 portion (150 g) (180 cal)')).toBeTruthy();
+    expect(screen.getByText('100 g (120 cal)')).toBeTruthy();
   });
 
   it('keeps converted local units in the adjust flow and logs the returned variant', async () => {
@@ -881,6 +1005,8 @@ describe('FoodEntryAddScreen', () => {
         vitamin_c: undefined,
         glycemic_index: undefined,
         custom_nutrients: undefined,
+        source: undefined,
+        ai_confidence: undefined,
       });
     });
 
@@ -894,6 +1020,7 @@ describe('FoodEntryAddScreen', () => {
           quantity: 1,
           unit: 'oz',
           entry_date: '2026-04-23',
+          entry_time: null,
           food_id: 'saved-food-1',
           variant_id: 'saved-variant-oz',
         },
@@ -952,7 +1079,7 @@ describe('FoodEntryAddScreen', () => {
 
     await waitFor(() => {
       expect(mockAddEntryAsync).toHaveBeenCalledWith({
-        saveFoodPayload: {
+        saveFoodPayload: expect.objectContaining({
           name: 'Protein Bar',
           brand: 'Remote Brand',
           serving_size: 1,
@@ -961,46 +1088,21 @@ describe('FoodEntryAddScreen', () => {
           protein: 20,
           carbs: 22,
           fat: 7,
-          dietary_fiber: undefined,
-          saturated_fat: undefined,
-          sodium: undefined,
-          sugars: undefined,
-          trans_fat: undefined,
-          potassium: undefined,
-          calcium: undefined,
-          iron: undefined,
-          cholesterol: undefined,
-          vitamin_a: undefined,
-          vitamin_c: undefined,
-        },
-        saveThenCreateVariantPayload: {
+        }),
+        saveThenCreateVariantPayload: expect.objectContaining({
           serving_size: 1,
           serving_unit: 'oz',
           calories: 120,
           protein: 10,
           carbs: 8,
           fat: 4,
-          dietary_fiber: undefined,
-          saturated_fat: undefined,
-          polyunsaturated_fat: undefined,
-          monounsaturated_fat: undefined,
-          sodium: undefined,
-          sugars: undefined,
-          trans_fat: undefined,
-          potassium: undefined,
-          calcium: undefined,
-          iron: undefined,
-          cholesterol: undefined,
-          vitamin_a: undefined,
-          vitamin_c: undefined,
-          glycemic_index: undefined,
-          custom_nutrients: undefined,
-        },
+        }),
         createEntryPayload: {
           meal_type_id: 'meal-1',
           quantity: 1,
           unit: 'oz',
           entry_date: '2026-04-23',
+          entry_time: null,
         },
       });
     });
@@ -1174,6 +1276,61 @@ describe('FoodEntryAddScreen', () => {
           }),
         }),
       );
+    });
+  });
+
+  describe('favorite star', () => {
+    // The toggle updates the favorites cache optimistically, so `isFavorite`
+    // flips the instant the first tap lands. A second tap before the first
+    // settles therefore sends the OPPOSITE operation, and the two writes can
+    // reach the server out of order — leaving it in the state opposite the
+    // user's last tap. Gating the star on its own in-flight mutation closes it.
+    it('disables the favorite star while a toggle is already in flight', () => {
+      mockUseToggleFavorite.mockReturnValue({
+        toggleFavorite: jest.fn(),
+        isPending: true,
+      });
+
+      renderScreen({ item: baseLocalItem, mealType: 'breakfast' });
+
+      const star = findHeaderItemByAccessibilityLabel(
+        navigation,
+        'Add to favorites',
+      );
+      expect(star).toBeDefined();
+      expect(star?.disabled).toBe(true);
+    });
+
+    it('leaves the favorite star enabled when no toggle is in flight', () => {
+      mockUseToggleFavorite.mockReturnValue({
+        toggleFavorite: jest.fn(),
+        isPending: false,
+      });
+
+      renderScreen({ item: baseLocalItem, mealType: 'breakfast' });
+
+      const star = findHeaderItemByAccessibilityLabel(
+        navigation,
+        'Add to favorites',
+      );
+      expect(star?.disabled).toBe(false);
+    });
+
+    it('does not disable unrelated header actions while a toggle is in flight', () => {
+      mockUseToggleFavorite.mockReturnValue({
+        toggleFavorite: jest.fn(),
+        isPending: true,
+      });
+
+      renderScreen({ item: baseLocalItem, mealType: 'breakfast' });
+
+      // The gate is scoped to the star: an in-flight favorite toggle must not
+      // block editing or saving.
+      const edit = findHeaderItemByAccessibilityLabel(
+        navigation,
+        'Adjust nutrition',
+      );
+      expect(edit?.disabled).toBe(false);
     });
   });
 });

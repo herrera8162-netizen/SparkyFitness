@@ -6,6 +6,33 @@ import {
   type JsonSchemaNode,
   type ProviderConfig,
 } from '../ai/providerDispatch.js';
+import { OutboundUrlBlockedError } from '../utils/outboundUrlPolicy.js';
+import convert from 'heic-convert';
+
+// Fixed "JPEG" bytes returned by the mocked transcoder. Declared via vi.hoisted
+// so the hoisted vi.mock('heic-convert') factory below can reference it.
+const { TRANSCODED_JPEG_BYTES } = vi.hoisted(() => ({
+  TRANSCODED_JPEG_BYTES: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]),
+}));
+const convertMock = vi.mocked(convert);
+const TRANSCODED_JPEG_B64 = Buffer.from(TRANSCODED_JPEG_BYTES).toString(
+  'base64'
+);
+
+// Real magic-byte prefixes for the format sniffer. A JPEG starts FF D8 FF; a
+// HEIC file is an ISO-BMFF `ftyp` box (offset 4) whose brand (offset 8) is a
+// HEIF brand ('heic' here).
+const REAL_JPEG_B64 = Buffer.from([
+  0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46,
+]).toString('base64');
+const REAL_HEIC_B64 = Buffer.from([
+  0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63,
+]).toString('base64');
+// Same HEIC container but with an UPPERCASE 'HEIC' brand, to exercise the
+// case-insensitive brand check.
+const REAL_HEIC_UPPER_B64 = Buffer.from([
+  0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x48, 0x45, 0x49, 0x43,
+]).toString('base64');
 
 // Mock the undici Agent so the Ollama path never constructs a real agent.
 // (global.fetch is mocked per-test; the dispatcher option is ignored by it.)
@@ -14,8 +41,16 @@ vi.mock('undici', () => {
   const Agent = vi.fn(function () {
     return { destroy: vi.fn() };
   });
-  return { default: { Agent }, Agent };
+  const buildConnector = vi.fn(() => vi.fn());
+  return { default: { Agent, buildConnector }, Agent, buildConnector };
 });
+
+// Mock heic-convert so tests don't need real HEIC bytes. Default: succeed,
+// returning fixed "JPEG" bytes. Individual tests override with mockRejected* to
+// exercise the transcode-failure fallback.
+vi.mock('heic-convert', () => ({
+  default: vi.fn(async () => TRANSCODED_JPEG_BYTES),
+}));
 
 const SCHEMA: JsonSchemaNode = {
   type: 'object',
@@ -108,6 +143,10 @@ function captured(m: FetchMock): {
 }
 
 const originalFetch = global.fetch;
+const PRIVATE_NETWORK_POLICY = {
+  allowPrivateNetwork: true,
+  reason: 'admin' as const,
+};
 afterEach(() => {
   global.fetch = originalFetch;
 });
@@ -155,10 +194,80 @@ describe('dispatchAiRequest — preconditions', () => {
           api_key: undefined,
           custom_url: 'http://localhost:11434',
         }),
+        networkPolicy: PRIVATE_NETWORK_POLICY,
       })
     );
     expect(result.ok).toBe(true);
     expect(m).toHaveBeenCalled();
+  });
+
+  it('blocks localhost custom URLs by default', async () => {
+    const m = mockFetch(ollamaBody(JSON.stringify(SAMPLE)));
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'ollama',
+          api_key: undefined,
+          custom_url: 'http://localhost:11434',
+        }),
+      })
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.category).toBe('private_network_forbidden');
+    expect(m).not.toHaveBeenCalled();
+  });
+
+  it('maps wrapped connector policy failures to private_network_forbidden', async () => {
+    const blocked = new OutboundUrlBlockedError(
+      'AI service URL resolves to a private address.'
+    );
+    const m = vi
+      .fn()
+      .mockRejectedValue(new TypeError('fetch failed', { cause: blocked }));
+    global.fetch = m as typeof global.fetch;
+
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'custom',
+          custom_url: 'https://llm.example.com/v1',
+        }),
+      })
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      category: 'private_network_forbidden',
+      status: 403,
+      detail: blocked.message,
+    });
+  });
+
+  // Regression: a stored URL fetch could never use (malformed, credentials) is a
+  // provider-config failure, not a policy denial — even under a trusted policy it
+  // must not masquerade as private_network_forbidden (whose client copy tells the
+  // user to ask an admin about private-network access).
+  it('reports a shape-invalid custom_url as upstream_error, not private_network_forbidden', async () => {
+    const m = vi.fn();
+    global.fetch = m as typeof global.fetch;
+
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'custom',
+          custom_url: 'http://user:pass@llm.example.com/v1',
+        }),
+        networkPolicy: PRIVATE_NETWORK_POLICY,
+      })
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.category).toBe('upstream_error');
+      expect(result.detail).toContain('credentials');
+    }
+    expect(m).not.toHaveBeenCalled();
   });
 
   // Regression: keyless local servers (LM Studio, llama.cpp) must work on the
@@ -205,13 +314,92 @@ describe('dispatchAiRequest — preconditions', () => {
     }
   );
 
-  it('returns unsupported_media when HEIC is sent to a non-Gemini provider', async () => {
+  it('transcodes HEIC to JPEG and dispatches it', async () => {
+    const m = mockFetch(anthropicToolBody(SAMPLE));
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'anthropic',
+          api_key: 'anth-key',
+        }),
+        images: [{ base64: 'aGVsbG8=', mimeType: 'image/heic' }],
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(convertMock).toHaveBeenCalledOnce();
+    // The upstream request must carry the re-encoded JPEG, not the HEIC bytes.
+    const { body } = captured(m);
+    const content = (
+      body.messages as Array<{ content: Array<Record<string, unknown>> }>
+    )[0].content;
+    const imagePart = content.find((p) => p.type === 'image') as {
+      source: { media_type: string; data: string };
+    };
+    expect(imagePart.source.media_type).toBe('image/jpeg');
+    expect(imagePart.source.data).toBe(TRANSCODED_JPEG_B64);
+  });
+
+  it('passes a JPEG mislabeled as HEIC straight through without transcoding (sniffs the bytes)', async () => {
+    // Android's photo picker hands the app decoded JPEG bytes but labels them
+    // image/heic; the server must trust the bytes, not the label.
+    const m = mockFetch(anthropicToolBody(SAMPLE));
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'anthropic',
+          api_key: 'anth-key',
+        }),
+        images: [{ base64: REAL_JPEG_B64, mimeType: 'image/heic' }],
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(convertMock).not.toHaveBeenCalled();
+    const { body } = captured(m);
+    const content = (
+      body.messages as Array<{ content: Array<Record<string, unknown>> }>
+    )[0].content;
+    const imagePart = content.find((p) => p.type === 'image') as {
+      source: { media_type: string; data: string };
+    };
+    expect(imagePart.source.media_type).toBe('image/jpeg');
+    expect(imagePart.source.data).toBe(REAL_JPEG_B64);
+  });
+
+  it('transcodes when the bytes are really HEIC even if the client mislabels the mime', async () => {
+    const m = mockFetch(anthropicToolBody(SAMPLE));
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'anthropic',
+          api_key: 'anth-key',
+        }),
+        images: [{ base64: REAL_HEIC_B64, mimeType: 'image/jpeg' }],
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(convertMock).toHaveBeenCalledOnce();
+    const { body } = captured(m);
+    const content = (
+      body.messages as Array<{ content: Array<Record<string, unknown>> }>
+    )[0].content;
+    const imagePart = content.find((p) => p.type === 'image') as {
+      source: { media_type: string; data: string };
+    };
+    expect(imagePart.source.media_type).toBe('image/jpeg');
+    expect(imagePart.source.data).toBe(TRANSCODED_JPEG_B64);
+  });
+
+  it('fails loud (no bypass) when a real HEIC mislabeled as JPEG fails to transcode', async () => {
+    // Regression: a genuine HEIC sent as image/jpeg that cannot be decoded must
+    // NOT fall through to the provider with its jpeg label; the mime is
+    // corrected to the sniffed HEIC so the unsupported_media check catches it.
+    convertMock.mockRejectedValueOnce(new Error('decode failed'));
     const m = vi.fn();
     global.fetch = m as typeof global.fetch;
     const result = await dispatchAiRequest(
       baseRequest({
         provider: makeProvider({ service_type: 'anthropic' }),
-        images: [{ base64: 'aGVsbG8=', mimeType: 'image/heic' }],
+        images: [{ base64: REAL_HEIC_B64, mimeType: 'image/jpeg' }],
       })
     );
     expect(result.ok).toBe(false);
@@ -219,8 +407,95 @@ describe('dispatchAiRequest — preconditions', () => {
     expect(m).not.toHaveBeenCalled();
   });
 
-  it('allows HEIC for google (Gemini accepts it)', async () => {
-    mockFetch(googleBody(JSON.stringify(SAMPLE)));
+  it('detects HEIC with an uppercase ftyp brand (case-insensitive)', async () => {
+    mockFetch(anthropicToolBody(SAMPLE));
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'anthropic',
+          api_key: 'anth-key',
+        }),
+        images: [{ base64: REAL_HEIC_UPPER_B64, mimeType: 'image/jpeg' }],
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(convertMock).toHaveBeenCalledOnce();
+  });
+
+  it('does not crash on a malformed image entry (non-string base64)', async () => {
+    mockFetch(anthropicToolBody(SAMPLE));
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'anthropic',
+          api_key: 'anth-key',
+        }),
+        images: [{ base64: 123 as unknown as string, mimeType: 'image/jpeg' }],
+      })
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it('normalizes uppercase/whitespace HEIC mime types before the transcode check', async () => {
+    const m = mockFetch(anthropicToolBody(SAMPLE));
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'anthropic',
+          api_key: 'anth-key',
+        }),
+        images: [{ base64: 'aGVsbG8=', mimeType: '  IMAGE/HEIC  ' }],
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(convertMock).toHaveBeenCalledOnce();
+    const { body } = captured(m);
+    const content = (
+      body.messages as Array<{ content: Array<Record<string, unknown>> }>
+    )[0].content;
+    const imagePart = content.find((p) => p.type === 'image') as {
+      source: { media_type: string };
+    };
+    expect(imagePart.source.media_type).toBe('image/jpeg');
+  });
+
+  it('does not crash when an image mime type is missing (non-string)', async () => {
+    mockFetch(anthropicToolBody(SAMPLE));
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'anthropic',
+          api_key: 'anth-key',
+        }),
+        // Untyped external JSON (api-fitness/MCP) can omit mimeType; the
+        // normalizer must tolerate it instead of throwing on .trim().
+        images: [
+          { base64: 'aGVsbG8=', mimeType: undefined as unknown as string },
+        ],
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(convertMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to unsupported_media when HEIC transcoding fails', async () => {
+    convertMock.mockRejectedValueOnce(new Error('not a valid HEIC file'));
+    const m = vi.fn();
+    global.fetch = m as typeof global.fetch;
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({ service_type: 'anthropic' }),
+        images: [{ base64: 'bm90LWhlaWM=', mimeType: 'image/heif' }],
+      })
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.category).toBe('unsupported_media');
+    // Failed transcode must not ship bytes upstream.
+    expect(m).not.toHaveBeenCalled();
+  });
+
+  it('also transcodes HEIC for google (we convert uniformly, no provider gate)', async () => {
+    const m = mockFetch(googleBody(JSON.stringify(SAMPLE)));
     const result = await dispatchAiRequest(
       baseRequest({
         provider: makeProvider({ service_type: 'google', api_key: 'gem-key' }),
@@ -228,6 +503,17 @@ describe('dispatchAiRequest — preconditions', () => {
       })
     );
     expect(result.ok).toBe(true);
+    expect(convertMock).toHaveBeenCalledOnce();
+    // Gemini also receives the re-encoded JPEG, not the original HEIC bytes.
+    const { body } = captured(m);
+    const parts = (
+      body.contents as Array<{ parts: Array<Record<string, unknown>> }>
+    )[0].parts;
+    const imagePart = parts.find((p) => p.inline_data !== undefined) as {
+      inline_data: { mime_type: string; data: string };
+    };
+    expect(imagePart.inline_data.mime_type).toBe('image/jpeg');
+    expect(imagePart.inline_data.data).toBe(TRANSCODED_JPEG_B64);
   });
 });
 
@@ -277,6 +563,29 @@ describe('dispatchAiRequest — text-only structured request shapes', () => {
     expect(url).toBe('https://api.x.ai/v1/chat/completions');
     expect((body.response_format as { type: string }).type).toBe('json_schema');
     expect(body.provider).toBeUndefined();
+  });
+
+  it('meta routes to api.meta.ai and uses json_object fallback (not strict schema)', async () => {
+    const m = mockFetch(openAiBody(JSON.stringify(SAMPLE)));
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'meta',
+          api_key: 'meta-key',
+          model_name: 'muse-spark-1.1',
+        }),
+      })
+    );
+    const { url, headers, body } = captured(m);
+    expect(url).toBe('https://api.meta.ai/v1/chat/completions');
+    expect(headers['Authorization']).toBe('Bearer meta-key');
+    expect(body.model).toBe('muse-spark-1.1');
+    // Muse Spark mandates extended thinking, which Anthropic-style forced
+    // tool_choice forbids; kept OUT of STRICT_SCHEMA_PROVIDERS so it uses the
+    // json_object fallback with the schema embedded in the prompt instead.
+    expect((body.response_format as { type: string }).type).toBe('json_object');
+    const messages = body.messages as Array<{ content: string }>;
+    expect(messages[0].content).toContain('JSON Schema');
   });
 
   it('openrouter sends strict json_schema, provider.require_parameters, and attribution headers', async () => {
@@ -408,6 +717,7 @@ describe('dispatchAiRequest — text-only structured request shapes', () => {
           api_key: undefined,
           custom_url: 'http://localhost:11434',
         }),
+        networkPolicy: PRIVATE_NETWORK_POLICY,
       })
     );
     const { url, headers, body } = captured(m);
@@ -508,6 +818,7 @@ describe('dispatchAiRequest — vision request shapes', () => {
           api_key: undefined,
           custom_url: 'http://localhost:11434',
         }),
+        networkPolicy: PRIVATE_NETWORK_POLICY,
         images: [IMG],
       })
     );
@@ -546,6 +857,7 @@ describe('dispatchAiRequest — extraction & success', () => {
           api_key: undefined,
           custom_url: 'http://localhost:11434',
         }),
+        networkPolicy: PRIVATE_NETWORK_POLICY,
       })
     );
     expect(result).toMatchObject({ ok: true, json: SAMPLE });
@@ -768,6 +1080,7 @@ describe('dispatchAiRequest — ollama undici timeout handling', () => {
             api_key: undefined,
             custom_url: 'http://localhost:11434',
           }),
+          networkPolicy: PRIVATE_NETWORK_POLICY,
         })
       );
       expect(result.ok).toBe(false);
@@ -788,6 +1101,7 @@ describe('dispatchAiRequest — ollama undici timeout handling', () => {
           api_key: undefined,
           custom_url: 'http://localhost:11434',
         }),
+        networkPolicy: PRIVATE_NETWORK_POLICY,
       })
     );
     expect(result.ok).toBe(false);
@@ -902,6 +1216,7 @@ describe('dispatchAiRequest — model defaulting', () => {
           model_name: undefined,
           custom_url: 'http://localhost:11434',
         }),
+        networkPolicy: PRIVATE_NETWORK_POLICY,
         images: [IMG],
       })
     );
@@ -920,6 +1235,7 @@ describe('dispatchAiRequest — model defaulting', () => {
           model_name: undefined,
           custom_url: 'http://localhost:11434',
         }),
+        networkPolicy: PRIVATE_NETWORK_POLICY,
       })
     );
     expect(captured(m).body.model).toBe('llama3.2');
@@ -1024,13 +1340,14 @@ describe('dispatchAiRequest — temperature', () => {
           api_key: undefined,
           custom_url: 'http://localhost:11434',
         }),
+        networkPolicy: PRIVATE_NETWORK_POLICY,
         temperature: 0,
       })
     );
-    expect(captured(m).body.options).toEqual({ temperature: 0 });
+    expect(captured(m).body.options).toEqual({ num_ctx: 8192, temperature: 0 });
   });
 
-  it('ollama omits options when temperature is unset', async () => {
+  it('ollama sends default options when temperature is unset', async () => {
     const m = mockFetch(ollamaBody(JSON.stringify(SAMPLE)));
     await dispatchAiRequest(
       baseRequest({
@@ -1039,9 +1356,10 @@ describe('dispatchAiRequest — temperature', () => {
           api_key: undefined,
           custom_url: 'http://localhost:11434',
         }),
+        networkPolicy: PRIVATE_NETWORK_POLICY,
       })
     );
-    expect(captured(m).body.options).toBeUndefined();
+    expect(captured(m).body.options).toEqual({ num_ctx: 8192 });
   });
 });
 

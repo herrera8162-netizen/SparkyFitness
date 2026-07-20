@@ -6,7 +6,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog';
-import { Check, Sparkles } from 'lucide-react';
+import { Check, Sparkles, Clock, CalendarDays, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -42,7 +42,10 @@ import {
   OVERALL_CONFIDENCE_LABELS,
   type AiConfidence,
   type ConfidenceTone,
+  toHourMinute,
+  userHourMinute,
 } from '@workspace/shared';
+import { formatServingLabel } from '@/utils/foodServing';
 
 const AI_PICKER_ICON_TONE_CLASSES: Record<ConfidenceTone, string> = {
   success: 'text-emerald-600 dark:text-emerald-400',
@@ -68,6 +71,7 @@ const EditFoodEntryDialog = ({
     energyUnit,
     convertEnergy,
     nutrientDisplayPreferences,
+    timezone,
   } = usePreferences();
   const isMobile = useIsMobile();
   const platform = isMobile ? 'mobile' : 'desktop';
@@ -77,6 +81,9 @@ const EditFoodEntryDialog = ({
     entry?.variant_id || null
   );
   const [mealId, setMealId] = useState<string>(entry?.meal_type_id ?? '');
+  const [entryTime, setEntryTime] = useState<string>(
+    toHourMinute(entry?.entry_time) || ''
+  );
 
   const { data: customNutrients } = useCustomNutrients();
   const { data: foodData, isLoading: isLoadingFood } = useFoodView(
@@ -222,6 +229,7 @@ const EditFoodEntryDialog = ({
           unit: variantWithId.serving_unit,
           variant_id: variantWithId.id || null,
           meal_type_id: mealId,
+          entry_time: entryTime || null,
         };
         await updateFoodEntry({
           id: entry.id,
@@ -252,6 +260,7 @@ const EditFoodEntryDialog = ({
         meal_type_id: mealId,
         variant_id:
           selectedVariant.id === 'default-variant' ? null : selectedVariant.id,
+        entry_time: entryTime || null,
       };
 
       await updateFoodEntry({ id: entry.id, data: updateData });
@@ -304,7 +313,7 @@ const EditFoodEntryDialog = ({
                 )}
               </div>
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-4 gap-4">
                 <div>
                   <Label htmlFor="quantity">Quantity</Label>
                   <Input
@@ -334,7 +343,7 @@ const EditFoodEntryDialog = ({
                             variant.id && (
                               <SelectItem key={variant.id} value={variant.id}>
                                 <span className="flex items-center gap-1.5">
-                                  {variant.serving_unit}
+                                  {formatServingLabel(variant)}
                                   {variant.source === 'ai_estimate' &&
                                     variant.ai_confidence && (
                                       <Sparkles
@@ -397,6 +406,63 @@ const EditFoodEntryDialog = ({
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+
+                <div className="col-span-4 space-y-1 max-w-[280px]">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="entryTime">Time (optional)</Label>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setEntryTime('')}
+                        disabled={!entryTime}
+                        className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-muted-foreground shadow-sm hover:bg-destructive/10 hover:text-destructive transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                        title="Clear time"
+                      >
+                        <X className="h-4 w-4" />
+                        Clear
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const { hour, minute } = userHourMinute(timezone);
+                          setEntryTime(
+                            `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+                          );
+                        }}
+                        className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                        title="Set to current local time"
+                      >
+                        <Clock className="h-4 w-4" />
+                        Now
+                      </button>
+                      {(() => {
+                        const selectedMeal = availableMealTypes.find(
+                          (m) => m.id === mealId
+                        );
+                        const defaultTime = selectedMeal?.default_time;
+                        return defaultTime ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEntryTime(toHourMinute(defaultTime) || '')
+                            }
+                            className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                            title={`Set to meal default (${toHourMinute(defaultTime)})`}
+                          >
+                            <CalendarDays className="h-4 w-4" />
+                            Default
+                          </button>
+                        ) : null;
+                      })()}
+                    </div>
+                  </div>
+                  <Input
+                    id="entryTime"
+                    type="time"
+                    value={entryTime}
+                    onChange={(e) => setEntryTime(e.target.value)}
+                  />
                 </div>
               </div>
 

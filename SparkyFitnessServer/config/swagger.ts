@@ -206,16 +206,12 @@ const options = {
               type: 'string',
               description: 'The serving size of the variant (e.g., "1 cup").',
             },
-            serving_weight: {
-              type: 'number',
-              description: 'The weight of the serving in grams.',
-            },
             data: {
               type: 'object',
               description: 'Nutritional data for this specific variant.',
             },
           },
-          required: ['id', 'food_id', 'serving_size', 'serving_weight', 'data'],
+          required: ['id', 'food_id', 'serving_size', 'data'],
         },
         FoodEntryMeal: {
           type: 'object',
@@ -783,6 +779,7 @@ const options = {
                   exercise_id: { type: 'string', format: 'uuid' },
                   exercise_name: { type: 'string' },
                   image_url: { type: 'string', nullable: true },
+                  superset_group: { type: 'integer', nullable: true },
                   sets: {
                     type: 'array',
                     items: { $ref: '#/components/schemas/WorkoutSet' },

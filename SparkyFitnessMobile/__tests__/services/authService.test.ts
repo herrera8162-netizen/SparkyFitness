@@ -12,14 +12,31 @@ import {
   verifyEmailOtp,
   logout,
   clearAuthCookies,
+  requestPasskeyRegistrationTicket,
+  addPasskey,
   _clearTrustedOriginCache,
   _setTrustedOriginCache,
 } from '../../src/services/api/authService';
 import { clearSessionToken, ServerConfig } from '../../src/services/storage';
+import { TimeoutError } from '../../src/utils/concurrency';
+import * as WebBrowser from 'expo-web-browser';
 
 jest.mock('../../src/services/storage', () => ({
   clearSessionToken: jest.fn(),
 }));
+
+jest.mock('expo-web-browser', () => ({
+  openAuthSessionAsync: jest.fn(),
+  getCustomTabsSupportingBrowsersAsync: jest.fn(),
+}));
+
+const mockOpenAuthSession = WebBrowser.openAuthSessionAsync as jest.MockedFunction<
+  typeof WebBrowser.openAuthSessionAsync
+>;
+const mockGetCustomTabsBrowsers =
+  WebBrowser.getCustomTabsSupportingBrowsersAsync as jest.MockedFunction<
+    typeof WebBrowser.getCustomTabsSupportingBrowsersAsync
+  >;
 
 const mockClearSessionToken = clearSessionToken as jest.MockedFunction<
   typeof clearSessionToken
@@ -160,6 +177,34 @@ describe('authService', () => {
       const result = await login(serverUrl, 'user@test.com', 'password123');
 
       expect(result).toEqual({ type: 'mfa_required' });
+    });
+
+    // Representative timeout test for the authService fetch sites: they all
+    // go through the same fetchWithTimeout wrapper.
+    test('throws TimeoutError when the server never responds', async () => {
+      jest.useFakeTimers();
+      try {
+        // Signal-aware mock that rejects on abort (like real fetch)
+        mockFetch.mockImplementation((_url: string, options?: RequestInit) => {
+          return new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener('abort', () => {
+              const err = new Error('The operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          });
+        });
+
+        const promise = login(serverUrl, 'user@test.com', 'password123');
+        // Attach handler BEFORE advancing timers to avoid unhandled rejection
+        const assertion = expect(promise).rejects.toThrow(TimeoutError);
+
+        await jest.advanceTimersByTimeAsync(30_000);
+
+        await assertion;
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     test('throws LoginError on non-OK response with JSON error body', async () => {
@@ -658,6 +703,176 @@ describe('authService', () => {
 
       // Total: 2 from first call + 1 from second call = 3
       expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe('requestPasskeyRegistrationTicket', () => {
+    it('POSTs to register-ticket with Bearer and returns the ticket', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ ticket: 'ticket-abc' }),
+      });
+
+      const ticket = await requestPasskeyRegistrationTicket(
+        'https://s.com',
+        'sess-tok'
+      );
+
+      expect(ticket).toBe('ticket-abc');
+      const [url, opts] = mockFetch.mock.calls[0];
+      expect(url).toBe('https://s.com/api/auth/web-login/register-ticket');
+      expect(opts.method).toBe('POST');
+      expect(opts.headers.Authorization).toBe('Bearer sess-tok');
+    });
+
+    it('throws LoginError SESSION_NOT_FRESH on 403', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        json: async () => ({ code: 'SESSION_NOT_FRESH' }),
+      });
+
+      await expect(
+        requestPasskeyRegistrationTicket('https://s.com', 'tok')
+      ).rejects.toMatchObject({ message: 'SESSION_NOT_FRESH', statusCode: 403 });
+    });
+
+    it('throws on non-OK responses', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        json: async () => ({ message: 'boom' }),
+      });
+      await expect(
+        requestPasskeyRegistrationTicket('https://s.com', 'tok')
+      ).rejects.toThrow('boom');
+    });
+  });
+
+  describe('addPasskey', () => {
+    it('mints a ticket then opens the register page with the ticket in the fragment (no raw token)', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ ticket: 'ticket-xyz' }),
+      });
+      mockOpenAuthSession.mockResolvedValueOnce({
+        type: 'success',
+        url: 'sparkyfitnessmobile://oauth-callback?status=success',
+      } as never);
+
+      await addPasskey('https://s.com', 'sess-tok', 'My Phone');
+
+      expect(mockFetch.mock.calls[0][0]).toBe(
+        'https://s.com/api/auth/web-login/register-ticket'
+      );
+      const openedUrl = mockOpenAuthSession.mock.calls[0][0] as string;
+      expect(openedUrl).toContain(
+        '/web-login/register-passkey#ticket=ticket-xyz'
+      );
+      expect(openedUrl).not.toContain('token=sess-tok');
+      expect(openedUrl).not.toContain('?token=');
+    });
+
+    it('propagates SESSION_NOT_FRESH without opening the browser', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        json: async () => ({ code: 'SESSION_NOT_FRESH' }),
+      });
+
+      await expect(
+        addPasskey('https://s.com', 'tok', 'My Phone')
+      ).rejects.toMatchObject({ message: 'SESSION_NOT_FRESH' });
+      expect(mockOpenAuthSession).not.toHaveBeenCalled();
+    });
+  });
+
+  // Play Services only accepts WebAuthn origin assertions from allowlisted
+  // browsers; Custom Tabs open in the default browser, so a non-allowlisted
+  // default (e.g. F-Droid Firefox) must be overridden via browserPackage.
+  describe('passkey ceremony browser selection', () => {
+    const { Platform } = require('react-native');
+    const originalOS = Platform.OS;
+
+    const mintTicketAndSucceed = () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ ticket: 'ticket-xyz' }),
+      });
+      mockOpenAuthSession.mockResolvedValueOnce({
+        type: 'success',
+        url: 'sparkyfitnessmobile://oauth-callback?status=success',
+      } as never);
+    };
+
+    const setPlatform = (os: string) => {
+      Object.defineProperty(Platform, 'OS', { get: () => os, configurable: true });
+    };
+
+    afterEach(() => {
+      Object.defineProperty(Platform, 'OS', { get: () => originalOS, configurable: true });
+    });
+
+    it('overrides a non-allowlisted default browser with an installed allowlisted one', async () => {
+      setPlatform('android');
+      // With a default browser set, Android filters the VIEW-intent query
+      // (browserPackages) down to just the default — allowlisted browsers
+      // like Chrome only show up in servicePackages.
+      mockGetCustomTabsBrowsers.mockResolvedValueOnce({
+        defaultBrowserPackage: 'org.mozilla.fennec_fdroid',
+        browserPackages: ['org.mozilla.fennec_fdroid'],
+        servicePackages: ['org.mozilla.fennec_fdroid', 'com.android.chrome'],
+      });
+      mintTicketAndSucceed();
+
+      await addPasskey('https://s.com', 'tok', 'My Phone');
+
+      expect(mockOpenAuthSession.mock.calls[0][2]).toEqual({
+        browserPackage: 'com.android.chrome',
+      });
+    });
+
+    it('respects an allowlisted default browser', async () => {
+      setPlatform('android');
+      mockGetCustomTabsBrowsers.mockResolvedValueOnce({
+        defaultBrowserPackage: 'com.android.chrome',
+        browserPackages: ['com.android.chrome', 'org.mozilla.fennec_fdroid'],
+        servicePackages: ['com.android.chrome'],
+      });
+      mintTicketAndSucceed();
+
+      await addPasskey('https://s.com', 'tok', 'My Phone');
+
+      expect(mockOpenAuthSession.mock.calls[0][2]).toEqual({
+        browserPackage: undefined,
+      });
+    });
+
+    it('falls back to the default browser when the lookup fails', async () => {
+      setPlatform('android');
+      mockGetCustomTabsBrowsers.mockRejectedValueOnce(new Error('no custom tabs'));
+      mintTicketAndSucceed();
+
+      await addPasskey('https://s.com', 'tok', 'My Phone');
+
+      expect(mockOpenAuthSession.mock.calls[0][2]).toEqual({
+        browserPackage: undefined,
+      });
+    });
+
+    it('never inspects browsers on iOS', async () => {
+      setPlatform('ios');
+      mintTicketAndSucceed();
+
+      await addPasskey('https://s.com', 'tok', 'My Phone');
+
+      expect(mockGetCustomTabsBrowsers).not.toHaveBeenCalled();
+      expect(mockOpenAuthSession.mock.calls[0][2]).toEqual({
+        browserPackage: undefined,
+      });
     });
   });
 });

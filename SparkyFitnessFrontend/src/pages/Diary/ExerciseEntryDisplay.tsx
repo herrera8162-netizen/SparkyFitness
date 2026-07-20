@@ -24,6 +24,7 @@ import {
   ExerciseCategory,
 } from '@/constants/exercises';
 import { useState } from 'react';
+import { toHourMinute } from '@workspace/shared';
 
 interface ExerciseEntryDisplayProps {
   exerciseEntry: ExerciseEntry;
@@ -89,13 +90,18 @@ const ExerciseEntryDisplay: React.FC<ExerciseEntryDisplayProps> = ({
 
   const isActiveCalories = snapshot?.name === 'Active Calories';
 
-  const durationDisplay = formatMinutesToHHMM(
+  const setsDuration =
     exerciseEntry.sets && exerciseEntry.sets.length > 0
       ? exerciseEntry.sets.reduce(
           (sum, set) => sum + (set.duration || 0) + (set.rest_time || 0) / 60,
           0
         )
-      : exerciseEntry.duration_minutes || 0
+      : 0;
+  // Sets carry their own timers (planks, holds, rest). When those sum to 0
+  // (e.g. pure rep-based sets synced from Hevy), fall back to the entry-level
+  // duration_minutes so the workout's session time still surfaces.
+  const durationDisplay = formatMinutesToHHMM(
+    setsDuration > 0 ? setsDuration : exerciseEntry.duration_minutes || 0
   );
 
   const caloriesDisplay = `${Math.round(convertEnergy(exerciseEntry.calories_burned || 0, 'kcal', energyUnit))} ${getEnergyUnitString(energyUnit)}`;
@@ -166,6 +172,11 @@ const ExerciseEntryDisplay: React.FC<ExerciseEntryDisplayProps> = ({
           <span className="font-semibold text-sm text-gray-800 dark:text-gray-100 leading-tight">
             {snapshot?.name || 'Unknown Exercise'}
           </span>
+          {exerciseEntry.entry_time && (
+            <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full dark:bg-blue-900/30 dark:text-blue-300 font-medium">
+              {toHourMinute(exerciseEntry.entry_time)}
+            </span>
+          )}
           {sourceBadge && (
             <span
               className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${sourceBadge.className}`}

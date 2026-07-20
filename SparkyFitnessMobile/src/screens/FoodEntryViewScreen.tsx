@@ -20,6 +20,9 @@ import StepperInput from '../components/StepperInput';
 import { useActiveWorkoutBarPadding } from '../components/ActiveWorkoutBar';
 import BottomSheetPicker from '../components/BottomSheetPicker';
 import CalendarSheet, { type CalendarSheetRef } from '../components/CalendarSheet';
+import TimeSheet, { type TimeSheetRef } from '../components/TimeSheet';
+import { toHourMinute } from '@workspace/shared';
+import { formatTimeLabel } from '../utils/entryTimeDisplay';
 import { normalizeDate, formatDateLabel } from '../utils/dateUtils';
 import { getMealTypeLabel } from '../constants/meals';
 import { useMealTypes, usePreferences, useServerConnection, useCustomNutrients } from '../hooks';
@@ -41,12 +44,17 @@ import type { RootStackScreenProps } from '../types/navigation';
 import { useScreenHeader } from '../hooks/useScreenHeader';
 import { useNativeIOSHeadersActive } from '../services/nativeTabBarPreference';
 import {
-  formatVariantLabel,
-  formatServingUnit,
   buildLocalUnitVariants,
+  convertEquivalentVariantQuantity,
+  formatServingSizeDisplay,
+  buildLocalVariantOptions,
+  formatServingUnit,
+  formatVariantLabel,
+  resolveLocalPickerVariantId,
   unitVariantToDisplayValues,
 } from '../utils/foodDetails';
 import { DECIMAL_INPUT_REGEX, parseDecimalInput } from '../utils/numericInput';
+import VerifiedBadge from '../components/VerifiedBadge';
 
 type FoodEntryViewScreenProps = RootStackScreenProps<'FoodEntryView'>;
 
@@ -113,6 +121,7 @@ const FoodEntryViewScreen: React.FC<FoodEntryViewScreenProps> = ({
   const activeWorkoutBarPadding = useActiveWorkoutBarPadding('stack');
   const { profile } = useProfile();
   const calendarRef = useRef<CalendarSheetRef>(null);
+  const timeSheetRef = useRef<TimeSheetRef>(null);
 
   useEffect(() => {
     if (entry.food_entry_meal_id) {
@@ -129,6 +138,7 @@ const FoodEntryViewScreen: React.FC<FoodEntryViewScreenProps> = ({
   interface EditState {
     isEditing: boolean;
     selectedDate: string;
+    entryTime: string;
     selectedMealId: string | undefined;
     selectedVariantId: string | undefined;
     quantityText: string;
@@ -139,9 +149,11 @@ const FoodEntryViewScreen: React.FC<FoodEntryViewScreenProps> = ({
   }
 
   const initialDate = normalizeDate(entry.entry_date);
+  const initialEntryTime = toHourMinute(entry.entry_time) || '';
   const [editState, setEditState] = useState<EditState>({
     isEditing: false,
     selectedDate: initialDate,
+    entryTime: initialEntryTime,
     selectedMealId: entry.meal_type_id,
     selectedVariantId: entry.variant_id,
     quantityText: String(entry.quantity),
@@ -152,6 +164,7 @@ const FoodEntryViewScreen: React.FC<FoodEntryViewScreenProps> = ({
   const {
     isEditing,
     selectedDate,
+    entryTime,
     selectedMealId,
     selectedVariantId,
     quantityText,
@@ -186,31 +199,7 @@ const FoodEntryViewScreen: React.FC<FoodEntryViewScreenProps> = ({
   }, [createdVariantOverride, entry, variants]);
 
   const variantPickerOptions = useMemo(() => {
-    const baseOptions = (variants ?? []).map((variant) => ({
-      id: variant.id,
-      label: formatVariantLabel({
-        servingSize: variant.serving_size,
-        servingUnit: variant.serving_unit,
-        calories: variant.calories,
-      }),
-      servingSize: variant.serving_size,
-      servingUnit: variant.serving_unit,
-      calories: variant.calories,
-      protein: variant.protein,
-      carbs: variant.carbs,
-      fat: variant.fat,
-      fiber: variant.dietary_fiber,
-      saturatedFat: variant.saturated_fat,
-      sodium: variant.sodium,
-      sugars: variant.sugars,
-      transFat: variant.trans_fat,
-      potassium: variant.potassium,
-      calcium: variant.calcium,
-      iron: variant.iron,
-      cholesterol: variant.cholesterol,
-      vitaminA: variant.vitamin_a,
-      vitaminC: variant.vitamin_c,
-    }));
+    const baseOptions = buildLocalVariantOptions(variants);
 
     if (!createdVariantOverride?.id) {
       return baseOptions;
@@ -231,6 +220,14 @@ const FoodEntryViewScreen: React.FC<FoodEntryViewScreenProps> = ({
       ...baseOptions,
     ];
   }, [createdVariantOverride, variants]);
+
+  const resolvedLocalPickerVariantId = useMemo(
+    () =>
+      createdVariantOverride
+        ? undefined
+        : resolveLocalPickerVariantId(variants, selectedVariantId),
+    [createdVariantOverride, selectedVariantId, variants],
+  );
 
   const selectedUnitSelection = useMemo<FoodUnitSelectionResult | undefined>(() => {
     if (createdVariantOverride && createdVariantOverride.id === selectedVariantId) {
@@ -443,6 +440,43 @@ const FoodEntryViewScreen: React.FC<FoodEntryViewScreenProps> = ({
     variants,
   ]);
 
+  useEffect(() => {
+    if (
+      !resolvedLocalPickerVariantId ||
+      resolvedLocalPickerVariantId === selectedVariantId
+    ) {
+      return;
+    }
+
+    // Keep old saved reference/sibling IDs out of the display picker. The
+    // canonical ID is an in-memory edit state until the user explicitly saves.
+    const selectedVariant = selectorVariants.find(
+      (variant) => variant.id === selectedVariantId,
+    );
+    const resolvedVariant = variantPickerOptions.find(
+      (variant) => variant.id === resolvedLocalPickerVariantId,
+    );
+    const convertedQuantity = convertEquivalentVariantQuantity(
+      parseDecimalInput(quantityText) || 0,
+      selectedVariant?.serving_size,
+      resolvedVariant?.servingSize,
+    );
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    updateEdit({
+      selectedVariantId: resolvedLocalPickerVariantId,
+      ...(convertedQuantity !== undefined
+        ? { quantityText: formatServingSizeDisplay(convertedQuantity) }
+        : {}),
+    });
+  }, [
+    quantityText,
+    resolvedLocalPickerVariantId,
+    selectedVariantId,
+    selectorVariants,
+    updateEdit,
+    variantPickerOptions,
+  ]);
+
   const handleVariantChange = useCallback(
     (variantId: string) => {
       const variant = variants?.find(
@@ -573,6 +607,7 @@ const FoodEntryViewScreen: React.FC<FoodEntryViewScreenProps> = ({
         setEditState({
           isEditing: false,
           selectedDate: normalizeDate(mergedEntry.entry_date),
+          entryTime: toHourMinute(mergedEntry.entry_time) || '',
           selectedMealId: mergedEntry.meal_type_id,
           selectedVariantId: mergedEntry.variant_id,
           quantityText: String(mergedEntry.quantity),
@@ -586,6 +621,9 @@ const FoodEntryViewScreen: React.FC<FoodEntryViewScreenProps> = ({
     const payload: UpdateFoodEntryPayload = {};
     if (quantity !== entry.quantity) payload.quantity = quantity;
     if (displayValues.servingUnit !== entry.unit) payload.unit = displayValues.servingUnit;
+    if ((entryTime || null) !== (toHourMinute(entry.entry_time) || null)) {
+      payload.entry_time = entryTime || null;
+    }
     if (selectedVariantId !== entry.variant_id) {
       payload.variant_id = selectedVariantId;
       payload.unit = displayValues.servingUnit;
@@ -752,9 +790,12 @@ const FoodEntryViewScreen: React.FC<FoodEntryViewScreenProps> = ({
         }}
       >
         <Animated.View layout={LinearTransition.duration(300)}>
-          <Text className="text-text-primary text-3xl font-bold">
-            {(isEditing && adjustedValues?.name) || entry.food_name || 'Unknown food'}
-          </Text>
+          <View className="flex-row items-start gap-2">
+            <Text className="text-text-primary text-3xl font-bold flex-shrink">
+              {(isEditing && adjustedValues?.name) || entry.food_name || 'Unknown food'}
+            </Text>
+            {entry.provider_verified ? <VerifiedBadge size="md" style={{ marginTop: 7 }} /> : null}
+          </View>
           {((isEditing && adjustedValues?.brand) || entry.brand_name) && (
             <Text className="text-text-muted mt-1 font-semibold">
               {(isEditing && adjustedValues?.brand) || entry.brand_name}
@@ -1105,6 +1146,46 @@ const FoodEntryViewScreen: React.FC<FoodEntryViewScreenProps> = ({
           </View>
         </Animated.View>
 
+        <Animated.View
+          layout={LinearTransition.duration(300)}
+          className="mt-2 flex-row items-center"
+        >
+          <Text className="text-text-secondary text-base mr-2">Time</Text>
+          {isEditing ? (
+            <>
+              <TouchableOpacity
+                onPress={() => timeSheetRef.current?.present()}
+                activeOpacity={0.7}
+                className="flex-row items-center"
+              >
+                <Text className="text-text-primary text-base font-medium">
+                  {formatTimeLabel(entryTime) ?? 'None'}
+                </Text>
+                <Icon
+                  name="chevron-down"
+                  size={12}
+                  color={textPrimary}
+                  style={{ marginLeft: 6 }}
+                  weight="medium"
+                />
+              </TouchableOpacity>
+              {entryTime !== '' && (
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  className="flex-row items-center ml-4"
+                  onPress={() => updateEdit({ entryTime: '' })}
+                >
+                  <Text className="text-text-link text-sm font-medium">Clear</Text>
+                </TouchableOpacity>
+              )}
+            </>
+          ) : (
+            <Text className="text-text-primary text-base font-medium">
+              {formatTimeLabel(entry.entry_time) ?? 'None'}
+            </Text>
+          )}
+        </Animated.View>
+
         <Animated.View layout={LinearTransition.duration(300)}>
           <Button
             variant="ghost"
@@ -1123,6 +1204,13 @@ const FoodEntryViewScreen: React.FC<FoodEntryViewScreenProps> = ({
           ref={calendarRef}
           selectedDate={selectedDate}
           onSelectDate={(date) => updateEdit({ selectedDate: date })}
+        />
+      )}
+      {isEditing && (
+        <TimeSheet
+          ref={timeSheetRef}
+          value={entryTime}
+          onSelectTime={(time) => updateEdit({ entryTime: time })}
         />
       )}
     </View>

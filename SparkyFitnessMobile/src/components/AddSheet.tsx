@@ -19,13 +19,17 @@ export const addSheetRef = React.createRef<AddSheetRef>();
 
 interface AddSheetProps {
   onAddFood: () => void;
-  onAddWorkout: () => void;
+  onStartWorkout: () => void;
   onAddActivity: () => void;
-  onAddFromPreset: () => void;
+  onLogWorkout: () => void;
   onSyncHealthData: () => void;
   onBarcodeScan: () => void;
   onAddMeasurements: () => void;
   onAskSparky: () => void;
+  onOpenCycle?: () => void;
+  showCycleCard?: boolean;
+  cycleLabel?: string;
+  cycleIcon?: IconName;
   onDismissWithoutAction?: () => void;
 }
 
@@ -36,7 +40,7 @@ interface ActionCard {
 }
 
 const AddSheet = React.forwardRef<AddSheetRef, AddSheetProps>(
-  ({ onAddFood, onAddWorkout, onAddActivity, onAddFromPreset, onSyncHealthData, onBarcodeScan, onAddMeasurements, onAskSparky, onDismissWithoutAction }, ref) => {
+  ({ onAddFood, onStartWorkout, onAddActivity, onLogWorkout, onSyncHealthData, onBarcodeScan, onAddMeasurements, onAskSparky, onOpenCycle, showCycleCard, cycleLabel, cycleIcon, onDismissWithoutAction }, ref) => {
     const bottomSheetRef = useRef<BottomSheetModal>(null);
     const isDismissingRef = useRef(false);
     const isOpenRef = useRef(false);
@@ -232,7 +236,12 @@ const AddSheet = React.forwardRef<AddSheetRef, AddSheetProps>(
         <View className="h-10 items-center justify-center">
           <Icon name={icon} size={32} color={accentPrimary} />
         </View>
-        <Text className="text-text-primary text-sm font-medium mt-2">
+        <Text
+          className="text-text-primary text-sm font-medium mt-2 text-center"
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.8}
+        >
           {label}
         </Text>
         <Text className="text-xs mt-1 text-center" numberOfLines={2} style={{ color: textSecondary, minHeight: 32 }}>
@@ -267,9 +276,9 @@ const AddSheet = React.forwardRef<AddSheetRef, AddSheetProps>(
                 </Text>
               </Pressable>
               <View className="flex-row">
-                {renderExerciseOption('Workout', 'Sets & reps', 'exercise-weights', onAddWorkout)}
+                {renderExerciseOption('Workout', 'Live sets & reps', 'exercise-weights', onStartWorkout)}
                 {renderExerciseOption('Activity', 'Duration & distance', 'exercise-running-filled', onAddActivity)}
-                {renderExerciseOption('Preset', 'Use a template', 'bookmark-filled', onAddFromPreset)}
+                {renderExerciseOption('Log Workout', 'Past sets & reps', 'pencil', onLogWorkout)}
               </View>
             </>
           ) : (
@@ -282,6 +291,9 @@ const AddSheet = React.forwardRef<AddSheetRef, AddSheetProps>(
                 {renderCard(cards[2])}
                 {renderCard(cards[3])}
               </View>
+              {showCycleCard && onOpenCycle
+                ? renderSecondaryRow(cycleLabel ?? 'Wellness', cycleIcon ?? 'wellness', onOpenCycle)
+                : null}
               {renderSecondaryRow('Ask Sparky', 'sparkles', onAskSparky)}
               {renderSecondaryRow('Sync Health Data', 'sync', onSyncHealthData)}
             </>

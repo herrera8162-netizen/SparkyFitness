@@ -17,7 +17,6 @@ on:
           - frontend
           - server
           - garmin
-          - mcp
 
 jobs:
   push_to_registries:
@@ -156,40 +155,6 @@ jobs:
           subject-digest: ${{ steps.push-garmin.outputs.digest }}
           push-to-registry: true
 
-      # ── MCP Server ────────────────────────────────────────────────────────────
-      - name: Metadata MCP Server
-        id: meta-mcp
-        if: ${{ inputs.service == 'all' || inputs.service == 'mcp' }}
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ${{ secrets.DOCKER_USERNAME && format('{0}/sparkyfitness_mcp', secrets.DOCKER_USERNAME) || '' }}
-            ghcr.io/${{ github.repository }}-mcp
-          tags: |
-            type=raw,value=${{ inputs.tag }}
-
-      - name: Build and push MCP Server
-        id: push-mcp
-        if: ${{ inputs.service == 'all' || inputs.service == 'mcp' }}
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: docker/Dockerfile.mcp
-          push: true
-          tags: ${{ steps.meta-mcp.outputs.tags }}
-          labels: ${{ steps.meta-mcp.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Generate artifact attestation MCP Server
-        if: ${{ inputs.service == 'all' || inputs.service == 'mcp' }}
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-name: ghcr.io/${{ github.repository }}-mcp
-          subject-digest: ${{ steps.push-mcp.outputs.digest }}
-          push-to-registry: true
-
       # ── Unified ──────────────────────────────────────────────────────────────
       - name: Metadata unified
         id: meta-unified
@@ -223,4 +188,3 @@ jobs:
           subject-name: ghcr.io/${{ github.repository }}-unified
           subject-digest: ${{ steps.push-unified.outputs.digest }}
           push-to-registry: true
-

@@ -67,7 +67,13 @@ export const updateCheckInMeasurementField = async (payload: {
   });
 };
 
-export const loadExistingCheckInMeasurements = async (
+/**
+ * Loads measurements with carry-forward semantics: each field holds the
+ * latest value recorded on or before the date (steps are same-day only).
+ * For only what was actually recorded on the date itself, use
+ * loadCheckInMeasurementsForDate.
+ */
+export const loadLatestCheckInMeasurements = async (
   selectedDate: string
 ): Promise<CheckInMeasurementsResponse | null> => {
   const response = await apiCall(`/measurements/check-in/${selectedDate}`, {
@@ -79,6 +85,20 @@ export const loadExistingCheckInMeasurements = async (
     return null;
   }
   return checkInMeasurementsResponseSchema.parse(response);
+};
+
+/**
+ * Loads only the measurements recorded on the given date — no carry-forward
+ * from earlier days.
+ */
+export const loadCheckInMeasurementsForDate = async (
+  selectedDate: string
+): Promise<CheckInMeasurementsResponse | null> => {
+  const rows = await fetchRecentStandardMeasurements(
+    selectedDate,
+    selectedDate
+  );
+  return rows[0] ?? null;
 };
 
 export const loadExistingCustomMeasurements = async (
@@ -135,5 +155,35 @@ export const fetchCustomEntries = async (
 
   return apiCall(`/measurements/custom-entries?${params.toString()}`, {
     method: 'GET',
+  });
+};
+
+export const createCustomCategory = async (body: {
+  name: string;
+  display_name: string;
+  measurement_type: string;
+  data_type: string;
+}): Promise<CustomCategoriesResponse> => {
+  return apiCall('/measurements/custom-categories', {
+    method: 'POST',
+    body,
+  });
+};
+
+// Per-record outcome contract returned by processHealthData. A 200 with a
+// non-empty `errors` array means the remaining rows were still saved.
+export interface HealthDataImportResult {
+  message: string;
+  processed: Array<{ type?: string; status: string; data?: unknown }>;
+  errors: Array<{ error: string; entry?: unknown }>;
+  skipped: Array<{ reason: string; entry?: unknown }>;
+}
+
+export const importHealthDataCsv = async (
+  items: Array<Record<string, unknown>>
+): Promise<HealthDataImportResult> => {
+  return apiCall('/measurements/import-health-data', {
+    method: 'POST',
+    body: { items },
   });
 };

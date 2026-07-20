@@ -29,6 +29,7 @@ import {
   Edit,
   Copy,
   Trash2,
+  Star,
 } from 'lucide-react';
 import {
   DropdownMenu,
@@ -47,6 +48,10 @@ import { useFoodDatabaseManager } from '@/hooks/Foods/useFoodDatabaseManager';
 import DeleteFoodDialog, { PendingDeletion } from './DeleteFoodDialog';
 import FoodSearchDialog from '@/components/FoodSearch/FoodSearchDialog';
 import AllergenBadges from '@/components/AllergenBadges';
+import {
+  useFavoritesQuery,
+  useToggleFavoriteMutation,
+} from '@/hooks/Foods/useFavorites';
 
 import { useBulkSelection } from '@/hooks/useBulkSelection';
 import BulkActionToolbar from '@/components/BulkActionToolbar';
@@ -68,12 +73,22 @@ import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useCustomNutrients } from '@/hooks/Foods/useCustomNutrients';
+import { formatServingLabel } from '@/utils/foodServing';
 
 const FoodDatabaseManager = () => {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
   const [viewingFood, setViewingFood] = useState<Food | null>(null);
   const { data: customNutrients = [] } = useCustomNutrients();
+
+  // Favorites: a star INDICATOR on favorited rows (a dedicated column on desktop,
+  // a leading star by the name on mobile); the toggle itself lives in the ⋮ menu.
+  const { data: favorites } = useFavoritesQuery();
+  const { mutate: toggleFavorite } = useToggleFavoriteMutation();
+  const favoriteFoodIds = useMemo(
+    () => new Set((favorites?.favoriteFoods ?? []).map((f) => f.id)),
+    [favorites]
+  );
 
   const {
     user,
@@ -115,6 +130,7 @@ const FoodDatabaseManager = () => {
     handleAddFoodToMeal,
     handleDeleteRequest,
     deleteFood,
+    mealTypes,
   } = useFoodDatabaseManager();
 
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
@@ -251,11 +267,17 @@ const FoodDatabaseManager = () => {
                 )}
               </div>
               <span className="text-[10px] text-gray-500">
-                {t('foodDatabaseManager.perServing', {
-                  servingSize: food.default_variant?.serving_size || 0,
-                  servingUnit: food.default_variant?.serving_unit || '',
-                  defaultValue: `Per ${food.default_variant?.serving_size || 0} ${food.default_variant?.serving_unit || ''}`,
-                })}
+                {food.default_variant
+                  ? t('foodDatabaseManager.perServing', {
+                      servingSize: formatServingLabel(food.default_variant),
+                      servingUnit: '',
+                      defaultValue: `Per ${formatServingLabel(food.default_variant)}`,
+                    })
+                  : t('foodDatabaseManager.perServing', {
+                      servingSize: 0,
+                      servingUnit: '',
+                      defaultValue: 'Per 0',
+                    })}
               </span>
               <AllergenBadges
                 allergens={food.default_variant?.allergens}
@@ -264,6 +286,24 @@ const FoodDatabaseManager = () => {
             </div>
           );
         },
+      },
+      {
+        // Indicator-only column (left of Calories on desktop). The favorite
+        // TOGGLE lives in the ⋮ menu; this just shows a gold star when starred.
+        id: 'favorite',
+        header: () => (
+          <span className="sr-only">{t('common.favorite', 'Favorite')}</span>
+        ),
+        enableSorting: false,
+        enableHiding: false,
+        meta: { hideOnMobile: true },
+        cell: ({ row }) =>
+          favoriteFoodIds.has(row.original.id) ? (
+            <Star
+              className="h-4 w-4 fill-current text-yellow-500"
+              aria-label={t('common.favorited', 'Favorited')}
+            />
+          ) : null,
       },
       ...visibleNutrients.map((nutrient) => {
         const meta = getNutrientMetadata(nutrient, customNutrients);
@@ -344,6 +384,32 @@ const FoodDatabaseManager = () => {
                   {t('foodDatabaseManager.duplicateFood', 'Duplicate food')}
                 </DropdownMenuItem>
                 <DropdownMenuItem
+                  onClick={() =>
+                    toggleFavorite({
+                      type: 'food',
+                      id: food.id,
+                      isFavorite: favoriteFoodIds.has(food.id),
+                    })
+                  }
+                >
+                  <Star
+                    className={`mr-2 h-4 w-4 ${
+                      favoriteFoodIds.has(food.id)
+                        ? 'fill-current text-yellow-500'
+                        : ''
+                    }`}
+                  />
+                  {favoriteFoodIds.has(food.id)
+                    ? t(
+                        'foodDatabaseManager.removeFromFavorites',
+                        'Remove from favorites'
+                      )
+                    : t(
+                        'foodDatabaseManager.addToFavorites',
+                        'Add to favorites'
+                      )}
+                </DropdownMenuItem>
+                <DropdownMenuItem
                   disabled={!isEditable}
                   onClick={() =>
                     togglePublicSharing({
@@ -393,6 +459,8 @@ const FoodDatabaseManager = () => {
       togglePublicSharing,
       getFoodSourceBadge,
       customNutrients,
+      favoriteFoodIds,
+      toggleFavorite,
     ]
   );
 
@@ -656,6 +724,9 @@ const FoodDatabaseManager = () => {
           open={showFoodUnitSelectorDialog}
           onOpenChange={setShowFoodUnitSelectorDialog}
           onSelect={handleAddFoodToMeal}
+          showTimeInput={true}
+          showMealTypeSelect={true}
+          availableMealTypes={mealTypes}
         />
       )}
 
@@ -703,10 +774,19 @@ const FoodDatabaseManager = () => {
             <DialogDescription>
               {viewingFood && getFoodSourceBadge(viewingFood)}
               <div className="mt-2 text-base font-medium text-gray-600">
-                {t('foodDatabaseManager.perServing', {
-                  servingSize: viewingFood?.default_variant?.serving_size || 0,
-                  servingUnit: viewingFood?.default_variant?.serving_unit || '',
-                })}
+                {viewingFood?.default_variant
+                  ? t('foodDatabaseManager.perServing', {
+                      servingSize: formatServingLabel(
+                        viewingFood.default_variant
+                      ),
+                      servingUnit: '',
+                      defaultValue: `Per ${formatServingLabel(viewingFood.default_variant)}`,
+                    })
+                  : t('foodDatabaseManager.perServing', {
+                      servingSize: 0,
+                      servingUnit: '',
+                      defaultValue: 'Per 0',
+                    })}
               </div>
             </DialogDescription>
           </DialogHeader>

@@ -476,6 +476,16 @@ async function getRecentMeals(userId: string, limit = 3) {
     throw error;
   }
 }
+async function getTopMeals(userId: string, limit = 3) {
+  try {
+    const meals = await mealRepository.getTopMeals(userId, limit);
+    await attachResolvedMealNutrition(userId, meals);
+    return meals;
+  } catch (error) {
+    log('error', `Error in mealService.getTopMeals for user ${userId}:`, error);
+    throw error;
+  }
+}
 async function getMealById(userId: string, mealId: string) {
   try {
     log(
@@ -868,7 +878,11 @@ async function searchMeals(
   limit: number | null = null
 ) {
   try {
-    const meals = await mealRepository.searchMeals(searchTerm, userId, limit);
+    const meals = await mealRepository.searchMeals(
+      searchTerm as string | null | undefined,
+      userId,
+      limit
+    );
     await attachResolvedMealNutrition(userId, meals);
     return meals;
   } catch (error) {
@@ -1041,6 +1055,7 @@ async function createMealFromDiaryEntries(
 export { createMeal };
 export { getMeals };
 export { getRecentMeals };
+export { getTopMeals };
 export { getMealById };
 export { updateMeal };
 export { deleteMeal };
@@ -1059,6 +1074,7 @@ export default {
   createMeal,
   getMeals,
   getRecentMeals,
+  getTopMeals,
   getMealById,
   updateMeal,
   deleteMeal,

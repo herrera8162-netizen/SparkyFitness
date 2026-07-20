@@ -237,6 +237,11 @@ async function updateFoodEntry(
         ...entryData,
         meal_type_id: entryData.meal_type_id ?? existingEntry.meal_type_id,
         variant_id: variantIdToUse,
+        // undefined preserves the stored time; an explicit null clears it
+        entry_time:
+          entryData.entry_time !== undefined
+            ? entryData.entry_time
+            : existingEntry.entry_time,
       }, // Ensure meal_type_id and correct variant_id are passed
       newSnapshotData // Pass the new snapshot data
     );
@@ -413,6 +418,7 @@ async function copyFoodEntries(
                 meal_template_id: originalMeal.meal_template_id,
                 meal_type_id: targetMealTypeId,
                 entry_date: targetDate,
+                entry_time: originalMeal.entry_time ?? null,
                 name: originalMeal.name,
                 description: originalMeal.description,
                 quantity: originalMeal.quantity,
@@ -448,6 +454,7 @@ async function copyFoodEntries(
           quantity: entry.quantity,
           unit: entry.unit,
           entry_date: targetDate,
+          entry_time: entry.entry_time ?? null,
           variant_id: entry.variant_id,
           meal_plan_template_id: null,
           food_name: entry.food_name,
@@ -527,8 +534,12 @@ async function copyFoodEntriesFromUser(
       'info',
       `copyFoodEntriesFromUser: Copying from user ${sourceUserId} (${sourceDate} ${sourceMealType}) to user ${authenticatedUserId} (${targetDate} ${targetMealType}) by actor ${actingUserId}`
     );
+    // Copy authorization must be evaluated for the real actor performing the
+    // request, not the active/switched user (authenticatedUserId here is the
+    // active-context user). Otherwise a delegate acting in another user's
+    // context could copy a third party's diary using that user's grants.
     const hasAccess = await familyAccessRepository.checkCopyPermissions(
-      authenticatedUserId,
+      actingUserId,
       sourceUserId
     );
     if (!hasAccess) {
@@ -575,6 +586,7 @@ async function copyFoodEntriesFromUser(
                 meal_template_id: originalMeal.meal_template_id,
                 meal_type_id: targetMealTypeId,
                 entry_date: targetDate,
+                entry_time: originalMeal.entry_time ?? null,
                 name: originalMeal.name,
                 description: originalMeal.description,
                 quantity: originalMeal.quantity,
@@ -605,6 +617,7 @@ async function copyFoodEntriesFromUser(
           quantity: entry.quantity,
           unit: entry.unit,
           entry_date: targetDate,
+          entry_time: entry.entry_time ?? null,
           variant_id: entry.variant_id,
           meal_plan_template_id: null,
           food_name: entry.food_name,
@@ -671,8 +684,10 @@ async function copyFoodEntriesToUser(
       'info',
       `copyFoodEntriesToUser: Copying from user ${authenticatedUserId} (${sourceDate} ${sourceMealType}) to user ${targetUserId} (${targetDate} ${targetMealType}) by actor ${actingUserId}`
     );
+    // Authorize the real actor, not the active/switched user — see
+    // copyFoodEntriesFromUser.
     const hasAccess = await familyAccessRepository.checkCopyPermissions(
-      authenticatedUserId,
+      actingUserId,
       targetUserId
     );
     if (!hasAccess) {
@@ -719,6 +734,7 @@ async function copyFoodEntriesToUser(
                 meal_template_id: originalMeal.meal_template_id,
                 meal_type_id: targetMealTypeId,
                 entry_date: targetDate,
+                entry_time: originalMeal.entry_time ?? null,
                 name: originalMeal.name,
                 description: originalMeal.description,
                 quantity: originalMeal.quantity,
@@ -749,6 +765,7 @@ async function copyFoodEntriesToUser(
           quantity: entry.quantity,
           unit: entry.unit,
           entry_date: targetDate,
+          entry_time: entry.entry_time ?? null,
           variant_id: entry.variant_id,
           meal_plan_template_id: null,
           food_name: entry.food_name,
@@ -971,6 +988,7 @@ interface FlattenContext {
   mealTypeId: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   entryDate: any;
+  entryTime?: string | null;
   foodEntryMealId: string;
 }
 
@@ -1129,6 +1147,7 @@ async function buildLeafFoodEntries(
       unit: component.unit,
       variant_id: variantId,
       entry_date: ctx.entryDate,
+      entry_time: ctx.entryTime ?? null,
       food_entry_meal_id: ctx.foodEntryMealId,
       ...snapshot,
     });
@@ -1216,6 +1235,7 @@ async function createFoodEntryMeal(
         meal_type_id: mealData.meal_type_id || null,
         meal_type: mealData.meal_type,
         entry_date: mealData.entry_date,
+        entry_time: mealData.entry_time ?? null,
         name: name,
         description: description,
         quantity: mealData.quantity || 1.0, // Default to 1.0
@@ -1257,6 +1277,7 @@ async function createFoodEntryMeal(
         targetUserId: newFoodEntryMeal.user_id, // target user from the created meal
         mealTypeId: resolvedMealTypeId,
         entryDate: mealData.entry_date,
+        entryTime: newFoodEntryMeal.entry_time ?? null,
         foodEntryMealId: newFoodEntryMeal.id,
       }
     );
@@ -1305,6 +1326,7 @@ async function updateFoodEntryMeal(
           meal_type: updatedMealData.meal_type, // Also allow updating meal type
           meal_type_id: updatedMealData.meal_type_id, // Update meal type id so component entries inherit it
           entry_date: updatedMealData.entry_date, // And entry date
+          entry_time: updatedMealData.entry_time, // undefined preserves, null clears
           meal_template_id: updatedMealData.meal_template_id, // Pass meal_template_id
           quantity: updatedMealData.quantity, // Update quantity
           unit: updatedMealData.unit, // Update unit
@@ -1429,6 +1451,7 @@ async function updateFoodEntryMeal(
         unit: foodItem.unit,
         variant_id: variantId,
         entry_date: updatedMealData.entry_date,
+        entry_time: updatedFoodEntryMeal.entry_time ?? null,
         food_entry_meal_id: foodEntryMealId, // Link to the existing food_entry_meals ID
         ...snapshot,
       });

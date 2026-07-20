@@ -2,6 +2,10 @@ import { getClient } from '../db/poolManager.js';
 import { log } from '../config/logging.js';
 // @ts-expect-error TS(7016): Could not find a declaration file for module 'pg-f... Remove this comment to see the full error message
 import format from 'pg-format';
+import {
+  buildSqlSearch,
+  buildSqlExactMatchOrder,
+} from '../utils/dbSearchHelper.js';
 // --- Helpers ---
 // Shared column list + joins for reading a meal's ingredient rows (meal_foods).
 // A row is polymorphic (item_type 'food' | 'meal'): food rows carry the food
@@ -170,31 +174,54 @@ async function getMeals(userId: any, filter = 'all') {
     // For 'family' and 'public' filters, separate functions will be called in mealService
     query += ' ORDER BY name ASC';
     const result = await client.query(query, queryParams);
-    return attachFoodsToMeals(client, result.rows);
+    // Await so attachFoodsToMeals' queries finish before finally releases the client.
+    return await attachFoodsToMeals(client, result.rows);
   } finally {
     client.release();
   }
 }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function searchMeals(
-  searchTerm: any,
-  userId: any,
+  searchTerm: string | null | undefined,
+  userId: string | null | undefined,
   limit: number | null = null
 ) {
   const client = await getClient(userId); // User-specific operation
   try {
+    const {
+      whereClauses: searchClauses,
+      queryParams: searchParams,
+      nextParamIndex,
+    } = buildSqlSearch('name', searchTerm, 1);
+    const whereClauses: string[] = [...searchClauses];
+    const queryParams: any[] = [...searchParams];
+    const paramIndex = nextParamIndex;
+
+    const whereSql =
+      whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+    let orderClause = 'name ASC';
+    const selectQueryParams = [...queryParams];
+    let selectParamIndex = paramIndex;
+    if (searchTerm) {
+      const exactMatchParamIndex = selectParamIndex;
+      selectQueryParams.push(`%${searchTerm}%`);
+      selectParamIndex++;
+      orderClause = `${buildSqlExactMatchOrder('name', exactMatchParamIndex)}, name ASC`;
+    }
+
     let query = `
       SELECT id, user_id, name, description, is_public, serving_size, serving_unit, total_servings
       FROM meals
-      WHERE name ILIKE '%' || $1 || '%'
-      ORDER BY name ASC`;
-    const queryParams = [searchTerm];
+      ${whereSql}
+      ORDER BY ${orderClause}`;
+
     if (limit !== null) {
-      query += ' LIMIT $3';
-      queryParams.push(limit);
+      query += ` LIMIT $${selectParamIndex}`;
+      selectQueryParams.push(limit);
     }
-    const result = await client.query(query, queryParams);
-    return attachFoodsToMeals(client, result.rows);
+    const result = await client.query(query, selectQueryParams);
+    // Await so attachFoodsToMeals' queries finish before finally releases the client.
+    return await attachFoodsToMeals(client, result.rows);
   } finally {
     client.release();
   }
@@ -572,39 +599,71 @@ async function getRecentMeals(userId: any, limit = 3) {
         m.serving_unit,
         m.total_servings,
         m.created_at,
-        m.updated_at
+        m.updated_at,
+        lu.last_used_date
       FROM latest_usage lu
       JOIN meals m ON m.id = lu.meal_id
       ORDER BY lu.last_used_date DESC, lu.last_used_at DESC, m.name ASC
       LIMIT $2`,
       [userId, limit]
     );
-    return attachFoodsToMeals(client, result.rows);
+    // await before returning: attachFoodsToMeals runs more queries on `client`,
+    // and the finally below releases it. Returning the un-awaited promise would
+    // release the client back to the pool before those queries finish.
+    return await attachFoodsToMeals(client, result.rows);
   } finally {
     client.release();
   }
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getTopMeals(userId: any, limit = null) {
+async function getTopMeals(userId: any, limit = 3) {
   const client = await getClient(userId); // User-specific operation
   try {
-    // For "top meals", we'll use a simple heuristic: meals with more foods,
-    // or more recently created public meals. This can be refined later.
-    let query = `
-      SELECT m.id, m.user_id, m.name, m.description, m.is_public, m.serving_size, m.serving_unit, m.total_servings, m.created_at, m.updated_at,
-             COUNT(mf.id) AS food_count
-      FROM meals m
-      LEFT JOIN meal_foods mf ON m.id = mf.meal_id
+    // "Top meals" = the meals this user logs most often, ranked by how many
+    // times they have been logged. Usage is counted over the same two sources
+    // as getRecentMeals: meals logged directly (food_entries.meal_id) and meals
+    // logged as a template (food_entry_meals.meal_template_id).
+    //
+    // Join meals first, then GROUP/LIMIT, so the LIMIT is applied to *active*
+    // meals only. A frequently logged meal that was later deleted still leaves
+    // its id in the usage history; limiting before the join would let those
+    // dead ids take top slots and then get dropped by the inner join, returning
+    // fewer than `limit` (or zero) results. (Matches getRecentMeals' ordering.)
+    const result = await client.query(
+      `WITH meal_usage AS (
+        SELECT fe.meal_id AS meal_id
+        FROM food_entries fe
+        WHERE fe.user_id = $1
+          AND fe.meal_id IS NOT NULL
+        UNION ALL
+        SELECT fem.meal_template_id AS meal_id
+        FROM food_entry_meals fem
+        WHERE fem.user_id = $1
+          AND fem.meal_template_id IS NOT NULL
+      )
+      SELECT
+        m.id,
+        m.user_id,
+        m.name,
+        m.description,
+        m.is_public,
+        m.serving_size,
+        m.serving_unit,
+        m.total_servings,
+        m.created_at,
+        m.updated_at,
+        COUNT(*) AS usage_count
+      FROM meal_usage mu
+      JOIN meals m ON m.id = mu.meal_id
       GROUP BY m.id
-      ORDER BY food_count DESC, m.created_at DESC`;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const queryParams: any = [];
-    if (limit !== null) {
-      query += ' LIMIT $2';
-      queryParams.push(limit);
-    }
-    const result = await client.query(query, queryParams);
-    return attachFoodsToMeals(client, result.rows);
+      ORDER BY usage_count DESC, m.name ASC
+      LIMIT $2`,
+      [userId, limit]
+    );
+    // await before the finally releases the client: attachFoodsToMeals runs
+    // more queries on this same client, so returning the promise unawaited would
+    // release the client back to the pool before those queries finish.
+    return await attachFoodsToMeals(client, result.rows);
   } finally {
     client.release();
   }
@@ -855,7 +914,8 @@ async function getPublicMeals(userId: any) {
        FROM meals
        WHERE is_public = TRUE
        ORDER BY name ASC`);
-    return attachFoodsToMeals(client, result.rows);
+    // Await so attachFoodsToMeals' queries finish before finally releases the client.
+    return await attachFoodsToMeals(client, result.rows);
   } finally {
     client.release();
   }
@@ -876,12 +936,71 @@ async function getFamilyMeals(userId: any) {
        ORDER BY m.name ASC`,
       [userId]
     );
+    // Await so attachFoodsToMeals' queries finish before finally releases the client.
+    return await attachFoodsToMeals(client, result.rows);
+  } finally {
+    client.release();
+  }
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getFavoriteMeals(userId: any) {
+  const client = await getClient(userId); // User-specific operation
+  try {
+    const result = await client.query(
+      `SELECT
+        m.id,
+        m.user_id,
+        m.name,
+        m.description,
+        m.is_public,
+        m.serving_size,
+        m.serving_unit,
+        m.total_servings,
+        m.created_at,
+        m.updated_at,
+        ff.created_at AS favorited_at
+      FROM food_favorites ff
+      JOIN meals m ON m.id = ff.meal_id
+      WHERE ff.user_id = $1
+        AND ff.meal_id IS NOT NULL
+      ORDER BY ff.created_at DESC`,
+      [userId]
+    );
     return attachFoodsToMeals(client, result.rows);
   } finally {
     client.release();
   }
 }
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function addMealFavorite(userId: any, mealId: any) {
+  const client = await getClient(userId); // User-specific operation
+  try {
+    await client.query(
+      `INSERT INTO food_favorites (user_id, meal_id)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id, meal_id) DO NOTHING`,
+      [userId, mealId]
+    );
+  } finally {
+    client.release();
+  }
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function removeMealFavorite(userId: any, mealId: any) {
+  const client = await getClient(userId); // User-specific operation
+  try {
+    const result = await client.query(
+      `DELETE FROM food_favorites
+       WHERE user_id = $1 AND meal_id = $2`,
+      [userId, mealId]
+    );
+    return (result.rowCount ?? 0) > 0;
+  } finally {
+    client.release();
+  }
+}
 export { createMeal };
+export { getFavoriteMeals, addMealFavorite, removeMealFavorite };
 export { getMeals };
 export { getMealById };
 export { updateMeal };
@@ -938,4 +1057,7 @@ export default {
   getMealComponentUsage,
   getMealSubtreeDepth,
   getMealAncestryHeight,
+  getFavoriteMeals,
+  addMealFavorite,
+  removeMealFavorite,
 };

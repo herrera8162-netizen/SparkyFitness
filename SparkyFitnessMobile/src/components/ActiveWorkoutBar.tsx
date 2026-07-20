@@ -5,6 +5,7 @@ import React, {
   useSyncExternalStore,
   type ReactNode,
 } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { View, Text, Pressable, Alert } from 'react-native';
 import {
   createNavigationContainerRef,
@@ -22,8 +23,15 @@ import { useCSSVariable } from 'uniwind';
 import Icon from './Icon';
 import { TAB_BAR_HEIGHT } from './CustomTabBar';
 import { useActiveWorkoutStore } from '../stores/activeWorkoutStore';
+import { flushActiveWorkoutBeforeClear } from '../hooks/useActiveWorkoutAutosave';
 import { usePreferences } from '../hooks/usePreferences';
-import { weightFromKg } from '../utils/unitConversions';
+import { useRestCountdown } from '../hooks/useRestCountdown';
+import {
+  describeActiveSet,
+  formatRestCountdown,
+  formatSetLoad,
+  normalizeWeightUnit,
+} from '../utils/workoutSession';
 import { useNativeIOSTabsActive } from '../services/nativeTabBarPreference';
 import type { RootStackParamList } from '../types/navigation';
 import LiquidGlassSurface, {
@@ -40,7 +48,7 @@ import { withAlpha } from '../utils/colors';
  */
 export const navigationRef = createNavigationContainerRef<RootStackParamList>();
 
-const BAR_CONTENT_HEIGHT = 52;
+const BAR_CONTENT_HEIGHT = 60;
 const PROGRESS_BAR_BOTTOM_OFFSET = 1;
 const SLIDE_ANIMATION_DURATION_MS = 220;
 
@@ -132,8 +140,9 @@ export function useActiveWorkoutBarPadding(
 /**
  * Routes where the HUD should be hidden — either modal entry flows (food /
  * exercise search), full-screen editors with their own sticky bottom footers
- * (WorkoutAdd, ActivityAdd), or the chat screen whose composer is pinned to
- * the bottom — all of which would collide with the bar.
+ * (WorkoutAdd, ActivityAdd), the chat screen whose composer is pinned to the
+ * bottom — all of which would collide with the bar — or the active-workout
+ * screen itself, which is the surface the HUD opens.
  */
 const HIDDEN_ROUTES = new Set<string>([
   'FoodSearch',
@@ -148,14 +157,8 @@ const HIDDEN_ROUTES = new Set<string>([
   'ActivityAdd',
   'MeasurementsAdd',
   'Chat',
+  'ActiveWorkout',
 ]);
-
-function formatCountdown(totalSeconds: number): string {
-  const s = Math.max(0, totalSeconds);
-  const mm = Math.floor(s / 60);
-  const ss = s % 60;
-  return `${mm}:${ss.toString().padStart(2, '0')}`;
-}
 
 function computeNavInfo(state: NavigationState | undefined): {
   suppressed: boolean;
@@ -279,14 +282,10 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
   const sessionId = useActiveWorkoutStore(s => s.sessionId);
   const activeSession = useActiveWorkoutStore(s => s.session);
   const activeSetId = useActiveWorkoutStore(s => s.activeSetId);
-  const restState = useActiveWorkoutStore(s => s.rest.state);
-  const endsAt = useActiveWorkoutStore(s => s.rest.endsAt);
-  const pausedRemainingMs = useActiveWorkoutStore(
-    s => s.rest.pausedRemainingMs,
-  );
-  const durationSec = useActiveWorkoutStore(s => s.rest.durationSec);
+  const { state: restState, remainingMs, progress } = useRestCountdown();
+  const queryClient = useQueryClient();
   const { preferences } = usePreferences();
-  const weightUnit = (preferences?.default_weight_unit ?? 'kg') as 'kg' | 'lbs';
+  const weightUnit = normalizeWeightUnit(preferences?.default_weight_unit);
 
   const [navInfo, setNavInfo] = useState(() =>
     computeNavInfo(
@@ -412,52 +411,21 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
       '--color-progress-track',
     ]) as [string, string, string, string];
 
-  // Tick while resting so the countdown redraws each second. We use a bare
-  // tick counter (not a cached `Date.now()`) to force re-renders — the actual
-  // "now" used in calculations is read fresh at render time below. Caching it
-  // in state would make the first render after going ready → resting show a
-  // stale value (the countdown would briefly read too high).
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    if (restState !== 'resting') return;
-    const id = setInterval(() => setTick(t => t + 1), 1000);
-    return () => clearInterval(id);
-  }, [restState]);
-
-  // Transition resting → ready when the deadline passes.
-  useEffect(() => {
-    if (restState === 'resting' && endsAt != null && Date.now() >= endsAt) {
-      useActiveWorkoutStore.getState().markRestReady();
-    }
-  }, [restState, endsAt, tick]);
-
   const isWorkoutComplete = sessionId != null && activeSetId == null;
 
   // Active-set details (exercise name, set number, weight × reps) looked up
   // against the session snapshot since `steps` only holds name/restSec.
   // Split into discrete fields so the rendering can stack "status: name -
   // set N/M" on one row and the load ("135 lbs × 8") on a second row.
-  const activeSetLabel = (() => {
-    if (activeSession == null || activeSetId == null) return null;
-    for (const exercise of activeSession.exercises) {
-      const set = exercise.sets.find(st => String(st.id) === activeSetId);
-      if (!set) continue;
-      const exerciseName = exercise.exercise_snapshot?.name ?? 'Exercise';
-      const setNumber = `Set ${set.set_number}/${exercise.sets.length}`;
-      let loadText = '';
-      if (set.weight != null && set.reps != null) {
-        const w = parseFloat(weightFromKg(set.weight, weightUnit).toFixed(1));
-        loadText = `${w} ${weightUnit} × ${set.reps}`;
-      } else if (set.reps != null) {
-        loadText = `${set.reps} reps`;
-      } else if (set.weight != null) {
-        const w = parseFloat(weightFromKg(set.weight, weightUnit).toFixed(1));
-        loadText = `${w} ${weightUnit}`;
-      }
-      return { exerciseName, setNumber, loadText };
-    }
-    return null;
-  })();
+  const activeSetDescription = describeActiveSet(activeSession, activeSetId);
+  const activeSetLabel =
+    activeSetDescription == null
+      ? null
+      : {
+          exerciseName: activeSetDescription.exerciseName ?? 'Exercise',
+          setNumber: `Set ${activeSetDescription.setNumber}/${activeSetDescription.setCount}`,
+          loadText: formatSetLoad(activeSetDescription, weightUnit) ?? '',
+        };
 
   useEffect(() => {
     const targetBottomOffset = shouldSitAboveTabs
@@ -505,24 +473,6 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
   if (navInfo.suppressed && !(usesNativeTabs && isClosingToTabs)) return null;
   if (variant === 'floating' && navInfo.isOnTabs && !usesNativeTabs) return null;
 
-  const remainingMs = (() => {
-    if (restState === 'resting' && endsAt != null) {
-      // Read `Date.now()` fresh at render time — caching it in state would
-      // briefly display a stale value on the first render after a new rest
-      // starts (the `tick` state only advances via the 1s interval).
-      // eslint-disable-next-line react-hooks/purity
-      return Math.max(0, endsAt - Date.now());
-    }
-    if (restState === 'paused' && pausedRemainingMs != null)
-      return pausedRemainingMs;
-    return 0;
-  })();
-  const displaySeconds = Math.ceil(remainingMs / 1000);
-  const progress =
-    durationSec > 0
-      ? Math.max(0, Math.min(1, remainingMs / (durationSec * 1000)))
-      : 0;
-
   const handlePausePlay = () => {
     if (restState === 'resting') {
       useActiveWorkoutStore.getState().pauseRest();
@@ -542,9 +492,32 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
     useActiveWorkoutStore.getState().completeActiveSet();
   };
 
+  // Clear only via flush: a cold start can leave unsaved session edits with
+  // the active-workout screen (and its autosave hook) unmounted, so dirty
+  // state is saved before the workout is dismissed.
+  const flushAndClear = async () => {
+    const ok = await flushActiveWorkoutBeforeClear(queryClient);
+    if (!ok) {
+      Alert.alert(
+        'Could not save your workout',
+        'Some changes have not reached the server.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Discard anyway',
+            style: 'destructive',
+            onPress: () => useActiveWorkoutStore.getState().clearWorkout(),
+          },
+        ],
+      );
+      return;
+    }
+    useActiveWorkoutStore.getState().clearWorkout();
+  };
+
   const handleClear = () => {
     if (isWorkoutComplete) {
-      useActiveWorkoutStore.getState().clearWorkout();
+      void flushAndClear();
       return;
     }
     Alert.alert(
@@ -556,7 +529,7 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
           text: 'Clear',
           style: 'destructive',
           onPress: () => {
-            useActiveWorkoutStore.getState().clearWorkout();
+            void flushAndClear();
           },
         },
       ],
@@ -564,13 +537,8 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
   };
 
   const handleCenterTap = () => {
-    // Read the session from the store rather than the history query cache —
-    // the cache may not contain this session on a cold start or when the HUD
-    // was started from a screen that hasn't warmed the history pages.
-    const session = useActiveWorkoutStore.getState().session;
-    if (!session) return;
     if (!navigationRef.isReady()) return;
-    navigationRef.navigate('WorkoutDetail', { session });
+    navigationRef.navigate('ActiveWorkout');
   };
 
   // Resting / paused use a three-row layout: a top status label ("Resting"
@@ -595,7 +563,7 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
     : (activeSetLabel?.loadText ?? '');
   // Right-aligned countdown — only rendered while a rest timer is running.
   const countdownLabel =
-    restState === 'resting' ? formatCountdown(displaySeconds) : null;
+    restState === 'resting' ? formatRestCountdown(remainingMs) : null;
 
   // Left button:
   //  - resting → Pause (pauses the rest timer)
@@ -686,7 +654,7 @@ const ActiveWorkoutBar: React.FC<ActiveWorkoutBarProps> = ({
         onPress={handleDoneSet}
         hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         accessibilityRole="button"
-        accessibilityLabel="Done — start next set"
+        accessibilityLabel="Done, start next set"
         className="p-2"
       >
         <Icon name="play" size={20} color={accentPrimary} weight="bold" />

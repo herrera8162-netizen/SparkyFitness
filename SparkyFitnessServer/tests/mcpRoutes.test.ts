@@ -72,7 +72,6 @@ const DEV_TOOL_NAMES = [
   'sparky_inspect_schema',
   'sparky_get_user_info',
   'sparky_get_db_stats',
-  'sparky_run_project_tests',
 ];
 
 const TEST_USER = 'mcp-test-user';
@@ -124,6 +123,7 @@ beforeEach(() => {
   vi.unstubAllEnvs();
   // Neutralize the super-admin email override so role is the sole admin factor.
   vi.stubEnv('SPARKY_FITNESS_ADMIN_EMAIL', '');
+  vi.stubEnv('DEV_TOOLS_ENABLED', 'false');
   testUserRole = 'admin';
   // Safe default; tests that exercise the DB fallback set this explicitly.
   getUserRoleSpy.mockResolvedValue('user');
@@ -172,8 +172,85 @@ describe('POST /mcp', () => {
     // Scoped to the authenticated user; tz resolved to UTC for the today default.
     expect(goalService.getUserGoals).toHaveBeenCalledWith(
       TEST_USER,
-      todayInZone('UTC')
+      todayInZone('UTC'),
+      undefined,
+      true
     );
+  });
+
+  it('tools/call normalizes null values to undefined in arguments', async () => {
+    vi.mocked(goalService.getUserGoals).mockResolvedValue({ calories: 2000 });
+
+    const res = await request(app)
+      .post('/mcp')
+      .set(MCP_HEADERS)
+      .set('Authorization', 'Bearer valid')
+      .send({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: {
+          name: 'sparky_get_goal_snapshot',
+          arguments: { target_date: null },
+        },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.result.content).toEqual([
+      { type: 'text', text: JSON.stringify({ calories: 2000 }) },
+    ]);
+    expect(goalService.getUserGoals).toHaveBeenCalledWith(
+      TEST_USER,
+      todayInZone('UTC'),
+      undefined,
+      true
+    );
+  });
+
+  it('returns a per-action validation error instead of -32602 when a required field is passed as null', async () => {
+    const res = await request(app)
+      .post('/mcp')
+      .set(MCP_HEADERS)
+      .set('Authorization', 'Bearer valid')
+      .send({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: {
+          name: 'sparky_manage_food',
+          arguments: {
+            action: 'log_water',
+            amount_ml: null,
+            entry_date: '2026-06-11',
+          },
+        },
+      });
+
+    expect(res.status).toBe(200);
+    const text = res.body.result.content[0].text;
+    expect(text).toContain('Error [VALIDATION]');
+    expect(text).toContain('amount_ml');
+    // ERRORS.* strings are flagged so MCP clients can distinguish failures
+    // from results without parsing prose.
+    expect(res.body.result.isError).toBe(true);
+  });
+
+  it('does not flag successful tool results as errors', async () => {
+    vi.mocked(goalService.getUserGoals).mockResolvedValue({ calories: 2000 });
+
+    const res = await request(app)
+      .post('/mcp')
+      .set(MCP_HEADERS)
+      .set('Authorization', 'Bearer valid')
+      .send({
+        jsonrpc: '2.0',
+        id: 30,
+        method: 'tools/call',
+        params: { name: 'sparky_get_goal_snapshot', arguments: {} },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.result.isError).toBeUndefined();
   });
 
   it('rejects unauthenticated requests with 401', async () => {
@@ -217,7 +294,7 @@ describe('POST /mcp', () => {
     }
   });
 
-  it('exposes the 4 dev tools to an admin when DEV_TOOLS_ENABLED=true', async () => {
+  it('exposes the 3 dev tools to an admin when DEV_TOOLS_ENABLED=true', async () => {
     vi.stubEnv('DEV_TOOLS_ENABLED', 'true');
     testUserRole = 'admin';
 
@@ -229,7 +306,7 @@ describe('POST /mcp', () => {
 
     expect(res.status).toBe(200);
     const names = res.body.result.tools.map((t: { name: string }) => t.name);
-    expect(res.body.result.tools).toHaveLength(39);
+    expect(res.body.result.tools).toHaveLength(38);
     for (const devTool of DEV_TOOL_NAMES) {
       expect(names).toContain(devTool);
     }

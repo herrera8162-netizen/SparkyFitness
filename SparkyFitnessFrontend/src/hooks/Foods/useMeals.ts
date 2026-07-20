@@ -1,10 +1,12 @@
-import { mealKeys } from '@/api/keys/meals';
+import { foodKeys, mealKeys } from '@/api/keys/meals';
 import {
   createMeal,
   deleteMeal,
   getMealById,
   getMealDeletionImpact,
   getMeals,
+  getRecentMeals,
+  getTopMeals,
   updateMeal,
 } from '@/api/Foods/meals';
 import { MealFilter, MealPayload } from '@/types/meal';
@@ -26,6 +28,44 @@ export const mealSearchOptions = (filter: MealFilter, term?: string) => ({
 
 export const useMeals = (filter: MealFilter, term?: string) => {
   return useQuery(mealSearchOptions(filter, term));
+};
+
+// Recent + frequent meals for the food-search landing quick-pick list. Recent
+// and top come from separate endpoints, so this runs two queries and surfaces
+// their combined loading state alongside the parallel recent/top foods.
+export const useRecentAndTopMealsQuery = (limit: number, enabled = true) => {
+  const { t } = useTranslation();
+  const recent = useQuery({
+    queryKey: mealKeys.recent(limit),
+    queryFn: () => getRecentMeals(limit),
+    enabled,
+    meta: {
+      errorMessage: t(
+        'mealManagement.failedToLoadRecentMeals',
+        'Failed to load recent meals.'
+      ),
+    },
+  });
+  const top = useQuery({
+    queryKey: mealKeys.top(limit),
+    queryFn: () => getTopMeals(limit),
+    enabled,
+    meta: {
+      errorMessage: t(
+        'mealManagement.failedToLoadTopMeals',
+        'Failed to load top meals.'
+      ),
+    },
+  });
+  return {
+    recentMeals: recent.data ?? [],
+    topMeals: top.data ?? [],
+    // isLoading (initial fetch only), not isFetching, so background refetches
+    // do not flash the landing spinner / thrash the layout. Guard with enabled
+    // as a belt-and-suspenders: on v5 a disabled query already reports
+    // isLoading=false, but this stays correct if that ever changes.
+    isLoading: enabled && (recent.isLoading || top.isLoading),
+  };
 };
 
 export const mealDeletionImpactOptions = (mealId: string) => ({
@@ -69,6 +109,9 @@ export const useDeleteMealMutation = () => {
       force?: boolean;
     }) => deleteMeal(mealId, force),
     onSuccess: () => {
+      // Favorites live under foodKeys (['foods','favorites']); a deleted meal is
+      // cascade-removed server-side, so refetch favorites to drop it.
+      queryClient.invalidateQueries({ queryKey: foodKeys.favorites() });
       return queryClient.invalidateQueries({
         queryKey: mealKeys.all,
       });
@@ -97,6 +140,8 @@ export const useUpdateMealMutation = () => {
       mealPayload: MealPayload;
     }) => updateMeal(mealId, mealPayload),
     onSuccess: () => {
+      // A favorited meal's cached name/nutrition would otherwise go stale.
+      queryClient.invalidateQueries({ queryKey: foodKeys.favorites() });
       return queryClient.invalidateQueries({
         queryKey: mealKeys.all,
       });

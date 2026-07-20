@@ -35,7 +35,7 @@ import {
   sortableKeyboardCoordinates,
   arrayMove,
 } from '@dnd-kit/sortable';
-import { X, Plus, XCircle, ChevronDown } from 'lucide-react';
+import { X, Plus, XCircle, ChevronDown, Clock } from 'lucide-react';
 import ExerciseHistoryDisplay from '@/components/ExerciseHistoryDisplay';
 import {
   exerciseDetailsOptions,
@@ -48,6 +48,7 @@ import { SetColumnHeaders } from '../Exercises/SetHeader';
 import { CardioLog } from '../Exercises/CardioLog';
 import { cn } from '@/lib/utils';
 import { v4 as uuidv4 } from 'uuid';
+import { toHourMinute, userHourMinute } from '@workspace/shared';
 interface EditExerciseEntryDialogProps {
   entry: ExerciseEntry;
   open: boolean;
@@ -62,7 +63,7 @@ const EditExerciseEntryDialog = ({
   onSave,
 }: EditExerciseEntryDialogProps) => {
   const { t } = useTranslation();
-  const { loggingLevel, weightUnit, distanceUnit, convertDistance } =
+  const { loggingLevel, weightUnit, distanceUnit, convertDistance, timezone } =
     usePreferences();
 
   const isCardio = entry.exercise_snapshot?.category === 'cardio';
@@ -75,6 +76,9 @@ const EditExerciseEntryDialog = ({
     }))
   );
   const [notes, setNotes] = useState(entry.notes || '');
+  const [entryTime, setEntryTime] = useState<string>(
+    toHourMinute(entry.entry_time) || ''
+  );
   const [imageUrl, setImageUrl] = useState<string | null>(
     entry.image_url || null
   );
@@ -234,6 +238,7 @@ const EditExerciseEntryDialog = ({
           duration_minutes: totalDuration,
           calories_burned: caloriesBurned,
           notes,
+          entry_time: entryTime || null,
           sets: sets.map(({ _dndId, ...set }) => ({
             ...set,
             weight: set.weight ?? 0,
@@ -391,6 +396,48 @@ const EditExerciseEntryDialog = ({
               </Button>
             </div>
           )}
+
+          {/* Start Time (optional) */}
+          <div className="space-y-1.5 max-w-[280px]">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="entryTime" className="text-sm">
+                Start Time (optional)
+              </Label>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setEntryTime('')}
+                  disabled={!entryTime}
+                  className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-muted-foreground shadow-sm hover:bg-destructive/10 hover:text-destructive transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                  title="Clear time"
+                >
+                  <X className="h-4 w-4" />
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const { hour, minute } = userHourMinute(timezone);
+                    setEntryTime(
+                      `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+                    );
+                  }}
+                  className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                  title="Set to current local time"
+                >
+                  <Clock className="h-4 w-4" />
+                  Now
+                </button>
+              </div>
+            </div>
+            <Input
+              id="entryTime"
+              type="time"
+              value={entryTime}
+              onChange={(e) => setEntryTime(e.target.value)}
+              className="text-sm h-9"
+            />
+          </div>
 
           {/* Notes */}
           <div className="space-y-1.5">

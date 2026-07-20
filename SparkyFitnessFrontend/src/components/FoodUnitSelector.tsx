@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Check, Sparkles } from 'lucide-react';
+import { Check, Sparkles, Clock, CalendarDays, X } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -36,9 +36,16 @@ import {
   CONFIDENCE_TONES,
   OVERALL_CONFIDENCE_LABELS,
   shouldOfferAiConversion,
+  userHourMinute,
+  defaultMealTypeForTime,
+  toHourMinute,
   type AiConfidence,
   type ConfidenceTone,
 } from '@workspace/shared';
+import {
+  formatQuantityServingLabel,
+  formatServingLabel,
+} from '@/utils/foodServing';
 
 // Confidence tone classes for the saved-AI-variant indicator in the picker dropdown.
 const AI_PICKER_ICON_TONE_CLASSES: Record<ConfidenceTone, string> = {
@@ -54,6 +61,7 @@ const AI_ESTIMATE_BADGE_TONE_CLASSES: Record<ConfidenceTone, string> = {
   error: 'bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300',
 };
 import { AiEstimateSection } from '@/components/FoodUnitSelector/AiEstimateSection';
+import FavoriteStarButton from '@/components/FavoriteStarButton';
 
 interface FoodUnitSelectorProps {
   food: Food;
@@ -63,12 +71,23 @@ interface FoodUnitSelectorProps {
     food: Food,
     quantity: number,
     unit: string,
-    selectedVariant: FoodVariant
+    selectedVariant: FoodVariant,
+    entryTime?: string | null,
+    mealType?: string | null
   ) => void;
   showUnitSelector?: boolean;
   initialQuantity?: number;
   initialUnit?: string;
   initialVariantId?: string;
+  showTimeInput?: boolean;
+  initialTime?: string;
+  defaultMealTime?: string | null;
+  showMealTypeSelect?: boolean;
+  availableMealTypes?: Array<{
+    id: string;
+    name: string;
+    default_time?: string | null;
+  }>;
 }
 
 const FoodUnitSelector = ({
@@ -80,9 +99,19 @@ const FoodUnitSelector = ({
   initialQuantity,
   initialUnit,
   initialVariantId,
+  showTimeInput,
+  initialTime,
+  defaultMealTime,
+  showMealTypeSelect,
+  availableMealTypes,
 }: FoodUnitSelectorProps) => {
-  const { loggingLevel, energyUnit, convertEnergy, aiAssistedConversions } =
-    usePreferences();
+  const {
+    loggingLevel,
+    energyUnit,
+    convertEnergy,
+    aiAssistedConversions,
+    timezone,
+  } = usePreferences();
   debug(loggingLevel, 'FoodUnitSelector component rendered.', { food, open });
 
   // AI gate re-checked each render so toggling preferences mid-dialog takes effect live.
@@ -103,7 +132,63 @@ const FoodUnitSelector = ({
     null
   );
   const [quantity, setQuantity] = useState(1);
+  const [entryTime, setEntryTime] = useState('');
+  const [mealType, setMealType] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const wasOpenRef = useRef(false);
+
+  useEffect(() => {
+    if (open && !wasOpenRef.current) {
+      if (initialTime !== undefined) {
+        setEntryTime(initialTime || '');
+      } else {
+        const { hour, minute } = userHourMinute(timezone);
+        setEntryTime(
+          `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+        );
+      }
+
+      if (
+        showMealTypeSelect &&
+        availableMealTypes &&
+        availableMealTypes.length > 0
+      ) {
+        const nowTime = userHourMinute(timezone);
+        const matched = defaultMealTypeForTime(availableMealTypes, nowTime);
+        setMealType(matched);
+      }
+    }
+    wasOpenRef.current = open;
+    // Initialization must only run on the open transition; initialTime and the
+    // other inputs are snapshotted then (a minute-boundary initialTime change
+    // while open must not re-trigger).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const resolvedDefaultMealTime = (() => {
+    if (showMealTypeSelect && availableMealTypes) {
+      return (
+        availableMealTypes.find(
+          (t) => t.name.toLowerCase() === mealType.toLowerCase()
+        )?.default_time || null
+      );
+    }
+    return defaultMealTime;
+  })();
+
+  const handleSetCurrentTime = () => {
+    const { hour, minute } = userHourMinute(timezone);
+    setEntryTime(
+      `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+    );
+  };
+
+  const handleSetDefaultTime = () => {
+    if (resolvedDefaultMealTime) {
+      setEntryTime(toHourMinute(resolvedDefaultMealTime) || '');
+    }
+  };
 
   const queryClient = useQueryClient();
   const createFoodVariantMutation = useCreateFoodVariantMutation();
@@ -146,6 +231,7 @@ const FoodUnitSelector = ({
         id: food.default_variant?.id || food.id,
         serving_size: food.default_variant?.serving_size || 100,
         serving_unit: food.default_variant?.serving_unit || 'g',
+        serving_description: food.default_variant?.serving_description,
         calories: food.default_variant?.calories || 0,
         protein: food.default_variant?.protein || 0,
         carbs: food.default_variant?.carbs || 0,
@@ -176,6 +262,7 @@ const FoodUnitSelector = ({
           id: variant.id,
           serving_size: variant.serving_size,
           serving_unit: variant.serving_unit,
+          serving_description: variant.serving_description,
           calories: variant.calories || 0,
           protein: variant.protein || 0,
           carbs: variant.carbs || 0,
@@ -226,6 +313,7 @@ const FoodUnitSelector = ({
         id: food.default_variant?.id || food.id,
         serving_size: food.default_variant?.serving_size || 100,
         serving_unit: food.default_variant?.serving_unit || 'g',
+        serving_description: food.default_variant?.serving_description,
         calories: food.default_variant?.calories || 0,
         protein: food.default_variant?.protein || 0,
         carbs: food.default_variant?.carbs || 0,
@@ -277,6 +365,7 @@ const FoodUnitSelector = ({
     initialQuantity,
     initialUnit,
     initialVariantId,
+    initialTime,
     loadVariantsData,
     loggingLevel,
     resetConversionState,
@@ -305,7 +394,14 @@ const FoodUnitSelector = ({
           ...convertedVariant,
           ...savedVariant,
         };
-        onSelect(food, quantity, variantWithId.serving_unit, variantWithId);
+        onSelect(
+          food,
+          quantity,
+          variantWithId.serving_unit,
+          variantWithId,
+          entryTime || null,
+          showMealTypeSelect ? mealType : null
+        );
         onOpenChange(false);
         setQuantity(1);
       } catch (err) {
@@ -322,7 +418,14 @@ const FoodUnitSelector = ({
         unit: selectedVariant.serving_unit,
         variantId: selectedVariant.id || undefined,
       });
-      onSelect(food, quantity, selectedVariant.serving_unit, selectedVariant);
+      onSelect(
+        food,
+        quantity,
+        selectedVariant.serving_unit,
+        selectedVariant,
+        entryTime || null,
+        showMealTypeSelect ? mealType : null
+      );
       onOpenChange(false);
       setQuantity(1);
     } else {
@@ -361,6 +464,11 @@ const FoodUnitSelector = ({
   const displayUnit = isConverting
     ? pendingUnit.trim() || '?'
     : selectedVariant?.serving_unit || '';
+  const displayServing = isConverting
+    ? `${quantity} ${displayUnit}`.trim()
+    : selectedVariant
+      ? formatQuantityServingLabel(quantity, selectedVariant)
+      : `${quantity} ${displayUnit}`.trim();
 
   return (
     <Dialog
@@ -369,10 +477,18 @@ const FoodUnitSelector = ({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>
-            {initialQuantity
-              ? `Edit ${food?.name}`
-              : `Add ${food?.name} to Meal`}
+          <DialogTitle className="flex items-center gap-2">
+            <span>
+              {initialQuantity
+                ? `Edit ${food?.name}`
+                : `Add ${food?.name} to Meal`}
+            </span>
+            {/* Only persisted local/saved foods can be favorited (external
+                provider search results are not saved yet, so they have no
+                stable id to star). */}
+            {food?.id && (food?.is_custom || food?.user_id) && (
+              <FavoriteStarButton type="food" id={food.id} />
+            )}
           </DialogTitle>
           <DialogDescription>
             {initialQuantity
@@ -419,7 +535,7 @@ const FoodUnitSelector = ({
                             variant.id && (
                               <SelectItem key={variant.id} value={variant.id}>
                                 <span className="flex items-center gap-1.5">
-                                  {variant.serving_unit}
+                                  {formatServingLabel(variant)}
                                   {variant.source === 'ai_estimate' &&
                                     variant.ai_confidence && (
                                       <Sparkles
@@ -469,6 +585,72 @@ const FoodUnitSelector = ({
                   </div>
                 </div>
               </div>
+
+              {showMealTypeSelect &&
+                availableMealTypes &&
+                availableMealTypes.length > 0 && (
+                  <div className="space-y-1">
+                    <Label htmlFor="mealType">Meal</Label>
+                    <Select value={mealType} onValueChange={setMealType}>
+                      <SelectTrigger id="mealType" className="w-full text-sm">
+                        <SelectValue placeholder="Select meal" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {availableMealTypes.map((t) => (
+                          <SelectItem key={t.id} value={t.name}>
+                            {t.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+              {showTimeInput && (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="entryTime">Time (optional)</Label>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setEntryTime('')}
+                        disabled={!entryTime}
+                        className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-muted-foreground shadow-sm hover:bg-destructive/10 hover:text-destructive transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                        title="Clear time"
+                      >
+                        <X className="h-4 w-4" />
+                        Clear
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSetCurrentTime}
+                        className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                        title="Set to current local time"
+                      >
+                        <Clock className="h-4 w-4" />
+                        Now
+                      </button>
+                      {resolvedDefaultMealTime && (
+                        <button
+                          type="button"
+                          onClick={handleSetDefaultTime}
+                          className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                          title={`Set to meal default (${toHourMinute(resolvedDefaultMealTime)})`}
+                        >
+                          <CalendarDays className="h-4 w-4" />
+                          Default
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <Input
+                    id="entryTime"
+                    type="time"
+                    value={entryTime}
+                    onChange={(e) => setEntryTime(e.target.value)}
+                  />
+                </div>
+              )}
 
               {/* Custom unit name input */}
               {pendingUnitIsCustom && (
@@ -627,7 +809,7 @@ const FoodUnitSelector = ({
               {nutrition && (
                 <div className="bg-muted p-3 rounded-lg">
                   <h4 className="font-medium mb-2">
-                    Nutrition for {quantity} {displayUnit}:
+                    Nutrition for {displayServing}:
                   </h4>
                   <div className="grid grid-cols-2 gap-2 text-sm">
                     <div>

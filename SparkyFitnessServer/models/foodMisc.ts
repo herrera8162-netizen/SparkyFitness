@@ -89,6 +89,8 @@ async function getRecentFoods(userId: any, limit: any, mealType: any) {
         f.shared_with_public,
         f.provider_external_id,
         f.provider_type,
+        f.provider_verified,
+        rfe.last_used_date,
         ${DEFAULT_VARIANT_JSON_SQL}
       FROM foods f
       JOIN RecentFoodEntries rfe ON f.id = rfe.food_id
@@ -135,6 +137,7 @@ async function getTopFoods(userId: any, limit: any, mealType: any) {
         f.shared_with_public,
         f.provider_external_id,
         f.provider_type,
+        f.provider_verified,
         tfe.usage_count,
         ${DEFAULT_VARIANT_JSON_SQL}
       FROM foods f
@@ -145,6 +148,66 @@ async function getTopFoods(userId: any, limit: any, mealType: any) {
       queryParams
     );
     return result.rows;
+  } finally {
+    client.release();
+  }
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getFavoriteFoods(userId: any) {
+  const client = await getClient(userId); // User-specific operation
+  try {
+    const result = await client.query(
+      `SELECT
+        f.id,
+        f.name,
+        f.brand,
+        f.barcode,
+        f.is_custom,
+        f.user_id,
+        f.shared_with_public,
+        f.provider_external_id,
+        f.provider_type,
+        f.provider_verified,
+        ff.created_at AS favorited_at,
+        ${DEFAULT_VARIANT_JSON_SQL}
+      FROM food_favorites ff
+      JOIN foods f ON f.id = ff.food_id
+      ${PREFERRED_DEFAULT_VARIANT_JOIN_SQL}
+      WHERE ff.user_id = $1
+        AND ff.food_id IS NOT NULL
+        AND f.is_quick_food = FALSE
+      ORDER BY ff.created_at DESC`,
+      [userId]
+    );
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function addFoodFavorite(userId: any, foodId: any) {
+  const client = await getClient(userId); // User-specific operation
+  try {
+    await client.query(
+      `INSERT INTO food_favorites (user_id, food_id)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id, food_id) DO NOTHING`,
+      [userId, foodId]
+    );
+  } finally {
+    client.release();
+  }
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function removeFoodFavorite(userId: any, foodId: any) {
+  const client = await getClient(userId); // User-specific operation
+  try {
+    const result = await client.query(
+      `DELETE FROM food_favorites
+       WHERE user_id = $1 AND food_id = $2`,
+      [userId, foodId]
+    );
+    return (result.rowCount ?? 0) > 0;
   } finally {
     client.release();
   }
@@ -345,6 +408,7 @@ async function clearUserIgnoredUpdate(userId: any, variantId: any) {
 export { getFoodDataProviderById };
 export { getRecentFoods };
 export { getTopFoods };
+export { getFavoriteFoods, addFoodFavorite, removeFoodFavorite };
 export { getDailyNutritionSummary, getDailyNutritionSummariesByDates };
 export { getFoodsNeedingReview };
 export { updateFoodEntriesSnapshot };
@@ -353,6 +417,9 @@ export default {
   getFoodDataProviderById,
   getRecentFoods,
   getTopFoods,
+  getFavoriteFoods,
+  addFoodFavorite,
+  removeFoodFavorite,
   getDailyNutritionSummary,
   getDailyNutritionSummariesByDates,
   getFoodsNeedingReview,

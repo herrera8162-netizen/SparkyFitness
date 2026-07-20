@@ -128,6 +128,10 @@ const EndFastSheet = forwardRef<EndFastSheetRef, EndFastSheetProps>(({ onEnded }
       weekday_label: { color: textSecondary },
       month_selector_label: { color: textPrimary, fontWeight: '600' as const },
       year_selector_label: { color: textPrimary, fontWeight: '600' as const },
+      time_selector_label: { color: textPrimary, fontWeight: '600' as const },
+      // Hide the calendar header's time button — we render a dedicated time
+      // wheel below the calendar instead.
+      time_selector: { display: 'none' as const },
       disabled_label: { color: textMuted },
       month_label: { color: textPrimary },
       year_label: { color: textPrimary },
@@ -174,13 +178,17 @@ const EndFastSheet = forwardRef<EndFastSheetRef, EndFastSheetProps>(({ onEnded }
     );
   };
 
+  const togglePicker = (picker: 'start' | 'end') => {
+    setOpenPicker((p) => (p === picker ? null : picker));
+  };
+
   const renderRow = (
     label: string,
     value: string,
     picker: 'start' | 'end',
   ) => (
     <TouchableOpacity
-      onPress={() => setOpenPicker((p) => (p === picker ? null : picker))}
+      onPress={() => togglePicker(picker)}
       activeOpacity={0.7}
       className="flex-row items-center justify-between py-3 border-b border-border-subtle"
     >
@@ -199,44 +207,69 @@ const EndFastSheet = forwardRef<EndFastSheetRef, EndFastSheetProps>(({ onEnded }
     </TouchableOpacity>
   );
 
+  const renderInlinePicker = (
+    value: Date,
+    onChange: (payload: { date: DateType }) => void,
+  ) => (
+    <View className="mt-2">
+      {/* Calendar for the date. `timePicker` keeps the time-of-day when a day
+          is tapped (otherwise the library zeroes it). */}
+      <DateTimePicker
+        mode="single"
+        date={value}
+        timePicker
+        onChange={onChange}
+        components={pickerComponents}
+        styles={pickerStyles}
+      />
+      {/* Dedicated time wheel below the calendar, sharing the same value. */}
+      <View className="border-t border-border-subtle mt-1 pt-2">
+        <Text className="text-xs font-semibold uppercase text-text-muted tracking-wide mb-1 px-1">
+          Time
+        </Text>
+        <DateTimePicker
+          mode="single"
+          date={value}
+          timePicker
+          initialView="time"
+          hideHeader
+          onChange={onChange}
+          styles={pickerStyles}
+        />
+      </View>
+    </View>
+  );
+
   return (
     <BottomSheetModal
       ref={bottomSheetRef}
       enableDynamicSizing
+      // On Android the sheet's content pan gesture steals vertical drags from
+      // the time picker's wheels (plain FlatLists), so content panning stays
+      // off there. Must be static: toggling this prop swaps the sheet's
+      // content wrapper component, remounting the content and dismissing the
+      // modal.
+      enableContentPanningGesture={Platform.OS !== 'android'}
       backdropComponent={renderBackdrop}
       containerComponent={sheetContainer}
       backgroundStyle={{ backgroundColor: surfaceBg }}
       handleIndicatorStyle={{ backgroundColor: textMuted }}
     >
-      <BottomSheetScrollView contentContainerClassName="px-5 pb-safe-or-8">
+      {/* bg-surface is a touch shield, not decoration: with content panning off
+          on Android, gesture-handler lets taps on background-less views fall
+          through to the backdrop's tap-to-close. A background makes this
+          container absorb them. */}
+      <BottomSheetScrollView contentContainerClassName="bg-surface px-5 pb-safe-or-8">
         <Text className="text-lg font-semibold text-text-primary text-center mb-1">
           End fast
         </Text>
         <Text className="text-center text-text-secondary mb-4">{durationLabel} fasted</Text>
 
         {renderRow('Started', formatDateTime(startDate), 'start')}
-        {openPicker === 'start' && (
-          <DateTimePicker
-            mode="single"
-            date={startDate}
-            timePicker
-            onChange={handleStartChange}
-            components={pickerComponents}
-            styles={pickerStyles}
-          />
-        )}
+        {openPicker === 'start' && renderInlinePicker(startDate, handleStartChange)}
 
         {renderRow('Ended', formatDateTime(endDate), 'end')}
-        {openPicker === 'end' && (
-          <DateTimePicker
-            mode="single"
-            date={endDate}
-            timePicker
-            onChange={handleEndChange}
-            components={pickerComponents}
-            styles={pickerStyles}
-          />
-        )}
+        {openPicker === 'end' && renderInlinePicker(endDate, handleEndChange)}
 
         {!isValid && (
           <Text className="text-bg-danger text-sm mt-3 text-center">
