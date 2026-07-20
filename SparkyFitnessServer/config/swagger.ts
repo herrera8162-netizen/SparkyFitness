@@ -1011,6 +1011,21 @@ const options = {
           },
           required: ['name', 'volume', 'unit'],
         },
+        SodaContainer: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            user_id: { type: 'string', format: 'uuid' },
+            name: { type: 'string' },
+            volume: { type: 'number', description: 'Volume in specified unit' },
+            unit: { type: 'string', description: 'ml, oz, etc.' },
+            is_primary: { type: 'boolean' },
+            servings_per_container: { type: 'number' },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+          },
+          required: ['name', 'volume', 'unit'],
+        },
         CheckInMeasurement: {
           type: 'object',
           properties: {

@@ -59,7 +59,9 @@ BEGIN
     'user_nutrient_display_preferences',
     'user_oidc_links',
     'user_preferences',
+    'user_soda_containers',
     'user_water_containers',
+    'soda_intake_entries',
     'water_intake',
     'water_intake_entries',
     'weekly_goal_plans',
@@ -599,6 +601,7 @@ WITH CHECK (authenticated_user_id() = user_id);
 SELECT create_diary_policy('user_goals');
 SELECT create_diary_policy('weekly_goal_plans');
 SELECT create_diary_policy('user_water_containers');
+SELECT create_diary_policy('user_soda_containers');
 SELECT create_diary_policy('user_custom_nutrients');
 SELECT create_diary_policy('user_nutrient_goal_preferences');
 SELECT create_diary_policy('user_allergen_preferences');
@@ -657,6 +660,7 @@ SELECT create_checkin_policy('sleep_entries');
 SELECT create_checkin_policy('sleep_entry_stages');
 SELECT create_diary_policy('water_intake');
 SELECT create_diary_policy('water_intake_entries');
+SELECT create_diary_policy('soda_intake_entries');
 
 -- Library access tables
 SELECT create_library_policy('exercises', 'shared_with_public', ARRAY['can_view_exercise_library', 'can_manage_diary']);

@@ -907,6 +907,15 @@
       "addExerciseWater": "Add exercise water loss to daily goal",
       "addExerciseWaterHint": "Increases your daily water goal by the estimated sweat loss from activities."
     },
+    "sodaTracking": {
+      "title": "Soda Tracking",
+      "description": "Configure your soda intake tracking settings",
+      "sodaDisplayUnit": "Soda Display Unit",
+      "milliliters": "Milliliters (ml)",
+      "fluidOunces": "Fluid Ounces (oz)",
+      "liters": "Liters",
+      "saveSodaDisplayUnit": "Save Soda Display Unit"
+    },
     "nutrientDisplay": {
       "title": "Nutrient Display",
       "description": "Choose which nutrients to display in food and meal views"
@@ -1501,6 +1510,7 @@
     "nutritionSummary": "Nutrition Summary",
     "dailyEnergyGoal": "Daily Energy Goal",
     "waterIntake": "Water Intake",
+    "sodaIntake": "Soda Intake",
     "exercise": "Exercise",
     "widgets": {
       "layout": "Customize layout",
@@ -1624,6 +1634,20 @@
       "logEmpty": "No drinks logged yet",
       "deleteEntry": "Delete this drink",
       "deleteConfirm": "Remove this {{volume}} {{unit}} entry?",
+      "deletedSuccess": "Drink removed",
+      "deletedError": "Failed to remove drink",
+      "editTime": "Click to change time"
+    },
+    "sodaIntake": {
+      "title": "Soda Intake",
+      "updated": "Soda intake updated",
+      "updateError": "Failed to save soda intake",
+      "perDrink": "{{volume}} {{unit}}",
+      "defaultContainer": "Container",
+      "drinksToday": "today",
+      "logTitle": "Today's drinks",
+      "logEmpty": "No drinks logged yet",
+      "deleteEntry": "Delete this drink",
       "deletedSuccess": "Drink removed",
       "deletedError": "Failed to remove drink",
       "editTime": "Click to change time"
