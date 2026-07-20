@@ -17,6 +17,8 @@ vi.mock('../services/foodCoreService', () => ({
     createFood: vi.fn(),
     getFoodById: vi.fn(),
     deleteFood: vi.fn(),
+    updateFood: vi.fn(),
+    createFoodVariant: vi.fn(),
     updateFoodEntriesSnapshot: vi.fn(),
     bulkCreateFoodVariants: vi.fn(),
   },
@@ -2095,6 +2097,182 @@ describe('update_food_variant', () => {
 
     expect(result).toBe(DB_ERROR_TEXT);
     expect(foodRepository.updateFoodVariant).not.toHaveBeenCalled();
+  });
+});
+
+describe('update_food', () => {
+  it('requires food_id or food_name', async () => {
+    const result = await tools.sparky_manage_food.execute!(
+      { action: 'update_food', new_name: 'Eggs (Large)' },
+      opts
+    );
+    expect(result).toBe(
+      'Error [VALIDATION]: Either food_id or food_name must be provided'
+    );
+  });
+
+  it('requires at least one of new_name or brand', async () => {
+    const result = await tools.sparky_manage_food.execute!(
+      { action: 'update_food', food_id: FOOD_ID },
+      opts
+    );
+    expect(result).toBe(
+      'Error [VALIDATION]: At least one of new_name or brand must be provided'
+    );
+  });
+
+  it('resolves by name and renames the food', async () => {
+    vi.mocked(foodRepository.getFoodsWithPagination).mockResolvedValue([
+      eggsRow,
+    ]);
+    vi.mocked(foodCoreService.updateFood).mockResolvedValue({
+      ...eggsRow,
+      name: 'Eggs (Large)',
+    });
+
+    const result = await tools.sparky_manage_food.execute!(
+      { action: 'update_food', food_name: 'eggs', new_name: 'Eggs (Large)' },
+      opts
+    );
+
+    expect(result).toBe('✅ Food "Eggs" renamed to "Eggs (Large)".');
+    expect(foodCoreService.updateFood).toHaveBeenCalledWith('user-1', FOOD_ID, {
+      name: 'Eggs (Large)',
+    });
+  });
+
+  it('updates brand only by food_id', async () => {
+    vi.mocked(foodRepository.getFoodById).mockResolvedValue(eggsRow);
+    vi.mocked(foodCoreService.updateFood).mockResolvedValue({
+      ...eggsRow,
+      brand: 'Acme',
+    });
+
+    const result = await tools.sparky_manage_food.execute!(
+      { action: 'update_food', food_id: FOOD_ID, brand: 'Acme' },
+      opts
+    );
+
+    expect(result).toBe('✅ Food "Eggs" updated.');
+    expect(foodCoreService.updateFood).toHaveBeenCalledWith('user-1', FOOD_ID, {
+      brand: 'Acme',
+    });
+  });
+
+  it('maps an unknown food_id to NOT_FOUND', async () => {
+    vi.mocked(foodRepository.getFoodById).mockResolvedValue(undefined);
+
+    const result = await tools.sparky_manage_food.execute!(
+      { action: 'update_food', food_id: FOOD_ID, new_name: 'New Name' },
+      opts
+    );
+
+    expect(result).toBe(
+      `Error [NOT_FOUND]: Food with ID '${FOOD_ID}' not found.\n\nSuggestion: Check the ID and try again.`
+    );
+    expect(foodCoreService.updateFood).not.toHaveBeenCalled();
+  });
+
+  it('maps a forbidden update to NOT_FOUND', async () => {
+    vi.mocked(foodRepository.getFoodById).mockResolvedValue(eggsRow);
+    vi.mocked(foodCoreService.updateFood).mockRejectedValue(
+      new Error('Forbidden: You do not have permission to update this food.')
+    );
+
+    const result = await tools.sparky_manage_food.execute!(
+      { action: 'update_food', food_id: FOOD_ID, new_name: 'New Name' },
+      opts
+    );
+
+    expect(result).toBe(
+      `Error [NOT_FOUND]: Food with ID '${FOOD_ID}' not found.\n\nSuggestion: Check the ID and try again.`
+    );
+  });
+});
+
+describe('add_food_variant', () => {
+  it('requires food_id or food_name', async () => {
+    const result = await tools.sparky_manage_food.execute!(
+      {
+        action: 'add_food_variant',
+        serving_size: 1,
+        serving_unit: 'cup',
+        calories: 200,
+      },
+      opts
+    );
+    expect(result).toBe(
+      'Error [VALIDATION]: Either food_id or food_name must be provided'
+    );
+  });
+
+  it('resolves by name and adds a new serving size', async () => {
+    vi.mocked(foodRepository.getFoodsWithPagination).mockResolvedValue([
+      eggsRow,
+    ]);
+    vi.mocked(foodCoreService.createFoodVariant).mockResolvedValue({
+      id: VARIANT_ID,
+    });
+
+    const result = await tools.sparky_manage_food.execute!(
+      {
+        action: 'add_food_variant',
+        food_name: 'eggs',
+        serving_size: 1,
+        serving_unit: 'cup',
+        calories: 200,
+        protein: 12,
+      },
+      opts
+    );
+
+    expect(result).toBe(
+      '✅ New serving size added for "Eggs": 1cup (200 kcal).'
+    );
+    expect(foodCoreService.createFoodVariant).toHaveBeenCalledWith('user-1', {
+      food_id: FOOD_ID,
+      serving_size: 1,
+      serving_unit: 'cup',
+      calories: 200,
+      protein: 12,
+      carbs: undefined,
+      fat: undefined,
+      saturated_fat: undefined,
+      polyunsaturated_fat: undefined,
+      monounsaturated_fat: undefined,
+      trans_fat: undefined,
+      cholesterol: undefined,
+      sodium: undefined,
+      potassium: undefined,
+      dietary_fiber: undefined,
+      sugars: undefined,
+      vitamin_a: undefined,
+      vitamin_c: undefined,
+      calcium: undefined,
+      iron: undefined,
+      glycemic_index: undefined,
+      is_default: false,
+    });
+  });
+
+  it('maps an unknown food_id to NOT_FOUND', async () => {
+    vi.mocked(foodRepository.getFoodById).mockResolvedValue(undefined);
+
+    const result = await tools.sparky_manage_food.execute!(
+      {
+        action: 'add_food_variant',
+        food_id: FOOD_ID,
+        serving_size: 1,
+        serving_unit: 'cup',
+        calories: 200,
+      },
+      opts
+    );
+
+    expect(result).toBe(
+      `Error [NOT_FOUND]: Food with ID '${FOOD_ID}' not found.\n\nSuggestion: Check the ID and try again.`
+    );
+    expect(foodCoreService.createFoodVariant).not.toHaveBeenCalled();
   });
 });
 

@@ -52,6 +52,8 @@ const VALID_ACTIONS = [
   'delete_food',
   'update_entry',
   'update_food_variant',
+  'update_food',
+  'add_food_variant',
   'copy_from_yesterday',
   'save_as_meal_template',
   'log_water',
@@ -776,6 +778,8 @@ Actions:
 - delete_food(food_id?|food_name?) — deletes food + variants + all diary entries referencing it
 - update_entry(entry_id, entry_type, quantity, unit)
 - update_food_variant(food_id?|variant_id?, serving_size?, serving_unit?, calories?, protein?, carbs?, fat?, saturated_fat?, fiber?, sugar?, sodium?, ..., update_existing_entries?) — updates an existing food variant without deleting the food. Defaults to leaving existing diary entries unchanged.
+- update_food(food_id?|food_name?, new_name?, brand?) — renames a food and/or changes its brand. At least one of new_name/brand is required.
+- add_food_variant(food_id?|food_name?, serving_size, serving_unit, calories, protein?, carbs?, fat?, ..., is_default?) — adds a new alternate serving size ("equivalent size") to an existing food without touching its other variants.
 - copy_from_yesterday(target_date?, source_date?, meal_type?)
 - save_as_meal_template(entry_date, meal_type, meal_name, description?)
 - log_water(amount_ml, entry_date)
@@ -1822,6 +1826,139 @@ Actions:
               }
               return formatConfirmation(
                 `Food variant updated for "${parentFood.name}" (${updated.calories ?? 0} kcal per ${updated.serving_size ?? '?'}${updated.serving_unit ?? ''}).`
+              );
+            }
+
+            case 'update_food': {
+              if (!args.food_id && !args.food_name) {
+                return ERRORS.VALIDATION(
+                  'Either food_id or food_name must be provided'
+                );
+              }
+              if (args.new_name === undefined && args.brand === undefined) {
+                return ERRORS.VALIDATION(
+                  'At least one of new_name or brand must be provided'
+                );
+              }
+              let foodId = args.food_id;
+              let currentName = args.food_name;
+              if (!foodId) {
+                const row = await findFoodByExactName(
+                  userId,
+                  args.food_name ?? ''
+                );
+                if (!row) {
+                  return ERRORS.VALIDATION(
+                    `Food "${args.food_name}" not found.`
+                  );
+                }
+                foodId = row.id;
+                currentName = row.name;
+              } else {
+                const row = await foodRepository.getFoodById(foodId, userId);
+                if (!row) {
+                  return ERRORS.NOT_FOUND(
+                    'Food',
+                    args.food_id || args.food_name || 'unknown'
+                  );
+                }
+                currentName = row.name;
+              }
+              const foodData: Record<string, unknown> = {};
+              if (args.new_name !== undefined) foodData.name = args.new_name;
+              if (args.brand !== undefined) foodData.brand = args.brand;
+              try {
+                await foodCoreService.updateFood(userId, foodId, foodData);
+              } catch (error) {
+                if (
+                  error instanceof Error &&
+                  (error.message.includes('not found') ||
+                    error.message.includes('Forbidden'))
+                ) {
+                  return ERRORS.NOT_FOUND(
+                    'Food',
+                    args.food_id || args.food_name || 'unknown'
+                  );
+                }
+                throw error;
+              }
+              return formatConfirmation(
+                args.new_name
+                  ? `Food "${currentName}" renamed to "${args.new_name}".`
+                  : `Food "${currentName}" updated.`
+              );
+            }
+
+            case 'add_food_variant': {
+              if (!args.food_id && !args.food_name) {
+                return ERRORS.VALIDATION(
+                  'Either food_id or food_name must be provided'
+                );
+              }
+              let foodId = args.food_id;
+              let foodName = args.food_name;
+              if (!foodId) {
+                const row = await findFoodByExactName(
+                  userId,
+                  args.food_name ?? ''
+                );
+                if (!row) {
+                  return ERRORS.VALIDATION(
+                    `Food "${args.food_name}" not found.`
+                  );
+                }
+                foodId = row.id;
+                foodName = row.name;
+              } else {
+                const row = await foodRepository.getFoodById(foodId, userId);
+                if (!row) {
+                  return ERRORS.NOT_FOUND(
+                    'Food',
+                    args.food_id || args.food_name || 'unknown'
+                  );
+                }
+                foodName = row.name;
+              }
+              try {
+                await foodCoreService.createFoodVariant(userId, {
+                  food_id: foodId,
+                  serving_size: args.serving_size,
+                  serving_unit: args.serving_unit,
+                  calories: args.calories,
+                  protein: args.protein,
+                  carbs: args.carbs,
+                  fat: args.fat,
+                  saturated_fat: args.saturated_fat,
+                  polyunsaturated_fat: args.polyunsaturated_fat,
+                  monounsaturated_fat: args.monounsaturated_fat,
+                  trans_fat: args.trans_fat,
+                  cholesterol: args.cholesterol,
+                  sodium: args.sodium,
+                  potassium: args.potassium,
+                  dietary_fiber: args.fiber,
+                  sugars: args.sugar,
+                  vitamin_a: args.vitamin_a,
+                  vitamin_c: args.vitamin_c,
+                  calcium: args.calcium,
+                  iron: args.iron,
+                  glycemic_index: args.gi,
+                  is_default: args.is_default ?? false,
+                });
+              } catch (error) {
+                if (
+                  error instanceof Error &&
+                  (error.message.includes('not found') ||
+                    error.message.includes('Forbidden'))
+                ) {
+                  return ERRORS.NOT_FOUND(
+                    'Food',
+                    args.food_id || args.food_name || 'unknown'
+                  );
+                }
+                throw error;
+              }
+              return formatConfirmation(
+                `New serving size added for "${foodName}": ${args.serving_size}${args.serving_unit} (${args.calories} kcal).`
               );
             }
 
