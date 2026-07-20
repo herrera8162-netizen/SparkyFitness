@@ -269,6 +269,10 @@ router.delete('/plan/:id', authenticate, async (req, res, next) => {
  *               total_servings:
  *                 type: number
  *                 description: How many servings the recipe yields. Full recipe quantity = serving_size × total_servings.
+ *               cooked_weight_g:
+ *                 type: number
+ *                 nullable: true
+ *                 description: Mass in grams of the full recipe as finished/cooked. An alternate denominator alongside serving_size × total_servings — when set, this meal may also be logged by plate weight in grams regardless of serving_unit.
  *               foods:
  *                 type: array
  *                 description: >
@@ -547,6 +551,10 @@ router.get('/:id', authenticate, async (req, res, next) => {
  *               total_servings:
  *                 type: number
  *                 description: How many servings the recipe yields. Full recipe quantity = serving_size × total_servings.
+ *               cooked_weight_g:
+ *                 type: number
+ *                 nullable: true
+ *                 description: Mass in grams of the full recipe as finished/cooked. An alternate denominator alongside serving_size × total_servings — when set, this meal may also be logged by plate weight in grams regardless of serving_unit. Send null to clear a previously-set value.
  *               foods:
  *                 type: array
  *                 description: >
