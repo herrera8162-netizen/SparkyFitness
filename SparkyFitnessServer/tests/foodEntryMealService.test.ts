@@ -460,4 +460,154 @@ describe('foodEntryMealService', () => {
       );
     });
   });
+
+  // MEAL_WEIGHT_PLAN.md Phase 1: cooked_weight_g is an alternate denominator
+  // alongside serving_size × total_servings — a serving-based meal (yields 4
+  // servings) can ALSO be logged by plate weight in grams once cooked_weight_g
+  // is set, without abandoning its serving definition.
+  describe('cooked_weight_g alternate denominator', () => {
+    const chiliTemplate = {
+      id: 'chili-template',
+      name: 'Chili',
+      serving_size: 1.0,
+      serving_unit: 'serving',
+      total_servings: 4.0,
+      cooked_weight_g: 800, // whole pot weighs 800g across 4 servings
+      foods: [
+        {
+          food_id: 'beans',
+          variant_id: 'beans-variant',
+          quantity: 400,
+          unit: 'g',
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      (foodRepository.getFoodById as any).mockResolvedValue({
+        id: 'beans',
+        name: 'Beans',
+        default_variant: { id: 'beans-variant' },
+      });
+      (foodRepository.getFoodVariantById as any).mockResolvedValue({
+        id: 'beans-variant',
+        serving_size: 100,
+        serving_unit: 'g',
+        calories: 120,
+        protein: 8,
+        carbs: 20,
+        fat: 1,
+      });
+    });
+
+    it('create: a plate-weight (g) entry divides by cooked_weight_g instead of serving_size × total_servings', async () => {
+      (mealRepository.getMealById as any).mockResolvedValue(chiliTemplate);
+      (foodEntryMealRepository.createFoodEntryMeal as any).mockImplementation(
+        (data: any) => ({ id: 'meal-entry-2', ...data })
+      );
+
+      await createFoodEntryMeal('user-1', 'user-1', {
+        meal_template_id: 'chili-template',
+        meal_type_id: 'dinner-id',
+        meal_type: 'dinner',
+        entry_date: '2026-07-20',
+        quantity: 200, // 200g plate out of the 800g pot
+        unit: 'g',
+        _clientMealModelVersion: 2,
+      });
+
+      // multiplier = 200 / 800 = 0.25 -> 400g beans * 0.25 = 100g
+      expect(foodRepository.bulkCreateFoodEntries).toHaveBeenCalledWith(
+        [expect.objectContaining({ food_id: 'beans', quantity: 100 })],
+        'user-1'
+      );
+    });
+
+    it('create: a serving-unit entry still uses serving_size × total_servings, unaffected by cooked_weight_g', async () => {
+      (mealRepository.getMealById as any).mockResolvedValue(chiliTemplate);
+      (foodEntryMealRepository.createFoodEntryMeal as any).mockImplementation(
+        (data: any) => ({ id: 'meal-entry-2', ...data })
+      );
+
+      await createFoodEntryMeal('user-1', 'user-1', {
+        meal_template_id: 'chili-template',
+        meal_type_id: 'dinner-id',
+        meal_type: 'dinner',
+        entry_date: '2026-07-20',
+        quantity: 1, // 1 of 4 servings
+        unit: 'serving',
+        _clientMealModelVersion: 2,
+      });
+
+      // multiplier = 1 / (1 * 4) = 0.25 -> 400g beans * 0.25 = 100g
+      expect(foodRepository.bulkCreateFoodEntries).toHaveBeenCalledWith(
+        [expect.objectContaining({ food_id: 'beans', quantity: 100 })],
+        'user-1'
+      );
+    });
+
+    it('update: rescales a plate-weight entry via cooked_weight_g', async () => {
+      (mealRepository.getMealById as any).mockResolvedValue(chiliTemplate);
+      (foodEntryMealRepository.updateFoodEntryMeal as any).mockResolvedValue({
+        id: 'meal-entry-2',
+        meal_type_id: 'dinner-id',
+        legacy_serving_unit_math: false,
+      });
+
+      await updateFoodEntryMeal('user-1', 'user-1', 'meal-entry-2', {
+        quantity: 400, // half the pot, by weight
+        unit: 'g',
+        meal_template_id: 'chili-template',
+        entry_date: '2026-07-20',
+        foods: [
+          {
+            food_id: 'beans',
+            variant_id: 'beans-variant',
+            quantity: 400,
+            unit: 'g',
+          },
+        ],
+      });
+
+      // multiplier = 400 / 800 = 0.5 -> 400g beans * 0.5 = 200g
+      expect(foodRepository.bulkCreateFoodEntries).toHaveBeenCalledWith(
+        [expect.objectContaining({ food_id: 'beans', quantity: 200 })],
+        'user-1'
+      );
+    });
+
+    it('unscale: recovers base recipe quantities for a plate-weight entry via cooked_weight_g', async () => {
+      (mealRepository.getMealById as any).mockResolvedValue(chiliTemplate);
+      (foodEntryMealRepository.getFoodEntryMealById as any).mockResolvedValue({
+        id: 'meal-entry-2',
+        meal_template_id: 'chili-template',
+        quantity: 200,
+        unit: 'g',
+        legacy_serving_unit_math: false,
+      });
+      (
+        foodRepository.getFoodEntryComponentsByFoodEntryMealId as any
+      ).mockResolvedValue([
+        {
+          food_id: 'beans',
+          quantity: 100, // stored as scaled (create test above)
+          serving_size: 100,
+          calories: 120,
+          protein: 8,
+          carbs: 20,
+          fat: 1,
+        },
+      ]);
+
+      const result = await getFoodEntryMealWithComponents(
+        'user-1',
+        'meal-entry-2'
+      );
+
+      // storedMultiplier = 200 / 800 = 0.25; unscaling recovers 100 / 0.25 = 400.
+      expect(result?.foods?.[0]).toEqual(
+        expect.objectContaining({ food_id: 'beans', quantity: 400 })
+      );
+    });
+  });
 });

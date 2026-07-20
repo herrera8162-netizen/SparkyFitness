@@ -12,6 +12,7 @@ interface ServingFields {
   serving_unit?: string;
   total_servings?: unknown;
   serving_size?: unknown;
+  cooked_weight_g?: unknown;
   [key: string]: unknown;
 }
 
@@ -22,6 +23,7 @@ interface CreateMealData {
   serving_size?: unknown;
   serving_unit?: string;
   total_servings?: unknown;
+  cooked_weight_g?: unknown;
   foods?: Array<{
     food_id?: string;
     child_meal_id?: string;
@@ -42,6 +44,7 @@ interface UpdateMealData {
   serving_size?: unknown;
   serving_unit?: string;
   total_servings?: unknown;
+  cooked_weight_g?: unknown;
   [key: string]: unknown;
 }
 
@@ -121,6 +124,21 @@ function normalizeServingFields(
   // in this case, but normalize defensively for any caller that doesn't.
   if (data.serving_unit === 'serving' && data.serving_size !== undefined) {
     data.serving_size = 1;
+  }
+
+  // cooked_weight_g (MEAL_WEIGHT_PLAN.md Phase 1) is an optional alternate
+  // denominator alongside serving_size × total_servings, not a replacement:
+  // it may be set independent of serving_unit. Explicit null clears a
+  // previously-set value; undefined leaves the stored value untouched (the
+  // repository's CASE expression tells "not provided" from "clear it" apart).
+  if (data.cooked_weight_g !== undefined && data.cooked_weight_g !== null) {
+    const value = Number(data.cooked_weight_g);
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new ValidationError(
+        'Meal cooked_weight_g must be a positive number.'
+      );
+    }
+    data.cooked_weight_g = value;
   }
 }
 // Maximum linked-sub-meal nesting depth. A meal that links other meals may be

@@ -1182,6 +1182,10 @@ async function createFoodEntryMeal(
     let foodsToProcess = mealData.foods || [];
     let mealServingSize = 1.0; // Default per-serving quantity
     let mealTotalServings = 1.0; // Default yield count
+    // Alternate denominator (MEAL_WEIGHT_PLAN.md Phase 1): when set, a 'g'
+    // unit entry scales by plate_grams / cookedWeightG instead of
+    // serving_size × total_servings.
+    let mealCookedWeightG: number | null = null;
     let description = mealData.description || null;
     let name = mealData.name;
 
@@ -1198,6 +1202,9 @@ async function createFoodEntryMeal(
       if (mealTemplate) {
         mealServingSize = mealTemplate.serving_size || 1.0;
         mealTotalServings = mealTemplate.total_servings || 1.0;
+        mealCookedWeightG = mealTemplate.cooked_weight_g
+          ? Number(mealTemplate.cooked_weight_g)
+          : null;
         if (!name && mealTemplate.name) {
           name = mealTemplate.name;
         }
@@ -1247,14 +1254,23 @@ async function createFoodEntryMeal(
     const resolvedMealTypeId = newFoodEntryMeal.meal_type_id;
 
     // Calculate portion multiplier.
+    //   - Cooked-weight model (MEAL_WEIGHT_PLAN.md Phase 1): unit='g' and the
+    //     template has cooked_weight_g set: consumed_quantity / cooked_weight_g.
     //   - Uniform model (new clients): consumed_quantity / (serving_size × total_servings).
     //   - Legacy model (old clients, unit='serving'): multiplier = consumed_quantity.
     // Full recipe nutrition is stored in component foods scaled by mf.quantity / mf.serving_size,
     // so this multiplier scales the WHOLE recipe down to the consumed portion.
     const consumedQuantity = mealData.quantity || 1.0;
+    const useCookedWeight =
+      (mealData.unit || 'serving') === 'g' && !!mealCookedWeightG;
     let multiplier = 1.0;
     if (mealData.meal_template_id) {
-      if (useLegacyServingMath) {
+      if (useCookedWeight) {
+        multiplier =
+          (mealCookedWeightG as number) > 0
+            ? consumedQuantity / (mealCookedWeightG as number)
+            : 1.0;
+      } else if (useLegacyServingMath) {
         multiplier = consumedQuantity;
       } else {
         const denominator = mealServingSize * mealTotalServings;
@@ -1364,7 +1380,15 @@ async function updateFoodEntryMeal(
       if (mealTemplate && mealTemplate.serving_size) {
         const referenceServingSize = mealTemplate.serving_size || 1.0;
         const referenceTotalServings = mealTemplate.total_servings || 1.0;
-        if (legacyMath && updatedMealData.unit === 'serving') {
+        const referenceCookedWeightG = mealTemplate.cooked_weight_g
+          ? Number(mealTemplate.cooked_weight_g)
+          : null;
+        if (updatedMealData.unit === 'g' && referenceCookedWeightG) {
+          multiplier =
+            referenceCookedWeightG > 0
+              ? newQuantity / referenceCookedWeightG
+              : 1.0;
+        } else if (legacyMath && updatedMealData.unit === 'serving') {
           multiplier = newQuantity;
         } else {
           const denominator = referenceServingSize * referenceTotalServings;
@@ -1372,7 +1396,7 @@ async function updateFoodEntryMeal(
         }
         log(
           'info',
-          `Update portion scaling (with template): multiplier ${multiplier} (consumed: ${newQuantity}, serving_size: ${referenceServingSize}, total_servings: ${referenceTotalServings}, legacy: ${legacyMath})`
+          `Update portion scaling (with template): multiplier ${multiplier} (consumed: ${newQuantity}, serving_size: ${referenceServingSize}, total_servings: ${referenceTotalServings}, cooked_weight_g: ${referenceCookedWeightG}, legacy: ${legacyMath})`
         );
       }
     } else {
@@ -1516,8 +1540,16 @@ async function getFoodEntryMealWithComponents(
           const consumedQuantity = foodEntryMeal.quantity || 1.0;
           const templateServingSize = mealTemplate.serving_size || 1.0;
           const templateTotalServings = mealTemplate.total_servings || 1.0;
+          const templateCookedWeightG = mealTemplate.cooked_weight_g
+            ? Number(mealTemplate.cooked_weight_g)
+            : null;
           const legacyMath = foodEntryMeal.legacy_serving_unit_math === true;
-          if (legacyMath && foodEntryMeal.unit === 'serving') {
+          if (foodEntryMeal.unit === 'g' && templateCookedWeightG) {
+            storedMultiplier =
+              templateCookedWeightG > 0
+                ? consumedQuantity / templateCookedWeightG
+                : 1.0;
+          } else if (legacyMath && foodEntryMeal.unit === 'serving') {
             storedMultiplier = consumedQuantity;
           } else {
             const denominator = templateServingSize * templateTotalServings;
