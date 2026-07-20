@@ -40,6 +40,7 @@ import {
   useCreateFoodEntryMealMutation,
   useUpdateFoodEntryMealMutation,
 } from '@/hooks/Diary/useFoodEntries';
+import { useMealTypes } from '@/hooks/Diary/useMealTypes';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
@@ -137,6 +138,11 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
   const [servingUnit, setServingUnit] = useState<string>(
     initialServingUnit || 'serving'
   );
+  // Diary-mode meal slot (breakfast/lunch/dinner/snacks/custom). Editable so a
+  // logged meal can be moved to a different slot; seeded from the prop.
+  const [mealTypeSelection, setMealTypeSelection] = useState<string>(
+    foodEntryMealType || ''
+  );
   // total_servings = how many portions the recipe yields (denominator alongside
   // serving_size in the uniform multiplier: quantity / (serving_size × total_servings)).
   // For serving-unit meals, this is what the user types directly.
@@ -194,6 +200,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
   const { mutateAsync: createMeal } = useCreateMealMutation();
   const { mutateAsync: createFoodEntryMeal } = useCreateFoodEntryMealMutation();
   const { mutateAsync: updateFoodEntryMeal } = useUpdateFoodEntryMealMutation();
+  const { data: availableMealTypes } = useMealTypes();
   // Tracks which source (meal/entry) has already seeded the form, so the load
   // effect seeds once per source and does NOT re-run when an unrelated
   // dependency changes (language, logging level, a new initialFoods array
@@ -361,6 +368,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
         // For new food-diary entries or when initialFoods are pre-loaded
         setMealFoods(initialFoods);
         setMealName(foodEntryMealType || 'Logged Meal');
+        setMealTypeSelection(foodEntryMealType || '');
         setMealDescription('');
         // Set template info based on props for scaling logic, defaults to 1 serving otherwise
         const initialSize = initialServingSize || 1;
@@ -781,7 +789,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
         error(loggingLevel, 'Error saving meal:', err);
       }
     } else if (source === 'food-diary') {
-      if (!foodEntryDate || !foodEntryMealType || !activeUserId) {
+      if (!foodEntryDate || !mealTypeSelection || !activeUserId) {
         error(loggingLevel, 'Missing foodEntry context for food-diary save.');
         toast({
           title: t('mealBuilder.errorTitle', 'Error'),
@@ -796,7 +804,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
 
       const foodEntryMealData = {
         meal_template_id: templateInfo.id, // Preserve template ID for proper scaling now that it has logic to handle missing template info
-        meal_type: foodEntryMealType,
+        meal_type: mealTypeSelection,
         entry_date: foodEntryDate,
         name: mealName.trim() || 'Custom Meal', // Use edited name or default
         description: mealDescription,
@@ -1062,7 +1070,27 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
 
         {source === 'food-diary' ? (
           // Diary mode: keep the existing "Quantity Consumed" + locked unit pair + time.
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="mealTypeSelection">
+                {t('mealBuilder.mealSlot', 'Meal')}
+              </Label>
+              <Select
+                value={mealTypeSelection}
+                onValueChange={setMealTypeSelection}
+              >
+                <SelectTrigger id="mealTypeSelection">
+                  <SelectValue placeholder="Select meal" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(availableMealTypes ?? []).map((mt) => (
+                    <SelectItem key={mt.id} value={mt.name}>
+                      {mt.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-2">
               <Label htmlFor="servingSize">
                 {t('mealBuilder.consumedQuantity', 'Quantity Consumed')}

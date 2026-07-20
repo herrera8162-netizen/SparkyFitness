@@ -1905,6 +1905,7 @@
     "servingSize": "Serving Size",
     "defaultServingSize": "Default Serving Size",
     "consumedQuantity": "Quantity Consumed",
+    "mealSlot": "Meal",
     "servingUnit": "Unit",
     "invalidTotalServings": "Total servings must be greater than zero.",
     "invalidTotalAmount": "Total amount must be greater than zero.",
