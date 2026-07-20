@@ -1,4 +1,5 @@
 import foodRepository from '../models/foodRepository.js';
+import { canAccessUserData } from '../utils/permissionUtils.js';
 import preferenceService from './preferenceService.js';
 import externalProviderService from './externalProviderService.js';
 import { log } from '../config/logging.js';
@@ -219,7 +220,10 @@ async function updateFood(
     if (!foodOwnerId) {
       throw new Error('Food not found.');
     }
-    if (foodOwnerId !== authenticatedUserId) {
+    if (
+      foodOwnerId !== authenticatedUserId &&
+      !(await canAccessUserData(foodOwnerId, 'diary', authenticatedUserId))
+    ) {
       throw new Error(
         'Forbidden: You do not have permission to update this food.'
       );
@@ -507,7 +511,10 @@ async function updateFoodVariant(
     if (!foodOwnerId) {
       throw new Error('Associated food not found.');
     }
-    if (foodOwnerId !== authenticatedUserId) {
+    if (
+      foodOwnerId !== authenticatedUserId &&
+      !(await canAccessUserData(foodOwnerId, 'diary', authenticatedUserId))
+    ) {
       throw new Error(
         'Forbidden: You do not have permission to update this food variant.'
       );

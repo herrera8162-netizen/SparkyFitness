@@ -488,6 +488,42 @@ BEGIN
 END;
 $_$;
 
+-- Same as create_library_policy, but the modify policy also honors family
+-- members with the 'can_manage_diary' delegated permission (checked via
+-- authenticated_user_id(), not requiring an active-user profile switch) so
+-- they can edit foods/meals the owner shares diary-management access to.
+-- Kept separate from create_library_policy rather than changing it globally,
+-- since exercises/meal_plan_templates/workout_plan_templates/workout_presets
+-- intentionally remain owner-only for writes.
+CREATE OR REPLACE FUNCTION create_library_policy_family_editable(table_name text, shared_column text, permissions text[]) RETURNS void
+LANGUAGE plpgsql
+AS $_$
+DECLARE
+  quoted_permissions text;
+  shared_expression text;
+BEGIN
+  -- Quote each permission name to ensure valid ARRAY syntax
+  SELECT array_to_string(ARRAY(
+    SELECT quote_literal(p) FROM unnest(permissions) p
+  ), ',') INTO quoted_permissions;
+
+  -- Use boolean false if shared_column is 'false', otherwise treat as column name
+  IF shared_column = 'false' THEN
+    shared_expression := 'false';
+  ELSE
+    shared_expression := quote_ident(shared_column);
+  END IF;
+
+  EXECUTE format('
+    CREATE POLICY select_policy ON public.%I FOR SELECT TO PUBLIC
+    USING (has_library_access_with_public(user_id, %s, ARRAY[%s]));
+    CREATE POLICY modify_policy ON public.%I FOR ALL TO PUBLIC
+    USING (authenticated_user_id() = user_id OR has_family_access(user_id, ''can_manage_diary''))
+    WITH CHECK (authenticated_user_id() = user_id OR has_family_access(user_id, ''can_manage_diary''));
+  ', table_name, shared_expression, quoted_permissions, table_name);
+END;
+$_$;
+
 CREATE OR REPLACE FUNCTION public.create_medication_policy(table_name text) RETURNS void
 LANGUAGE plpgsql
 AS $$
@@ -624,8 +660,8 @@ SELECT create_diary_policy('water_intake_entries');
 
 -- Library access tables
 SELECT create_library_policy('exercises', 'shared_with_public', ARRAY['can_view_exercise_library', 'can_manage_diary']);
-SELECT create_library_policy('foods', 'shared_with_public', ARRAY['can_view_food_library', 'can_manage_diary']);
-SELECT create_library_policy('meals', 'is_public', ARRAY['can_view_food_library', 'can_manage_diary']);
+SELECT create_library_policy_family_editable('foods', 'shared_with_public', ARRAY['can_view_food_library', 'can_manage_diary']);
+SELECT create_library_policy_family_editable('meals', 'is_public', ARRAY['can_view_food_library', 'can_manage_diary']);
 SELECT create_library_policy('meal_plan_templates', 'false', ARRAY['can_view_food_library']);
 SELECT create_library_policy('workout_plan_templates', 'false', ARRAY['can_view_exercise_library']);
 SELECT create_library_policy('workout_presets', 'is_public', ARRAY['can_view_exercise_library','can_manage_diary']);
@@ -752,38 +788,39 @@ USING (
       AND has_library_access_with_public(f.user_id, f.shared_with_public, ARRAY['can_view_food_library', 'can_manage_diary'])
   )
 );
--- Food variants are library data: only the owner of the parent food may write
--- them. Delegates (even can_manage_diary) get read-only access via select_policy
--- so they can pick serving sizes while logging, but cannot mutate the library.
+-- Food variants are library data. The owner of the parent food may always
+-- write them; family members with can_manage_diary on that owner may too, so
+-- they can actually fix nutrition data on a shared food, not just its name.
 CREATE POLICY modify_policy ON public.food_variants FOR ALL TO PUBLIC
 USING (
   EXISTS (
     SELECT 1 FROM public.foods f
     WHERE f.id = food_variants.food_id
-      AND authenticated_user_id() = f.user_id
+      AND (authenticated_user_id() = f.user_id OR has_family_access(f.user_id, 'can_manage_diary'))
   )
 )
 WITH CHECK (
   EXISTS (
     SELECT 1 FROM public.foods f
     WHERE f.id = food_variants.food_id
-      AND authenticated_user_id() = f.user_id
+      AND (authenticated_user_id() = f.user_id OR has_family_access(f.user_id, 'can_manage_diary'))
   )
 );
 
 -- meal_foods is polymorphic: a row references either a food (item_type='food')
 -- or another meal (item_type='meal', a reusable sub-meal). Read access follows
--- the parent meal. Write access requires the caller owns the parent meal AND the
--- referenced ingredient is accessible to them: a food they can view, or a child
--- meal they have library access to (prevents linking a meal you cannot see).
+-- the parent meal. Write access requires the caller owns the parent meal, or
+-- has can_manage_diary access to its owner, AND the referenced ingredient is
+-- accessible to them: a food they can view, or a child meal they have library
+-- access to (prevents linking a meal you cannot see).
 CREATE POLICY select_policy ON public.meal_foods FOR SELECT TO PUBLIC
 USING (EXISTS (SELECT 1 FROM public.meals m WHERE m.id = meal_foods.meal_id AND has_library_access_with_public(m.user_id, m.is_public, ARRAY['can_view_food_library', 'can_manage_diary'])));
 CREATE POLICY modify_policy ON public.meal_foods FOR ALL TO PUBLIC
 USING (
-  EXISTS (SELECT 1 FROM public.meals m WHERE m.id = meal_foods.meal_id AND authenticated_user_id() = m.user_id)
+  EXISTS (SELECT 1 FROM public.meals m WHERE m.id = meal_foods.meal_id AND (authenticated_user_id() = m.user_id OR has_family_access(m.user_id, 'can_manage_diary')))
 )
 WITH CHECK (
-  EXISTS (SELECT 1 FROM public.meals m WHERE m.id = meal_foods.meal_id AND authenticated_user_id() = m.user_id)
+  EXISTS (SELECT 1 FROM public.meals m WHERE m.id = meal_foods.meal_id AND (authenticated_user_id() = m.user_id OR has_family_access(m.user_id, 'can_manage_diary')))
   AND (
     (meal_foods.food_id IS NOT NULL AND EXISTS (SELECT 1 FROM public.foods f WHERE f.id = meal_foods.food_id))
     OR
