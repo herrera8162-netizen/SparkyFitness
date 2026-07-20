@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
-import { Plus, Camera } from 'lucide-react';
+import { Plus, Camera, Sparkles } from 'lucide-react';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import { useIsMobile } from '@/hooks/use-mobile';
 import ConfirmationDialog from '@/components/ui/ConfirmationDialog';
@@ -114,6 +114,21 @@ const CustomFoodForm = ({
     () => deriveSavedAiUnits(loadedVariants, variants, aiEstimatedUnits),
     [aiEstimatedUnits, loadedVariants, variants]
   );
+
+  // Foods entered only in non-mass units (e.g. "1 medium onion", "2 tbsp")
+  // have no gram equivalent to scale against elsewhere in the app. Surface an
+  // explicit action to add a gram-based row so the user can trigger the
+  // existing per-row AI conversion (below) to infer its mass.
+  const massUnits = useMemo(
+    () => new Set(UNIT_GROUPS.find((g) => g.label === 'Weight')?.units ?? []),
+    []
+  );
+  const hasMassVariant = useMemo(
+    () => variants.some((v) => massUnits.has(v.serving_unit)),
+    [variants, massUnits]
+  );
+  const showInferMassAction =
+    aiEstimatesAvailable && variants.length > 0 && !hasMassVariant;
 
   const compatibleUnitsByIndex = useMemo(() => {
     const allUnits = UNIT_GROUPS.flatMap((group) => group.units);
@@ -241,10 +256,24 @@ const CustomFoodForm = ({
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-semibold">Unit Variants</h3>
-                <Button type="button" onClick={addVariant} size="sm">
-                  <Plus className="w-4 h-4 mr-1" />
-                  Add Unit
-                </Button>
+                <div className="flex items-center gap-2">
+                  {showInferMassAction && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={addVariant}
+                      size="sm"
+                      title="Adds a gram-based unit you can estimate with AI — this food has no mass unit yet."
+                    >
+                      <Sparkles className="w-4 h-4 mr-1" />
+                      Infer Mass (g)
+                    </Button>
+                  )}
+                  <Button type="button" onClick={addVariant} size="sm">
+                    <Plus className="w-4 h-4 mr-1" />
+                    Add Unit
+                  </Button>
+                </div>
               </div>
               <p className="text-sm text-gray-600">
                 Add different unit measurements for this food with specific
