@@ -1934,6 +1934,9 @@
     "invalidTotalServings": "Total servings must be greater than zero.",
     "invalidTotalAmount": "Total amount must be greater than zero.",
     "invalidDefaultServingSize": "Default serving size must be greater than zero.",
+    "cookedWeight": "Cooked Weight (g)",
+    "cookedWeightHelp": "Weigh the finished dish, minus the pan. Lets you log a partial plate by weight without giving up serving-based portions.",
+    "invalidCookedWeight": "Cooked weight must be greater than zero.",
     "perServingTab": "Per serving",
     "totalTab": "Total",
     "addFoodToMealTitle": "Add Food to Meal",
@@ -1981,6 +1984,9 @@
     "planNameEmptyError": "Plan Name cannot be empty.",
     "endDateError": "End Date cannot be before Start Date.",
     "removeButton": "X"
+  },
+  "mealUnitSelector": {
+    "plateWeight": "Plate weight (g)"
   },
   "workoutPresetForm": {
     "createTitle": "Create New Workout Preset",

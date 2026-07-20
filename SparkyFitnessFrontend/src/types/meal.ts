@@ -9,6 +9,10 @@ export interface Meal {
   serving_size?: number;
   serving_unit?: string;
   total_servings?: number;
+  // Mass in grams of the full recipe as finished/cooked. An alternate
+  // denominator alongside serving_size × total_servings: when set, this meal
+  // may also be logged by plate weight in grams regardless of serving_unit.
+  cooked_weight_g?: number | null;
   foods?: MealFood[];
   // ISO timestamp of when the current user starred this meal. Present only on
   // items returned by the favorites endpoint; used to order the Favorites list.
@@ -63,6 +67,7 @@ export interface MealPayload {
   serving_size?: number;
   serving_unit?: string;
   total_servings?: number;
+  cooked_weight_g?: number | null;
   foods: MealFoodPayload[];
 }
 
