@@ -342,7 +342,7 @@ const updateFoodVariantSchema = z
       ),
     serving_size: z.coerce
       .number()
-      .min(0)
+      .gt(0)
       .optional()
       .describe('Updated serving size value'),
     serving_unit: z
@@ -479,7 +479,7 @@ const addFoodVariantSchema = z
       ),
     serving_size: z.coerce
       .number()
-      .min(0)
+      .gt(0)
       .describe('Serving size value for the new variant (e.g. 1).'),
     serving_unit: z
       .string()
@@ -728,7 +728,7 @@ export const manageFoodInput = z.object({
     ),
   serving_size: z.coerce
     .number()
-    .min(0)
+    .gt(0)
     .optional()
     .describe('For update_food_variant: updated serving size value'),
   serving_unit: z
