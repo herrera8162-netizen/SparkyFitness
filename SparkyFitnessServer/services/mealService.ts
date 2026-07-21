@@ -4,15 +4,18 @@ import foodEntryRepository from '../models/foodEntry.js';
 import mealPlanTemplateRepository from '../models/mealPlanTemplateRepository.js';
 import mealPlanTemplateService from './mealPlanTemplateService.js';
 import mealTypeRepository from '../models/mealType.js';
+import aiUnitConversionService from './aiUnitConversionService.js';
 import { log } from '../config/logging.js';
 import { ValidationError } from '../utils/errors.js';
 import type { MealTypes } from '@workspace/shared';
+import { getUnitCategory, getConversionFactor } from '@workspace/shared';
 
 interface ServingFields {
   serving_unit?: string;
   total_servings?: unknown;
   serving_size?: unknown;
   cooked_weight_g?: unknown;
+  cooked_weight_source?: unknown;
   [key: string]: unknown;
 }
 
@@ -24,6 +27,7 @@ interface CreateMealData {
   serving_unit?: string;
   total_servings?: unknown;
   cooked_weight_g?: unknown;
+  cooked_weight_source?: unknown;
   foods?: Array<{
     food_id?: string;
     child_meal_id?: string;
@@ -45,7 +49,32 @@ interface UpdateMealData {
   serving_unit?: string;
   total_servings?: unknown;
   cooked_weight_g?: unknown;
+  cooked_weight_source?: unknown;
   [key: string]: unknown;
+}
+
+export interface ResolvedIngredientWeight {
+  mealFoodId: string;
+  foodName: string;
+  quantity: number;
+  unit: string;
+  weightG: number;
+  source: 'deterministic' | 'ai_estimated';
+  confidence?: 'high' | 'medium' | 'low';
+}
+
+export interface UnresolvedIngredientWeight {
+  mealFoodId: string;
+  foodName: string;
+  reason: string;
+}
+
+export interface MealWeightResolution {
+  mealName: string;
+  resolved: ResolvedIngredientWeight[];
+  unresolved: UnresolvedIngredientWeight[];
+  totalGrams: number;
+  cookedWeightUpdated: boolean;
 }
 
 interface CreateMealPlanData {
@@ -139,6 +168,20 @@ function normalizeServingFields(
       );
     }
     data.cooked_weight_g = value;
+  }
+
+  // cooked_weight_source tracks how cooked_weight_g was set (manual entry vs.
+  // the auto-sum action) so a future auto-sum re-run or the UI can tell them
+  // apart. Same undefined/null semantics as cooked_weight_g above.
+  if (
+    data.cooked_weight_source !== undefined &&
+    data.cooked_weight_source !== null &&
+    data.cooked_weight_source !== 'manual' &&
+    data.cooked_weight_source !== 'auto_sum'
+  ) {
+    throw new ValidationError(
+      "Meal cooked_weight_source must be 'manual' or 'auto_sum'."
+    );
   }
 }
 // Maximum linked-sub-meal nesting depth. A meal that links other meals may be
@@ -620,6 +663,151 @@ async function updateMeal(
     throw error;
   }
 }
+
+// Auto-sum core: resolves each ingredient's weight in grams (deterministic
+// unit math for weight units, AI density/count-weight estimation for volume
+// and quantity units via aiUnitConversionService), persists the per-ingredient
+// resolution on meal_foods, and — if at least one ingredient resolved — sums
+// them into the meal's cooked_weight_g (marked cooked_weight_source:
+// 'auto_sum'). Ingredients that can't be resolved (no AI service configured,
+// a linked meal with no cooked_weight_g of its own, etc.) are reported back
+// rather than silently dropped or failing the whole call.
+async function resolveMealIngredientWeights(
+  userId: string,
+  mealId: string,
+  actorIsAdmin = false
+): Promise<MealWeightResolution> {
+  const meal = await mealRepository.getMealById(mealId, userId);
+  if (!meal) {
+    throw new Error('Meal not found.');
+  }
+
+  const resolved: ResolvedIngredientWeight[] = [];
+  const unresolved: UnresolvedIngredientWeight[] = [];
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const item of (meal.foods || []) as any[]) {
+    const displayName = item.food_name || item.child_meal_name || 'Ingredient';
+    const quantity = Number(item.quantity);
+    const unit = String(item.unit || '').toLowerCase();
+
+    if (item.item_type === 'meal') {
+      const childCookedWeightG = item.child_meal_id
+        ? // eslint-disable-next-line no-await-in-loop
+          (await mealRepository.getMealById(item.child_meal_id, userId))
+            ?.cooked_weight_g
+        : null;
+      const childServingSize = Number(item.child_meal_serving_size);
+      const childTotalServings = Number(item.child_meal_total_servings);
+      if (
+        childCookedWeightG &&
+        Number.isFinite(childServingSize) &&
+        childServingSize > 0 &&
+        Number.isFinite(childTotalServings) &&
+        childTotalServings > 0
+      ) {
+        const gramsPerNativeUnit =
+          Number(childCookedWeightG) / (childServingSize * childTotalServings);
+        resolved.push({
+          mealFoodId: item.id,
+          foodName: displayName,
+          quantity,
+          unit,
+          weightG: quantity * gramsPerNativeUnit,
+          source: 'deterministic',
+        });
+      } else {
+        unresolved.push({
+          mealFoodId: item.id,
+          foodName: displayName,
+          reason:
+            'Linked meal has no cooked weight set — set its Cooked Weight (g) first.',
+        });
+      }
+      continue;
+    }
+
+    const category = getUnitCategory(unit);
+    if (category === 'weight') {
+      const factor = getConversionFactor(unit, 'g');
+      resolved.push({
+        mealFoodId: item.id,
+        foodName: displayName,
+        quantity,
+        unit,
+        weightG: quantity * (factor ?? 1),
+        source: 'deterministic',
+      });
+      continue;
+    }
+
+    // Volume units (density estimate) and quantity units (count-weight
+    // estimate, allowCountUnit: true) both go through the AI path.
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const estimate = await aiUnitConversionService.estimateUnitConversion(
+        userId,
+        {
+          foodId: item.food_id || '',
+          foodName: displayName,
+          brand: item.brand || undefined,
+          fromUnit: unit,
+          fromAmount: quantity,
+          toUnit: 'g',
+          knownVariants: [],
+        },
+        actorIsAdmin,
+        { allowCountUnit: true }
+      );
+      resolved.push({
+        mealFoodId: item.id,
+        foodName: displayName,
+        quantity,
+        unit,
+        weightG: estimate.estimatedAmount,
+        source: 'ai_estimated',
+        confidence: estimate.confidence,
+      });
+    } catch (error) {
+      unresolved.push({
+        mealFoodId: item.id,
+        foodName: displayName,
+        reason:
+          error instanceof Error
+            ? error.message
+            : 'AI weight estimation failed.',
+      });
+    }
+  }
+
+  for (const r of resolved) {
+    // eslint-disable-next-line no-await-in-loop
+    await mealRepository.updateMealFoodWeight(r.mealFoodId, userId, {
+      resolved_weight_g: r.weightG,
+      weight_source: r.source,
+      weight_confidence: r.confidence ?? null,
+    });
+  }
+
+  const totalGrams = resolved.reduce((sum, r) => sum + r.weightG, 0);
+  let cookedWeightUpdated = false;
+  if (resolved.length > 0) {
+    await updateMeal(userId, mealId, {
+      cooked_weight_g: totalGrams,
+      cooked_weight_source: 'auto_sum',
+    });
+    cookedWeightUpdated = true;
+  }
+
+  return {
+    mealName: meal.name,
+    resolved,
+    unresolved,
+    totalGrams,
+    cookedWeightUpdated,
+  };
+}
+
 async function deleteMeal(userId: string, mealId: string) {
   try {
     const meal = await mealRepository.getMealById(mealId, userId);
@@ -1095,6 +1283,7 @@ export default {
   getTopMeals,
   getMealById,
   updateMeal,
+  resolveMealIngredientWeights,
   deleteMeal,
   createMealPlanEntry,
   getMealPlanEntries,

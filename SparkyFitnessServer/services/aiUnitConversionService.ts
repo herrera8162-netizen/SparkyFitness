@@ -12,6 +12,7 @@ import { deriveAiNetworkPolicy } from '../utils/outboundUrlPolicy.js';
 import {
   aiProviderRawResponseSchema,
   isAiConvertibleUnit,
+  isCountToGramEstimate,
   shouldOfferAiConversion,
   STRUCTURED_OUTPUT_SCHEMA,
   type AiUnitConversionRequest,
@@ -65,12 +66,16 @@ function buildPrompt(params: {
   fromUnit: string;
   toUnit: string;
   knownVariants: KnownVariantContext[];
+  isCountUnit: boolean;
 }): string {
   const brandSegment = params.brand ? ` (brand: ${params.brand})` : '';
   const variantsSegment =
     params.knownVariants.length > 0
       ? params.knownVariants.map((v) => `- ${v.amount} ${v.unit}`).join('\n')
       : '- (none)';
+  const estimationRule = params.isCountUnit
+    ? `- Use the typical weight of one "${params.fromUnit}" of this food (not density — this is a count unit).`
+    : '- Use typical density for this food.';
   return [
     'You are estimating a food unit conversion. Respond with JSON only.',
     '',
@@ -81,8 +86,8 @@ function buildPrompt(params: {
     variantsSegment,
     '',
     'Rules:',
-    '- Use typical density for this food.',
-    '- If the food is generic (no brand), use a generic density estimate.',
+    estimationRule,
+    '- If the food is generic (no brand), use a generic estimate.',
     '- Output ONLY the JSON object — no prose, no code fences.',
     '',
     'JSON shape:',
@@ -128,22 +133,34 @@ export async function estimateUnitConversion(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   userId: any,
   params: AiUnitConversionRequest,
-  actorIsAdmin = false
+  actorIsAdmin = false,
+  opts?: { allowCountUnit?: boolean }
 ): Promise<AiUnitConversionResponse> {
   // 1. Validate units BEFORE touching AI services. Cheap and avoids
   //    spending a provider call on an obviously-bad request.
-  if (
-    !isAiConvertibleUnit(params.fromUnit) ||
-    !isAiConvertibleUnit(params.toUnit)
-  ) {
-    throw new IncompatibleRequestError(
-      'Both fromUnit and toUnit must be standard weight or volume units.'
-    );
-  }
-  if (!shouldOfferAiConversion(params.fromUnit, params.toUnit)) {
-    throw new IncompatibleRequestError(
-      'Units are already directly convertible; AI estimation is not needed.'
-    );
+  //    allowCountUnit is an additive escape hatch used only by the
+  //    meal-weight auto-sum path (mealService.resolveMealIngredientWeights)
+  //    so a quantity unit ("slice", "piece", ...) converting to grams can
+  //    still get an AI estimate, without loosening the gate for the general
+  //    unit-conversion picker (FoodUnitSelector / VariantCard), which never
+  //    passes this option.
+  const isCountUnitEstimate =
+    !!opts?.allowCountUnit &&
+    isCountToGramEstimate(params.fromUnit, params.toUnit);
+  if (!isCountUnitEstimate) {
+    if (
+      !isAiConvertibleUnit(params.fromUnit) ||
+      !isAiConvertibleUnit(params.toUnit)
+    ) {
+      throw new IncompatibleRequestError(
+        'Both fromUnit and toUnit must be standard weight or volume units.'
+      );
+    }
+    if (!shouldOfferAiConversion(params.fromUnit, params.toUnit)) {
+      throw new IncompatibleRequestError(
+        'Units are already directly convertible; AI estimation is not needed.'
+      );
+    }
   }
 
   // 2. Global + per-user preference checks.
@@ -191,6 +208,7 @@ export async function estimateUnitConversion(
       fromUnit: params.fromUnit,
       toUnit: params.toUnit,
       knownVariants: params.knownVariants,
+      isCountUnit: isCountUnitEstimate,
     }),
     jsonSchema: UNIT_CONVERSION_SCHEMA,
     schemaName: SCHEMA_NAME,

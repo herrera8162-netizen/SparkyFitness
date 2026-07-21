@@ -59,6 +59,9 @@ const VALID_ACTIONS = [
   'log_water',
   'get_nutritional_summary',
   'get_water_history',
+  'get_meal_details',
+  'set_meal_cooked_weight',
+  'auto_sum_meal_weight',
 ];
 
 // Provider types the no-provider cascade may search (exercise/health
@@ -550,6 +553,30 @@ async function findFoodByExactName(userId: string, name: string) {
   );
 }
 
+// Resolves meal_id/meal_name (as accepted by get_meal_details,
+// set_meal_cooked_weight, auto_sum_meal_weight) to a concrete meal record.
+// Mirrors log_meal's resolution: an id is looked up directly, a name is
+// matched case-insensitively against search_meal results.
+// Callers must check `!args.meal_id && !args.meal_name` themselves (matching
+// log_meal's inline guard) and return ERRORS.VALIDATION directly — this
+// function assumes at least one identifier is present.
+async function resolveMealIdentity(
+  userId: string,
+  args: { meal_id?: string; meal_name?: string }
+) {
+  if (args.meal_id) {
+    return await mealService.getMealById(userId, args.meal_id);
+  }
+  const meals = await mealService.searchMeals(userId, args.meal_name);
+  const name = (args.meal_name as string).toLowerCase();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const match = meals.find((m: any) => String(m.name).toLowerCase() === name);
+  if (!match) {
+    throw new Error(`Meal "${args.meal_name}" not found.`);
+  }
+  return await mealService.getMealById(userId, match.id);
+}
+
 // Per-day nutrition totals with the user's energy-unit conversion applied —
 // MCP's getNutritionalSummary row shape (fiber/sugar aliases included).
 // Shared with the report tools.
@@ -784,7 +811,10 @@ Actions:
 - save_as_meal_template(entry_date, meal_type, meal_name, description?)
 - log_water(amount_ml, entry_date)
 - get_nutritional_summary(start_date, end_date) — returns macro breakdown for a range of dates
-- get_water_history(start_date?, end_date?)`,
+- get_water_history(start_date?, end_date?)
+- get_meal_details(meal_id?|meal_name?) — full ingredient breakdown for a meal template, including cooked_weight_g/cooked_weight_source and, per ingredient, resolved_weight_g/weight_source/weight_confidence if auto_sum_meal_weight has been run.
+- set_meal_cooked_weight(meal_id?|meal_name?, cooked_weight_g) — manually sets a meal template's total cooked/plate weight in grams (marks cooked_weight_source='manual'). This is what a diary "log by plate weight" unit picker requires being set on the template first.
+- auto_sum_meal_weight(meal_id?|meal_name?) — computes cooked_weight_g as the sum of every ingredient's weight in grams: deterministic conversion for weight units, AI density estimate for volume units (cup, tbsp), AI "typical weight of one unit" estimate for count units (slice, piece, serving). Persists per-ingredient provenance and writes cooked_weight_g (cooked_weight_source='auto_sum') only if at least one ingredient resolved; reports any ingredients it couldn't resolve (e.g. no AI service configured, or a linked meal with no cooked weight of its own).`,
       inputSchema: manageFoodInput,
       execute: async (rawArgs) => {
         const normalized = normalizeActionArgs(
@@ -2057,6 +2087,76 @@ Actions:
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 (h: any) => `**${h.entry_date}**: ${h.amount} ${h.unit}`
               );
+            }
+
+            case 'get_meal_details': {
+              if (!args.meal_id && !args.meal_name) {
+                return ERRORS.VALIDATION(
+                  'Either meal_id or meal_name must be provided'
+                );
+              }
+              const meal = await resolveMealIdentity(userId, args);
+              let text = `**${meal.name}**\n`;
+              text += meal.cooked_weight_g
+                ? `Cooked weight: ${meal.cooked_weight_g}g (${meal.cooked_weight_source || 'unknown'})\n`
+                : 'Cooked weight: not set\n';
+              text += 'Ingredients:\n';
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              for (const f of meal.foods as any[]) {
+                const name = f.child_meal_name || f.food_name;
+                text += `- ${name}: ${f.quantity} ${f.unit}`;
+                if (f.resolved_weight_g) {
+                  text +=
+                    f.weight_source === 'ai_estimated'
+                      ? ` (${f.resolved_weight_g}g, AI estimated, confidence: ${f.weight_confidence})`
+                      : ` (${f.resolved_weight_g}g)`;
+                }
+                text += '\n';
+              }
+              return formatConfirmation(text.trim());
+            }
+
+            case 'set_meal_cooked_weight': {
+              if (!args.meal_id && !args.meal_name) {
+                return ERRORS.VALIDATION(
+                  'Either meal_id or meal_name must be provided'
+                );
+              }
+              const meal = await resolveMealIdentity(userId, args);
+              await mealService.updateMeal(userId, meal.id, {
+                cooked_weight_g: args.cooked_weight_g,
+                cooked_weight_source: 'manual',
+              });
+              return formatConfirmation(
+                `Cooked weight for "${meal.name}" set to ${args.cooked_weight_g}g.`
+              );
+            }
+
+            case 'auto_sum_meal_weight': {
+              if (!args.meal_id && !args.meal_name) {
+                return ERRORS.VALIDATION(
+                  'Either meal_id or meal_name must be provided'
+                );
+              }
+              const meal = await resolveMealIdentity(userId, args);
+              const result = await mealService.resolveMealIngredientWeights(
+                userId,
+                meal.id
+              );
+              let text = `**${result.mealName}** auto-sum result:\n`;
+              for (const r of result.resolved) {
+                text +=
+                  r.source === 'ai_estimated'
+                    ? `- ${r.foodName}: ${r.weightG.toFixed(1)}g (AI estimated, confidence: ${r.confidence})\n`
+                    : `- ${r.foodName}: ${r.weightG.toFixed(1)}g (manual)\n`;
+              }
+              for (const u of result.unresolved) {
+                text += `- ${u.foodName}: could not resolve — ${u.reason}\n`;
+              }
+              text += result.cookedWeightUpdated
+                ? `Total: ${result.totalGrams.toFixed(1)}g — cooked_weight_g updated.`
+                : 'Total: 0g — no ingredients could be resolved, cooked_weight_g was NOT changed.';
+              return formatConfirmation(text);
             }
 
             default:

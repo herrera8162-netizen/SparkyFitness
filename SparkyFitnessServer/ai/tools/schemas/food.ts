@@ -275,6 +275,46 @@ const searchMealSchema = z
   })
   .strict();
 
+// meal_id/meal_name identify the target meal template for the three
+// cooked-weight actions below (get_meal_details, set_meal_cooked_weight,
+// auto_sum_meal_weight); both optional, at least one required at runtime.
+const mealIdentitySchema = {
+  meal_id: uuidSchema.optional().describe('UUID of the meal template'),
+  meal_name: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Name of the meal template (alternative to ID)'),
+};
+
+const getMealDetailsSchema = z
+  .object({
+    action: z.literal('get_meal_details'),
+    ...mealIdentitySchema,
+  })
+  .strict();
+
+const setMealCookedWeightSchema = z
+  .object({
+    action: z.literal('set_meal_cooked_weight'),
+    ...mealIdentitySchema,
+    cooked_weight_g: z
+      .number()
+      .positive()
+      .describe(
+        'Total mass in grams of the full recipe as finished/cooked (e.g. the whole pot weighed on a scale)'
+      ),
+  })
+  .strict();
+
+const autoSumMealWeightSchema = z
+  .object({
+    action: z.literal('auto_sum_meal_weight'),
+    ...mealIdentitySchema,
+  })
+  .strict();
+
 const logMealSchema = z
   .object({
     action: z.literal('log_meal'),
@@ -647,6 +687,9 @@ export const manageFoodSchema = z.discriminatedUnion('action', [
   logWaterSchema,
   getNutritionalSummarySchema,
   getWaterHistorySchema,
+  getMealDetailsSchema,
+  setMealCookedWeightSchema,
+  autoSumMealWeightSchema,
 ]);
 
 export type ManageFoodInput = z.infer<typeof manageFoodSchema>;
@@ -677,6 +720,9 @@ export const manageFoodInput = z.object({
       'log_water',
       'get_nutritional_summary',
       'get_water_history',
+      'get_meal_details',
+      'set_meal_cooked_weight',
+      'auto_sum_meal_weight',
     ])
     .optional()
     .describe(
@@ -767,6 +813,13 @@ export const manageFoodInput = z.object({
     .max(200)
     .optional()
     .describe('Meal template name'),
+  cooked_weight_g: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      'For set_meal_cooked_weight: total mass in grams of the full recipe as finished/cooked'
+    ),
   // search
   search_type: searchTypeEnum
     .optional()

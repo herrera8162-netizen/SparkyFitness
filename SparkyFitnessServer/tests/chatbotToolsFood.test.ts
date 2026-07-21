@@ -43,6 +43,8 @@ vi.mock('../services/mealService', () => ({
     searchMeals: vi.fn(),
     getMealById: vi.fn(),
     createMealFromDiaryEntries: vi.fn(),
+    updateMeal: vi.fn(),
+    resolveMealIngredientWeights: vi.fn(),
   },
 }));
 vi.mock('../services/preferenceService', () => ({
@@ -1549,6 +1551,199 @@ describe('search_meal', () => {
 
     expect(result).toBe(
       `# Meal Search: "bowl"\n\n**Big Bowl**\n  Foods: 2 items (Chicken, [meal] Egg Fried Rice)\n  ID: ${MEAL_ID}`
+    );
+  });
+});
+
+describe('get_meal_details', () => {
+  it('reports cooked weight and per-ingredient resolution', async () => {
+    vi.mocked(mealService.getMealById).mockResolvedValue({
+      id: MEAL_ID,
+      name: 'Chicken Broccoli Alfredo Bake',
+      cooked_weight_g: 1200,
+      cooked_weight_source: 'auto_sum',
+      foods: [
+        {
+          food_name: 'Chicken breast',
+          quantity: 300,
+          unit: 'g',
+          resolved_weight_g: 300,
+          weight_source: 'deterministic',
+        },
+        {
+          food_name: 'Broccoli Florets',
+          quantity: 2,
+          unit: 'cup',
+          resolved_weight_g: 182,
+          weight_source: 'ai_estimated',
+          weight_confidence: 'medium',
+        },
+      ],
+    });
+
+    const result = await tools.sparky_manage_food.execute!(
+      { action: 'get_meal_details', meal_id: MEAL_ID },
+      opts
+    );
+
+    expect(result).toBe(
+      '✅ **Chicken Broccoli Alfredo Bake**\n' +
+        'Cooked weight: 1200g (auto_sum)\n' +
+        'Ingredients:\n' +
+        '- Chicken breast: 300 g (300g)\n' +
+        '- Broccoli Florets: 2 cup (182g, AI estimated, confidence: medium)'
+    );
+    expect(mealService.getMealById).toHaveBeenCalledWith('user-1', MEAL_ID);
+  });
+
+  it('reports "not set" when cooked weight is absent', async () => {
+    vi.mocked(mealService.searchMeals).mockResolvedValue([
+      { id: MEAL_ID, name: 'Yellow Rice', foods: [] },
+    ]);
+    vi.mocked(mealService.getMealById).mockResolvedValue({
+      id: MEAL_ID,
+      name: 'Yellow Rice',
+      cooked_weight_g: null,
+      foods: [{ food_name: 'Rice', quantity: 200, unit: 'g' }],
+    });
+
+    const result = await tools.sparky_manage_food.execute!(
+      { action: 'get_meal_details', meal_name: 'Yellow Rice' },
+      opts
+    );
+
+    expect(result).toBe(
+      '✅ **Yellow Rice**\n' +
+        'Cooked weight: not set\n' +
+        'Ingredients:\n' +
+        '- Rice: 200 g'
+    );
+  });
+
+  it('requires meal_id or meal_name', async () => {
+    const result = await tools.sparky_manage_food.execute!(
+      { action: 'get_meal_details' },
+      opts
+    );
+    expect(result).toBe(
+      'Error [VALIDATION]: Either meal_id or meal_name must be provided'
+    );
+  });
+});
+
+describe('set_meal_cooked_weight', () => {
+  it('sets the cooked weight and marks it manual', async () => {
+    vi.mocked(mealService.getMealById).mockResolvedValue({
+      id: MEAL_ID,
+      name: 'Picadillo',
+      foods: [],
+    });
+    vi.mocked(mealService.updateMeal).mockResolvedValue({});
+
+    const result = await tools.sparky_manage_food.execute!(
+      {
+        action: 'set_meal_cooked_weight',
+        meal_id: MEAL_ID,
+        cooked_weight_g: 950,
+      },
+      opts
+    );
+
+    expect(result).toBe('✅ Cooked weight for "Picadillo" set to 950g.');
+    expect(mealService.updateMeal).toHaveBeenCalledWith('user-1', MEAL_ID, {
+      cooked_weight_g: 950,
+      cooked_weight_source: 'manual',
+    });
+  });
+});
+
+describe('auto_sum_meal_weight', () => {
+  it('reports resolved and unresolved ingredients with the total', async () => {
+    vi.mocked(mealService.getMealById).mockResolvedValue({
+      id: MEAL_ID,
+      name: 'Chicken Broccoli Alfredo Bake',
+      foods: [],
+    });
+    vi.mocked(mealService.resolveMealIngredientWeights).mockResolvedValue({
+      mealName: 'Chicken Broccoli Alfredo Bake',
+      resolved: [
+        {
+          mealFoodId: 'mf-1',
+          foodName: 'Chicken breast',
+          quantity: 300,
+          unit: 'g',
+          weightG: 300,
+          source: 'deterministic',
+        },
+        {
+          mealFoodId: 'mf-2',
+          foodName: 'Broccoli Florets',
+          quantity: 2,
+          unit: 'cup',
+          weightG: 182,
+          source: 'ai_estimated',
+          confidence: 'medium',
+        },
+      ],
+      unresolved: [
+        {
+          mealFoodId: 'mf-3',
+          foodName: 'Egg Fried Rice',
+          reason:
+            'Linked meal has no cooked weight set — set its Cooked Weight (g) first.',
+        },
+      ],
+      totalGrams: 482,
+      cookedWeightUpdated: true,
+    });
+
+    const result = await tools.sparky_manage_food.execute!(
+      { action: 'auto_sum_meal_weight', meal_id: MEAL_ID },
+      opts
+    );
+
+    expect(result).toBe(
+      '✅ **Chicken Broccoli Alfredo Bake** auto-sum result:\n' +
+        '- Chicken breast: 300.0g (manual)\n' +
+        '- Broccoli Florets: 182.0g (AI estimated, confidence: medium)\n' +
+        '- Egg Fried Rice: could not resolve — Linked meal has no cooked weight set — set its Cooked Weight (g) first.\n' +
+        'Total: 482.0g — cooked_weight_g updated.'
+    );
+    expect(mealService.resolveMealIngredientWeights).toHaveBeenCalledWith(
+      'user-1',
+      MEAL_ID
+    );
+  });
+
+  it('reports that cooked_weight_g was not changed when nothing resolved', async () => {
+    vi.mocked(mealService.getMealById).mockResolvedValue({
+      id: MEAL_ID,
+      name: 'Egg Fried Rice',
+      foods: [],
+    });
+    vi.mocked(mealService.resolveMealIngredientWeights).mockResolvedValue({
+      mealName: 'Egg Fried Rice',
+      resolved: [],
+      unresolved: [
+        {
+          mealFoodId: 'mf-1',
+          foodName: 'Rice',
+          reason: 'AI weight estimation failed.',
+        },
+      ],
+      totalGrams: 0,
+      cookedWeightUpdated: false,
+    });
+
+    const result = await tools.sparky_manage_food.execute!(
+      { action: 'auto_sum_meal_weight', meal_id: MEAL_ID },
+      opts
+    );
+
+    expect(result).toBe(
+      '✅ **Egg Fried Rice** auto-sum result:\n' +
+        '- Rice: could not resolve — AI weight estimation failed.\n' +
+        'Total: 0g — no ingredients could be resolved, cooked_weight_g was NOT changed.'
     );
   });
 });

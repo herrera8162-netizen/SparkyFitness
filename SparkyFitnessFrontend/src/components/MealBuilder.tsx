@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
-import { Plus, X, Edit, Link2, Clock } from 'lucide-react';
+import { Plus, X, Edit, Link2, Clock, Sparkles } from 'lucide-react';
 import { useActiveUser } from '@/contexts/ActiveUserContext';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import { toast } from '@/hooks/use-toast';
@@ -809,6 +809,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
         serving_unit: servingUnit,
         total_servings: persistedTotalServings,
         cooked_weight_g: persistedCookedWeightG,
+        cooked_weight_source: persistedCookedWeightG ? 'manual' : null,
         foods: mealFoods.map((mf) => ({
           item_type: mf.item_type || 'food',
           food_id: mf.food_id,
@@ -1067,6 +1068,26 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                         >
                           <Link2 className="h-3 w-3" />
                           {t('mealBuilder.linkedMealBadge', 'Linked meal')}
+                        </Badge>
+                      )}
+                      {mf.weight_source === 'ai_estimated' && (
+                        <Badge
+                          variant="outline"
+                          className="flex items-center gap-1 text-amber-600 border-amber-400 dark:text-amber-400 dark:border-amber-600"
+                          title={t(
+                            'mealBuilder.aiEstimatedWeightTooltip',
+                            '{{weight}}g estimated by AI (confidence: {{confidence}}), not manually weighed',
+                            {
+                              weight: mf.resolved_weight_g,
+                              confidence: mf.weight_confidence,
+                            }
+                          )}
+                        >
+                          <Sparkles className="h-3 w-3" />
+                          {t(
+                            'mealBuilder.aiEstimatedWeightBadge',
+                            'AI-estimated weight'
+                          )}
                         </Badge>
                       )}
                     </div>

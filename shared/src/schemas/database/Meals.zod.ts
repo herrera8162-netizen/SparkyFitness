@@ -9,6 +9,11 @@ export const mealsIdSchema = z.string().and(
 
 const userIdSchema = z.any();
 
+// Provenance of cooked_weight_g, added manually for the meal-weight
+// auto-sum migration (20260721173401_add_meal_weight_provenance). Re-add if
+// ts-to-zod is rerun.
+export const mealsCookedWeightSourceSchema = z.enum(["manual", "auto_sum"]);
+
 export const mealsSchema = z.object({
   id: mealsIdSchema,
   user_id: userIdSchema,
@@ -22,6 +27,7 @@ export const mealsSchema = z.object({
   serving_unit: z.string(),
   total_servings: z.number(),
   cooked_weight_g: z.number().positive().nullable(),
+  cooked_weight_source: mealsCookedWeightSourceSchema.nullable(),
 });
 
 export const mealsInitializerSchema = z.object({
@@ -37,6 +43,7 @@ export const mealsInitializerSchema = z.object({
   serving_unit: z.string().optional(),
   total_servings: z.number().optional(),
   cooked_weight_g: z.number().positive().optional().nullable(),
+  cooked_weight_source: mealsCookedWeightSourceSchema.optional().nullable(),
 });
 
 export const mealsMutatorSchema = z.object({
@@ -52,6 +59,7 @@ export const mealsMutatorSchema = z.object({
   serving_unit: z.string().optional(),
   total_servings: z.number().optional(),
   cooked_weight_g: z.number().positive().optional().nullable(),
+  cooked_weight_source: mealsCookedWeightSourceSchema.optional().nullable(),
 });
 
 export type Meals = z.infer<typeof mealsSchema>;

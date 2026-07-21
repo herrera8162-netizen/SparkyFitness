@@ -1944,6 +1944,8 @@
     "cookedWeightPlaceholder": "Optional",
     "cookedWeightHelp": "Weigh the finished dish, minus the pan. Lets you log a partial plate by weight without giving up serving-based portions.",
     "invalidCookedWeight": "Cooked weight must be greater than zero.",
+    "aiEstimatedWeightBadge": "AI-estimated weight",
+    "aiEstimatedWeightTooltip": "{{weight}}g estimated by AI (confidence: {{confidence}}), not manually weighed",
     "perServingTab": "Per serving",
     "totalTab": "Total",
     "addFoodToMealTitle": "Add Food to Meal",
