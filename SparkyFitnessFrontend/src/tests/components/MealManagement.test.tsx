@@ -32,7 +32,13 @@ jest.mock('react-i18next', () => ({
 
 // Mock contexts
 jest.mock('@/contexts/ActiveUserContext', () => ({
-  useActiveUser: () => ({ activeUserId: 'test-user-id' }),
+  useActiveUser: () => ({
+    activeUserId: 'test-user-id',
+    hasWritePermission: () => true,
+  }),
+}));
+jest.mock('@/hooks/useAuth', () => ({
+  useAuth: () => ({ user: { id: 'test-user-id' } }),
 }));
 jest.mock('@/contexts/PreferencesContext', () => ({
   usePreferences: () => ({
