@@ -192,12 +192,18 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
     unit: string;
     total_servings: number;
     legacy_serving_unit_math: boolean;
+    // cooked_weight_g (MEAL_WEIGHT_PLAN.md Phase 3): mass in grams of the
+    // template's whole finished dish, when set. Lets the food-diary unit
+    // selector below offer 'g' (plate weight) as an alternate to the
+    // template's native serving_unit.
+    cooked_weight_g: number | null;
   }>({
     id: null,
     size: 1,
     unit: 'serving',
     total_servings: 1,
     legacy_serving_unit_math: false,
+    cooked_weight_g: null,
   });
   const queryClient = useQueryClient();
 
@@ -289,6 +295,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                     total_servings: templateMeal.total_servings || 1,
                     legacy_serving_unit_math:
                       loggedMeal.legacy_serving_unit_math === true,
+                    cooked_weight_g: templateMeal.cooked_weight_g ?? null,
                   });
                 } else {
                   // If template not found, still perserve ID for scaling
@@ -303,6 +310,9 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                     total_servings: 1,
                     legacy_serving_unit_math:
                       loggedMeal.legacy_serving_unit_math === true,
+                    // Template unavailable, so its cooked_weight_g can't be
+                    // known here; plate-weight switching stays unavailable.
+                    cooked_weight_g: null,
                   });
                 }
               } catch (err) {
@@ -319,6 +329,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                   total_servings: 1,
                   legacy_serving_unit_math:
                     loggedMeal.legacy_serving_unit_math === true,
+                  cooked_weight_g: null,
                 });
               }
             } else {
@@ -329,6 +340,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                 unit: 'serving',
                 total_servings: 1,
                 legacy_serving_unit_math: false,
+                cooked_weight_g: null,
               });
             }
           }
@@ -361,6 +373,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
               unit: meal.serving_unit || 'serving',
               total_servings: meal.total_servings || 1,
               legacy_serving_unit_math: false,
+              cooked_weight_g: meal.cooked_weight_g ?? null,
             });
           }
         } catch (err) {
@@ -385,6 +398,9 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
           unit: initialUnit,
           total_servings: 1,
           legacy_serving_unit_math: false,
+          // No meal record here (ad-hoc initialFoods), so no cooked_weight_g
+          // to offer plate-weight logging against.
+          cooked_weight_g: null,
         });
         // Also ensure state logic respects props if re-mounted or updated, but initial state handles first render.
         // If we want to support prop updates:
@@ -662,6 +678,26 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
     });
   };
 
+  // cooked_weight_g (MEAL_WEIGHT_PLAN.md Phase 3) is an alternate denominator:
+  // when the template has it set, a food-diary log can ALSO be entered as
+  // plate weight in grams, independent of the template's serving_unit. Only
+  // offer the choice when the two units actually differ — mirrors
+  // MealUnitSelector's canLogByPlateWeight.
+  const canLogByPlateWeight =
+    !!templateInfo.cooked_weight_g && templateInfo.unit !== 'g';
+
+  const handleDiaryUnitChange = (newUnit: string) => {
+    setServingUnit(newUnit);
+    // Reset the consumed quantity to a sensible default for the newly
+    // selected unit so a stale serving-count doesn't get interpreted as a
+    // gram amount (or vice versa).
+    if (newUnit === 'g' && templateInfo.cooked_weight_g) {
+      setServingSize(templateInfo.cooked_weight_g.toString());
+    } else {
+      setServingSize((templateInfo.size || 1).toString());
+    }
+  };
+
   const handleSaveMeal = async () => {
     if (mealFoods.length === 0) {
       toast({
@@ -877,7 +913,19 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
     let multiplier = 1;
     if (source === 'food-diary' && templateInfo.id) {
       const qty = parseFloat(servingSize) || 1;
-      if (templateInfo.legacy_serving_unit_math && servingUnit === 'serving') {
+      // cooked_weight_g is an alternate denominator: a 'g' selection here
+      // means plate weight against the whole recipe's cooked mass, not the
+      // uniform serving_size × total_servings model. Mirrors the server-side
+      // multiplier in foodEntryService.ts.
+      if (servingUnit === 'g' && templateInfo.cooked_weight_g) {
+        multiplier =
+          templateInfo.cooked_weight_g > 0
+            ? qty / templateInfo.cooked_weight_g
+            : 1;
+      } else if (
+        templateInfo.legacy_serving_unit_math &&
+        servingUnit === 'serving'
+      ) {
         multiplier = qty;
       } else {
         const denominator =
@@ -1135,25 +1183,32 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
               <Label htmlFor="servingUnit">
                 {t('mealBuilder.servingUnit', 'Unit')}
               </Label>
-              <Select
-                value={servingUnit}
-                onValueChange={setServingUnit}
-                disabled
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Unit" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="serving">serving</SelectItem>
-                  <SelectItem value="g">grams (g)</SelectItem>
-                  <SelectItem value="ml">milliliters (ml)</SelectItem>
-                  <SelectItem value="oz">ounces (oz)</SelectItem>
-                  <SelectItem value="cup">cup</SelectItem>
-                  <SelectItem value="tbsp">tablespoon (tbsp)</SelectItem>
-                  <SelectItem value="tsp">teaspoon (tsp)</SelectItem>
-                  <SelectItem value="piece">piece</SelectItem>
-                </SelectContent>
-              </Select>
+              {canLogByPlateWeight ? (
+                <Select
+                  value={servingUnit}
+                  onValueChange={handleDiaryUnitChange}
+                >
+                  <SelectTrigger id="servingUnit">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={templateInfo.unit}>
+                      {templateInfo.unit}
+                    </SelectItem>
+                    <SelectItem value="g">
+                      {t('mealUnitSelector.plateWeight', 'Plate weight (g)')}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  id="servingUnit"
+                  type="text"
+                  value={servingUnit}
+                  disabled
+                  className="bg-muted"
+                />
+              )}
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">

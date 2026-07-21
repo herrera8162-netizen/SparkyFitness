@@ -68,10 +68,14 @@ jest.mock('@/api/Foods/meals', () => ({
   getMealById: (...args: unknown[]) => mockGetMealById(...args),
 }));
 
+const mockCreateFoodEntryMeal = jest.fn();
+const mockUpdateFoodEntryMeal = jest.fn();
+const mockGetFoodEntryMealWithComponents = jest.fn();
 jest.mock('@/api/Diary/foodEntryService', () => ({
-  createFoodEntryMeal: jest.fn(),
-  updateFoodEntryMeal: jest.fn(),
-  getFoodEntryMealWithComponents: jest.fn(),
+  createFoodEntryMeal: (...args: unknown[]) => mockCreateFoodEntryMeal(...args),
+  updateFoodEntryMeal: (...args: unknown[]) => mockUpdateFoodEntryMeal(...args),
+  getFoodEntryMealWithComponents: (...args: unknown[]) =>
+    mockGetFoodEntryMealWithComponents(...args),
 }));
 
 // Mock complex sub-components as simple stubs
@@ -79,42 +83,6 @@ jest.mock('@/components/FoodUnitSelector', () => {
   return function MockFoodUnitSelector() {
     return <div data-testid="food-unit-selector">FoodUnitSelector</div>;
   };
-  it('rounds derived total_servings for non-serving meals before saving', async () => {
-    mockCreateMeal.mockResolvedValue({ id: 'new-meal', name: 'My Meal' });
-
-    renderWithClient(
-      <MealBuilder
-        initialFoods={sampleFoods}
-        initialServingUnit="ml"
-        initialServingSize={333}
-      />
-    );
-
-    await waitFor(() => {
-      expect(screen.getByLabelText('Meal Name')).toHaveValue('Logged Meal');
-    });
-    fireEvent.change(screen.getByLabelText('Meal Name'), {
-      target: { value: 'My Meal' },
-    });
-
-    fireEvent.change(screen.getByLabelText('Total Amount (ml)'), {
-      target: { value: '1000' },
-    });
-    fireEvent.change(screen.getByLabelText('Default Serving Size (ml)'), {
-      target: { value: '333' },
-    });
-    fireEvent.click(screen.getByText('Save Meal'));
-
-    await waitFor(() => {
-      expect(mockCreateMeal).toHaveBeenCalledWith(
-        expect.objectContaining({
-          serving_unit: 'ml',
-          serving_size: 333,
-          total_servings: 3.003003,
-        })
-      );
-    });
-  });
 });
 
 jest.mock('@/components/FoodSearch/FoodSearchDialog', () => {
@@ -345,6 +313,48 @@ describe('MealBuilder', () => {
     expect(mockCreateMeal).not.toHaveBeenCalled();
   });
 
+  // Regression: Fix meal serving model regressions (63e11655). Plain
+  // division (1000 / 333) leaks IEEE-754 noise (3.0030030030030033);
+  // total_servings must be rounded via MEAL_SERVING_PRECISION before saving.
+  // Mirrors the equivalent mobile (MealAddScreen.test.tsx) and server
+  // (mealService.test.ts) regression tests for the same fix.
+  it('rounds derived total_servings for non-serving meals before saving', async () => {
+    mockCreateMeal.mockResolvedValue({ id: 'new-meal', name: 'My Meal' });
+
+    renderWithClient(
+      <MealBuilder
+        initialFoods={sampleFoods}
+        initialServingUnit="ml"
+        initialServingSize={333}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Meal Name')).toHaveValue('Logged Meal');
+    });
+    fireEvent.change(screen.getByLabelText('Meal Name'), {
+      target: { value: 'My Meal' },
+    });
+
+    fireEvent.change(screen.getByLabelText('Total Amount (ml)'), {
+      target: { value: '1000' },
+    });
+    fireEvent.change(screen.getByLabelText('Default Serving Size (ml)'), {
+      target: { value: '333' },
+    });
+    fireEvent.click(screen.getByText('Save Meal'));
+
+    await waitFor(() => {
+      expect(mockCreateMeal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          serving_unit: 'ml',
+          serving_size: 333,
+          total_servings: 3.003003,
+        })
+      );
+    });
+  });
+
   // Regression: P1 Codex finding.
   // After editing in a quantity-based unit and toggling back to 'serving',
   // total_servings must be DERIVED from totalAmount / servingSize, not left as
@@ -473,5 +483,121 @@ describe('MealBuilder', () => {
       variant: 'destructive',
     });
     expect(mockCreateMeal).not.toHaveBeenCalled();
+  });
+
+  // MEAL_WEIGHT_PLAN.md Phase 3 gap fix: cooked_weight_g must be selectable
+  // from the actual food-diary logging flow (source='food-diary'), not just
+  // from MealUnitSelector's "add meal as sub-ingredient"/meal-plan paths.
+  describe('food-diary plate-weight logging (cooked_weight_g)', () => {
+    const cookedWeightMeal = {
+      id: 'meal-cw',
+      name: 'Chili',
+      description: '',
+      is_public: false,
+      serving_size: 1,
+      serving_unit: 'serving',
+      total_servings: 4,
+      cooked_weight_g: 800,
+      foods: sampleFoods,
+    };
+
+    it('enables the unit selector and offers a Plate weight (g) option when the template has cooked_weight_g', async () => {
+      mockGetMealById.mockResolvedValue(cookedWeightMeal);
+
+      renderWithClient(
+        <MealBuilder
+          source="food-diary"
+          mealId="meal-cw"
+          foodEntryDate="2026-07-21"
+          foodEntryMealType="lunch"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Chili')).toBeInTheDocument();
+      });
+
+      const unitTrigger = screen.getByLabelText('Unit');
+      expect(unitTrigger).not.toBeDisabled();
+      fireEvent.click(unitTrigger);
+
+      expect(
+        await screen.findByRole('option', { name: 'Plate weight (g)' })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole('option', { name: 'serving' })
+      ).toBeInTheDocument();
+    });
+
+    it('does not offer a plate-weight option when the template has no cooked_weight_g', async () => {
+      mockGetMealById.mockResolvedValue({
+        ...cookedWeightMeal,
+        cooked_weight_g: null,
+      });
+
+      renderWithClient(
+        <MealBuilder
+          source="food-diary"
+          mealId="meal-cw"
+          foodEntryDate="2026-07-21"
+          foodEntryMealType="lunch"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Chili')).toBeInTheDocument();
+      });
+
+      const unitInput = screen.getByLabelText('Unit');
+      expect(unitInput).toBeDisabled();
+      expect(unitInput).toHaveValue('serving');
+    });
+
+    it('logs a partial plate by weight, scaling nutrition by quantity/cooked_weight_g', async () => {
+      mockGetMealById.mockResolvedValue(cookedWeightMeal);
+      mockCreateFoodEntryMeal.mockResolvedValue({ id: 'entry1' });
+
+      renderWithClient(
+        <MealBuilder
+          source="food-diary"
+          mealId="meal-cw"
+          foodEntryDate="2026-07-21"
+          foodEntryMealType="lunch"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByDisplayValue('Chili')).toBeInTheDocument();
+      });
+
+      // Switch the unit to plate weight (g); this should default Quantity
+      // Consumed to the full cooked_weight_g (800).
+      fireEvent.click(screen.getByLabelText('Unit'));
+      fireEvent.click(
+        await screen.findByRole('option', { name: 'Plate weight (g)' })
+      );
+      await waitFor(() => {
+        expect(screen.getByLabelText('Quantity Consumed')).toHaveValue(800);
+      });
+
+      // Log a 250g plate instead of the whole pot.
+      fireEvent.change(screen.getByLabelText('Quantity Consumed'), {
+        target: { value: '250' },
+      });
+      fireEvent.click(screen.getByText('Add to Meal'));
+
+      await waitFor(() => {
+        expect(mockCreateFoodEntryMeal).toHaveBeenCalledWith(
+          expect.objectContaining({
+            meal_template_id: 'meal-cw',
+            quantity: 250,
+            unit: 'g',
+          }),
+          // TanStack Query v5 passes a mutationFnContext as a second arg
+          // whenever mutationFn is referenced directly (not wrapped).
+          expect.anything()
+        );
+      });
+    });
   });
 });
