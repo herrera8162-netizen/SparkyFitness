@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict GBAs5ADkViNwb2NMDK98SvHWBPUecFEtJHCXthMs2Ev8eBVtNeqZfRtmcw8yLrN
+\restrict fWPdqIoZMxLmUqVG2xNPXdCfk7dqWceCRCK1Q8WDndxUUbnkAVSu5sozdo1QvZo
 
 -- Dumped from database version 17.10 (Debian 17.10-1.pgdg13+1)
 -- Dumped by pg_dump version 17.10 (Debian 17.10-1.pgdg13+1)
@@ -2129,8 +2129,35 @@ CREATE TABLE public.meal_foods (
     custom_nutrients jsonb,
     child_meal_id uuid,
     item_type character varying(50) DEFAULT 'food'::character varying NOT NULL,
-    CONSTRAINT chk_meal_foods_item_type CHECK (((((item_type)::text = 'food'::text) AND (food_id IS NOT NULL) AND (child_meal_id IS NULL)) OR (((item_type)::text = 'meal'::text) AND (food_id IS NULL))))
+    resolved_weight_g numeric,
+    weight_source text,
+    weight_confidence text,
+    CONSTRAINT chk_meal_foods_item_type CHECK (((((item_type)::text = 'food'::text) AND (food_id IS NOT NULL) AND (child_meal_id IS NULL)) OR (((item_type)::text = 'meal'::text) AND (food_id IS NULL)))),
+    CONSTRAINT meal_foods_resolved_weight_g_check CHECK (((resolved_weight_g IS NULL) OR (resolved_weight_g > (0)::numeric))),
+    CONSTRAINT meal_foods_weight_confidence_check CHECK (((weight_confidence IS NULL) OR (weight_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text])))),
+    CONSTRAINT meal_foods_weight_source_check CHECK (((weight_source IS NULL) OR (weight_source = ANY (ARRAY['deterministic'::text, 'ai_estimated'::text]))))
 );
+
+
+--
+-- Name: COLUMN meal_foods.resolved_weight_g; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.meal_foods.resolved_weight_g IS 'Gram weight last resolved for this ingredient by the auto-sum meal-weight action. Null until auto-sum has run.';
+
+
+--
+-- Name: COLUMN meal_foods.weight_source; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.meal_foods.weight_source IS 'deterministic: unit was already weight/volume, converted by fixed math. ai_estimated: AI supplied the gram estimate (volume density, or count-unit weight guess).';
+
+
+--
+-- Name: COLUMN meal_foods.weight_confidence; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.meal_foods.weight_confidence IS 'AI-reported confidence (high/medium/low) for resolved_weight_g. Only set when weight_source = ai_estimated.';
 
 
 --
@@ -2232,7 +2259,9 @@ CREATE TABLE public.meals (
     serving_unit text DEFAULT 'serving'::text NOT NULL,
     total_servings numeric DEFAULT 1.0 NOT NULL,
     cooked_weight_g numeric,
-    CONSTRAINT meals_cooked_weight_g_check CHECK (((cooked_weight_g IS NULL) OR (cooked_weight_g > (0)::numeric)))
+    cooked_weight_source text,
+    CONSTRAINT meals_cooked_weight_g_check CHECK (((cooked_weight_g IS NULL) OR (cooked_weight_g > (0)::numeric))),
+    CONSTRAINT meals_cooked_weight_source_check CHECK (((cooked_weight_source IS NULL) OR (cooked_weight_source = ANY (ARRAY['manual'::text, 'auto_sum'::text]))))
 );
 
 
@@ -2262,6 +2291,13 @@ COMMENT ON COLUMN public.meals.total_servings IS 'How many servings the recipe y
 --
 
 COMMENT ON COLUMN public.meals.cooked_weight_g IS 'Mass in grams of the full recipe as finished/cooked (e.g. the weighed weight of the whole pot). An alternate denominator alongside serving_size × total_servings: when set, food_entry_meals may log plate weight in grams via multiplier = plate_grams / cooked_weight_g, independent of serving_unit.';
+
+
+--
+-- Name: COLUMN meals.cooked_weight_source; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.meals.cooked_weight_source IS 'How cooked_weight_g was set: manual (user typed it) or auto_sum (computed from ingredient weights). Null if cooked_weight_g has never been set.';
 
 
 --
@@ -10211,5 +10247,5 @@ ALTER DEFAULT PRIVILEGES FOR ROLE sparky IN SCHEMA public GRANT SELECT,INSERT,DE
 -- PostgreSQL database dump complete
 --
 
-\unrestrict GBAs5ADkViNwb2NMDK98SvHWBPUecFEtJHCXthMs2Ev8eBVtNeqZfRtmcw8yLrN
+\unrestrict fWPdqIoZMxLmUqVG2xNPXdCfk7dqWceCRCK1Q8WDndxUUbnkAVSu5sozdo1QvZo
 
