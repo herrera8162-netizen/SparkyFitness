@@ -140,6 +140,33 @@ export interface MealDeletionImpact {
   usedByCurrentUser: boolean;
 }
 
+// Result of POST /meals/:id/auto-sum-weight — mirrors the server's
+// MealWeightResolution (services/mealService.ts). Each ingredient is either
+// resolved to grams or reported back unresolved with a reason.
+export interface ResolvedIngredientWeight {
+  mealFoodId: string;
+  foodName: string;
+  quantity: number;
+  unit: string;
+  weightG: number;
+  source: 'deterministic' | 'ai_estimated';
+  confidence?: 'high' | 'medium' | 'low';
+}
+
+export interface UnresolvedIngredientWeight {
+  mealFoodId: string;
+  foodName: string;
+  reason: string;
+}
+
+export interface MealWeightResolution {
+  mealName: string;
+  resolved: ResolvedIngredientWeight[];
+  unresolved: UnresolvedIngredientWeight[];
+  totalGrams: number;
+  cookedWeightUpdated: boolean;
+}
+
 // New interface for FoodEntryMeal
 export interface FoodEntryMeal {
   id: string;

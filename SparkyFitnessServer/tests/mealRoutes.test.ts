@@ -216,6 +216,46 @@ describe('Meal Routes', () => {
       expect(res.body).toHaveProperty('error', 'Meal not found.');
     });
   });
+  describe('POST /meals/:id/auto-sum-weight', () => {
+    it('should return the weight resolution result', async () => {
+      const resolution = {
+        mealName: 'Chili',
+        resolved: [
+          {
+            mealFoodId: uuidv4(),
+            foodName: 'Beans',
+            quantity: 2,
+            unit: 'cup',
+            weightG: 360,
+            source: 'ai_estimated',
+            confidence: 'medium',
+          },
+        ],
+        unresolved: [],
+        totalGrams: 360,
+        cookedWeightUpdated: true,
+      };
+      // @ts-expect-error TS(2339): mock helper not on typed default export
+      mealService.resolveMealIngredientWeights.mockResolvedValue(resolution);
+      const mealId = uuidv4();
+      const res = await request(app).post(`/meals/${mealId}/auto-sum-weight`);
+      expect(res.statusCode).toEqual(200);
+      expect(res.body).toEqual(resolution);
+      expect(mealService.resolveMealIngredientWeights).toHaveBeenCalledWith(
+        'testUserId',
+        mealId
+      );
+    });
+    it('should return 404 when the meal is not found', async () => {
+      // @ts-expect-error TS(2339): mock helper not on typed default export
+      mealService.resolveMealIngredientWeights.mockRejectedValue(
+        new Error('Meal not found.')
+      );
+      const res = await request(app).post(`/meals/${uuidv4()}/auto-sum-weight`);
+      expect(res.statusCode).toEqual(404);
+      expect(res.body).toHaveProperty('error', 'Meal not found.');
+    });
+  });
   // --- Meal Plan Routes ---
   describe('POST /meals/plan', () => {
     it('should create a new meal plan entry', async () => {

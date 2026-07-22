@@ -663,6 +663,59 @@ router.delete('/:id', authenticate, async (req, res, next) => {
 });
 /**
  * @swagger
+ * /meals/{id}/auto-sum-weight:
+ *   post:
+ *     summary: Auto-sum a meal template's cooked weight from its ingredients
+ *     tags: [Nutrition & Meals]
+ *     description: >-
+ *       Resolves each ingredient to grams (deterministic conversion for weight
+ *       units, AI density estimate for volume units, AI "typical weight of one
+ *       unit" estimate for count units) and writes the sum to the meal's
+ *       cooked_weight_g with cooked_weight_source='auto_sum'. Persists
+ *       per-ingredient provenance (resolved_weight_g/weight_source/
+ *       weight_confidence) and only updates cooked_weight_g if at least one
+ *       ingredient resolved. Ingredients that could not be resolved are
+ *       reported back rather than dropped.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: The ID of the meal template to auto-sum.
+ *     responses:
+ *       200:
+ *         description: The weight resolution result (resolved, unresolved, totalGrams, cookedWeightUpdated).
+ *       403:
+ *         description: User does not have permission to modify this meal.
+ *       404:
+ *         description: Meal not found.
+ */
+router.post('/:id/auto-sum-weight', authenticate, async (req, res, next) => {
+  try {
+    const result = await mealService.resolveMealIngredientWeights(
+      req.userId,
+      req.params.id
+    );
+    res.status(200).json(result);
+  } catch (error) {
+    log('error', `Error auto-summing meal weight ${req.params.id}:`, error);
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    if (error.message === 'Meal not found.') {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(404).json({ error: error.message });
+    }
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    if (error.message.startsWith('Forbidden')) {
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      return res.status(403).json({ error: error.message });
+    }
+    next(error);
+  }
+});
+/**
+ * @swagger
  * /meals/{id}/deletion-impact:
  *   get:
  *     summary: Get the deletion impact for a meal

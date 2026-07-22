@@ -19,7 +19,12 @@ import { usePreferences } from '@/contexts/PreferencesContext';
 import { toast } from '@/hooks/use-toast';
 import { warn, error } from '@/utils/logging';
 import type { Food, FoodVariant, GlycemicIndex } from '@/types/food';
-import type { Meal, MealFood, MealPayload } from '@/types/meal';
+import type {
+  Meal,
+  MealFood,
+  MealPayload,
+  MealWeightResolution,
+} from '@/types/meal';
 import FoodUnitSelector from '@/components/FoodUnitSelector';
 import FoodSearchDialog from './FoodSearch/FoodSearchDialog';
 import MealUnitSelector from '@/pages/Foods/MealUnitSelector';
@@ -28,6 +33,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { toHourMinute, userHourMinute } from '@workspace/shared';
 import {
   mealViewOptions,
+  useAutoSumMealWeightMutation,
   useCreateMealMutation,
   useUpdateMealMutation,
 } from '@/hooks/Foods/useMeals';
@@ -143,6 +149,17 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
   // total_servings — lets a serving-based meal ALSO be logged by plate
   // weight. Empty string means "not set" (meal-management mode only).
   const [cookedWeightText, setCookedWeightText] = useState<string>('');
+  // Provenance of the current cookedWeightText value. 'auto_sum' when populated
+  // by the auto-sum action; flips to 'manual' as soon as the user hand-edits
+  // the field, so a later Save preserves the correct cooked_weight_source.
+  const [cookedWeightSource, setCookedWeightSource] = useState<
+    'manual' | 'auto_sum'
+  >('manual');
+  // Auto-sum in-flight flag and the last resolution result (per-ingredient
+  // breakdown shown under the field). Null until auto-sum has been run.
+  const [isAutoSumming, setIsAutoSumming] = useState(false);
+  const [autoSumResult, setAutoSumResult] =
+    useState<MealWeightResolution | null>(null);
   // Diary-mode meal slot (breakfast/lunch/dinner/snacks/custom). Editable so a
   // logged meal can be moved to a different slot; seeded from the prop.
   const [mealTypeSelection, setMealTypeSelection] = useState<string>(
@@ -209,6 +226,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
 
   const { mutateAsync: updateMeal } = useUpdateMealMutation();
   const { mutateAsync: createMeal } = useCreateMealMutation();
+  const { mutateAsync: autoSumMealWeight } = useAutoSumMealWeightMutation();
   const { mutateAsync: createFoodEntryMeal } = useCreateFoodEntryMealMutation();
   const { mutateAsync: updateFoodEntryMeal } = useUpdateFoodEntryMealMutation();
   const { data: availableMealTypes } = useMealTypes();
@@ -260,6 +278,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
               ).toString()
             );
             setCookedWeightText(meal.cooked_weight_g?.toString() || '');
+            setCookedWeightSource(meal.cooked_weight_source || 'manual');
             setMealFoods(meal.foods || []);
           }
         } catch (err) {
@@ -698,6 +717,59 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
     }
   };
 
+  // Auto-sum: ask the server to resolve every ingredient to grams and total
+  // them into cooked_weight_g. Only available for a saved meal template with
+  // ingredients (the server reads them from the DB), so this is gated on mealId
+  // in the UI. The endpoint persists cooked_weight_g (source='auto_sum') itself;
+  // we mirror the total into the field and remember the provenance so a later
+  // Save doesn't downgrade it to 'manual'.
+  const handleAutoSumWeight = async () => {
+    if (!mealId) return;
+    setIsAutoSumming(true);
+    try {
+      const result = await autoSumMealWeight({ mealId });
+      setAutoSumResult(result);
+      if (result.cookedWeightUpdated) {
+        setCookedWeightText(
+          Number(result.totalGrams.toPrecision(15)).toString()
+        );
+        setCookedWeightSource('auto_sum');
+        toast({
+          title: t('mealBuilder.autoSumDoneTitle', 'Cooked weight updated'),
+          description: t(
+            'mealBuilder.autoSumDoneDescription',
+            'Summed {{count}} ingredient(s) to {{grams}}g.',
+            {
+              count: result.resolved.length,
+              grams: result.totalGrams.toFixed(1),
+            }
+          ),
+        });
+      } else {
+        toast({
+          title: t('mealBuilder.autoSumEmptyTitle', 'Nothing to sum'),
+          description: t(
+            'mealBuilder.autoSumEmptyDescription',
+            'No ingredients could be resolved to grams. Cooked weight was left unchanged.'
+          ),
+          variant: 'destructive',
+        });
+      }
+    } catch (err) {
+      error(loggingLevel, 'Auto-sum meal weight failed:', err);
+      toast({
+        title: t('mealBuilder.errorTitle', 'Error'),
+        description: t(
+          'mealBuilder.autoSumFailed',
+          'Could not auto-sum the cooked weight. Please try again.'
+        ),
+        variant: 'destructive',
+      });
+    } finally {
+      setIsAutoSumming(false);
+    }
+  };
+
   const handleSaveMeal = async () => {
     if (mealFoods.length === 0) {
       toast({
@@ -809,7 +881,9 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
         serving_unit: servingUnit,
         total_servings: persistedTotalServings,
         cooked_weight_g: persistedCookedWeightG,
-        cooked_weight_source: persistedCookedWeightG ? 'manual' : null,
+        cooked_weight_source: persistedCookedWeightG
+          ? cookedWeightSource
+          : null,
         foods: mealFoods.map((mf) => ({
           item_type: mf.item_type || 'food',
           food_id: mf.food_id,
@@ -1398,27 +1472,101 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                 <Label htmlFor="cookedWeight">
                   {t('mealBuilder.cookedWeight', 'Cooked Weight (g)')}
                 </Label>
-                <Input
-                  id="cookedWeight"
-                  type="number"
-                  step="any"
-                  min="0"
-                  value={cookedWeightText}
-                  onChange={(e) => setCookedWeightText(e.target.value)}
-                  placeholder={t(
-                    'mealBuilder.cookedWeightPlaceholder',
-                    'Optional'
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="cookedWeight"
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={cookedWeightText}
+                    onChange={(e) => {
+                      setCookedWeightText(e.target.value);
+                      // A hand-edit makes the value manual again, even if it was
+                      // just populated by auto-sum.
+                      setCookedWeightSource('manual');
+                    }}
+                    placeholder={t(
+                      'mealBuilder.cookedWeightPlaceholder',
+                      'Optional'
+                    )}
+                  />
+                  {/* Auto-sum only works on a saved meal with ingredients — the
+                      server resolves them from the DB. */}
+                  {mealId && mealFoods.length > 0 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      disabled={isAutoSumming}
+                      onClick={handleAutoSumWeight}
+                    >
+                      <Sparkles className="h-4 w-4 mr-1" />
+                      {isAutoSumming
+                        ? t('mealBuilder.autoSumming', 'Summing…')
+                        : t('mealBuilder.autoSum', 'Auto-sum')}
+                    </Button>
                   )}
-                />
+                </div>
+                {cookedWeightSource === 'auto_sum' &&
+                  cookedWeightText.trim() !== '' && (
+                    <Badge variant="secondary" className="text-xs">
+                      {t('mealBuilder.cookedWeightAutoSummed', 'Auto-summed')}
+                    </Badge>
+                  )}
                 <p className="text-xs text-muted-foreground">
                   {t(
                     'mealBuilder.cookedWeightHelp',
                     'Weigh the finished dish, minus the pan. Lets you log a partial plate by weight without giving up serving-based portions.'
                   )}
                 </p>
+                {mealId && mealFoods.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {t(
+                      'mealBuilder.autoSumHelp',
+                      'Or Auto-sum to estimate it from ingredient weights (AI fills gaps for volume/count units).'
+                    )}
+                  </p>
+                )}
               </div>
               <div />
             </div>
+            {/* Per-ingredient breakdown from the last auto-sum run. */}
+            {autoSumResult && (
+              <div className="rounded-md border border-border p-3 space-y-1 text-xs">
+                <p className="font-medium">
+                  {t('mealBuilder.autoSumBreakdown', 'Auto-sum breakdown')}
+                </p>
+                {autoSumResult.resolved.map((r) => (
+                  <div
+                    key={r.mealFoodId}
+                    className="flex justify-between gap-2"
+                  >
+                    <span className="text-muted-foreground truncate">
+                      {r.foodName}
+                      {r.source === 'ai_estimated' &&
+                        ` (${t('mealBuilder.autoSumAiTag', 'AI')}${
+                          r.confidence ? `, ${r.confidence}` : ''
+                        })`}
+                    </span>
+                    <span>{r.weightG.toFixed(1)}g</span>
+                  </div>
+                ))}
+                {autoSumResult.unresolved.map((u) => (
+                  <div
+                    key={u.mealFoodId}
+                    className="flex justify-between gap-2 text-destructive"
+                  >
+                    <span className="truncate">{u.foodName}</span>
+                    <span className="shrink-0">{u.reason}</span>
+                  </div>
+                ))}
+                <div className="flex justify-between gap-2 font-medium border-t border-border pt-1 mt-1">
+                  <span>{t('mealBuilder.autoSumTotal', 'Total')}</span>
+                  <span>{autoSumResult.totalGrams.toFixed(1)}g</span>
+                </div>
+              </div>
+            )}
           </div>
         )}
         <div className="space-y-2">
