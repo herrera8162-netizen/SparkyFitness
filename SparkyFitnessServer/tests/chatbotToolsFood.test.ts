@@ -1153,7 +1153,7 @@ describe('log_external_food', () => {
     );
 
     expect(result).toBe(
-      '✅ Saved "Apple" from usda (52 kcal per 100g) and logged 2 serving to breakfast on 2026-06-10.'
+      '✅ Saved "Apple" from usda (52 kcal per 100g) and logged 200 g to breakfast on 2026-06-10.'
     );
     expect(foodCoreService.createFood).toHaveBeenCalledWith('user-1', {
       user_id: 'user-1',
@@ -1194,8 +1194,8 @@ describe('log_external_food', () => {
         food_id: FOOD_ID,
         variant_id: VARIANT_ID,
         entry_date: '2026-06-10',
-        quantity: 2,
-        unit: 'serving',
+        quantity: 200,
+        unit: 'g',
         meal_type: 'breakfast',
       }
     );
@@ -1293,7 +1293,7 @@ describe('log_external_food', () => {
     );
 
     expect(result).toBe(
-      '✅ Saved "Apple pie" from usda (296 kcal per 125g) and logged 1 serving to snacks on 2026-06-10.'
+      '✅ Saved "Apple pie" from usda (296 kcal per 125g) and logged 125 g to snacks on 2026-06-10.'
     );
     expect(foodCoreService.createFood).toHaveBeenCalledWith(
       'user-1',
@@ -1322,7 +1322,7 @@ describe('log_external_food', () => {
     );
 
     expect(result).toBe(
-      '✅ "Eggs" was already in the food database — logged 2 g for breakfast on 2026-06-10.'
+      '✅ "Eggs" was already in the food database — logged 200 g for breakfast on 2026-06-10.'
     );
     expect(foodCoreService.createFood).not.toHaveBeenCalled();
     expect(foodEntryService.createFoodEntry).toHaveBeenCalledWith(
@@ -1381,7 +1381,7 @@ describe('log_external_food', () => {
     );
 
     expect(result).toBe(
-      '✅ Saved "Apple" from usda (52 kcal per 100g) and logged 1 serving to breakfast on 2026-06-10.'
+      '✅ Saved "Apple" from usda (52 kcal per 100g) and logged 100 g to breakfast on 2026-06-10.'
     );
   });
 });
