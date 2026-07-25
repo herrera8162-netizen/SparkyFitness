@@ -13,7 +13,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { Copy, Trash2, Check, Plus, X, Sparkles } from 'lucide-react';
+import {
+  Copy,
+  Trash2,
+  Check,
+  Plus,
+  X,
+  Sparkles,
+  List,
+  Pencil,
+} from 'lucide-react';
 import type { EquivalentUnit, GlycemicIndex } from '@/types/food';
 import type { FormFoodVariant } from '@/utils/foodForm';
 import {
@@ -152,6 +161,7 @@ export function VariantCard({
     [variant.equivalents]
   );
   const [allergenInput, setAllergenInput] = useState('');
+  const [isCustomInputOpen, setIsCustomInputOpen] = useState(false);
 
   const customUnitsForDropdown = useMemo(() => {
     const standardUnits = new Set(UNIT_GROUPS.flatMap((group) => group.units));
@@ -269,94 +279,149 @@ export function VariantCard({
             </div>
 
             <div className="flex flex-col">
-              <Label htmlFor={`serving-unit-${index}`}>Unit Type</Label>
-              <Select
-                value={variant.serving_unit}
-                onValueChange={(value) =>
-                  onUpdate(index, 'serving_unit', value)
-                }
-              >
-                <SelectTrigger id={`serving-unit-${index}`} className="w-32">
-                  {/* Render only the unit text in the trigger — never the
-                      AI indicator. AI provenance lives in the dropdown items
-                      and the "Nutrition per X Y" header badge. */}
-                  <SelectValue>{variant.serving_unit}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {UNIT_GROUPS.map((group) => (
-                    <SelectGroup key={group.label}>
-                      <SelectLabel>{group.label}</SelectLabel>
-                      {group.units.map((unit) => {
-                        const compatible =
-                          showCompatibleUnitIndicators &&
-                          compatibleUnits.includes(unit);
-                        const matchedAi = savedAiUnits?.find(
-                          (entry) => entry.unit === unit
-                        );
-                        const showCompatibilityCheck = compatible && !matchedAi;
-                        return (
-                          <SelectItem key={unit} value={unit}>
-                            <span className="flex items-center gap-1.5">
-                              {unit}
-                              {showCompatibilityCheck && (
-                                <Check
-                                  data-testid={`compatible-unit-option-${index}-${unit}`}
-                                  className="h-3 w-3 text-green-500"
-                                />
-                              )}
-                              {matchedAi && (
-                                <Sparkles
-                                  data-testid={`ai-unit-option-indicator-${index}-${unit}`}
-                                  className={`h-3 w-3 ${AI_SPARKLE_TONE_CLASSES[CONFIDENCE_TONES[matchedAi.confidence]]}`}
-                                  aria-label={`AI estimate (${OVERALL_CONFIDENCE_LABELS[matchedAi.confidence]} confidence)`}
-                                  fill="currentColor"
-                                  strokeWidth={0.75}
-                                />
-                              )}
-                            </span>
-                          </SelectItem>
-                        );
-                      })}
-                    </SelectGroup>
-                  ))}
-                  {customUnitsForDropdown.length > 0 && (
-                    <SelectGroup key="custom-units">
-                      <SelectLabel>Custom</SelectLabel>
-                      {customUnitsForDropdown.map((unit) => {
-                        const compatible =
-                          showCompatibleUnitIndicators &&
-                          compatibleUnits.includes(unit);
-                        const matchedAi = savedAiUnits?.find(
-                          (entry) => entry.unit === unit
-                        );
-                        const showCompatibilityCheck = compatible && !matchedAi;
-                        return (
-                          <SelectItem key={unit} value={unit}>
-                            <span className="flex items-center gap-1.5">
-                              {unit}
-                              {showCompatibilityCheck && (
-                                <Check
-                                  data-testid={`compatible-unit-option-${index}-${unit}`}
-                                  className="h-3 w-3 text-green-500"
-                                />
-                              )}
-                              {matchedAi && (
-                                <Sparkles
-                                  data-testid={`ai-unit-option-indicator-${index}-${unit}`}
-                                  className={`h-3 w-3 ${AI_SPARKLE_TONE_CLASSES[CONFIDENCE_TONES[matchedAi.confidence]]}`}
-                                  aria-label={`AI estimate (${OVERALL_CONFIDENCE_LABELS[matchedAi.confidence]} confidence)`}
-                                  fill="currentColor"
-                                  strokeWidth={0.75}
-                                />
-                              )}
-                            </span>
-                          </SelectItem>
-                        );
-                      })}
-                    </SelectGroup>
+              <div className="flex items-center justify-between">
+                <Label htmlFor={`serving-unit-${index}`}>Unit Type</Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-5 px-1 text-[11px] text-muted-foreground hover:text-foreground"
+                  onClick={() => setIsCustomInputOpen((prev) => !prev)}
+                  title={
+                    isCustomInputOpen
+                      ? 'Switch to preset unit list'
+                      : 'Type custom unit name'
+                  }
+                >
+                  {isCustomInputOpen ? (
+                    <span className="flex items-center gap-1">
+                      <List className="h-3 w-3" /> Select list
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1">
+                      <Pencil className="h-3 w-3" /> Custom...
+                    </span>
                   )}
-                </SelectContent>
-              </Select>
+                </Button>
+              </div>
+
+              {isCustomInputOpen ? (
+                <div className="flex items-center gap-1">
+                  <Input
+                    id={`serving-unit-${index}`}
+                    value={variant.serving_unit}
+                    onChange={(e) =>
+                      onUpdate(index, 'serving_unit', e.target.value)
+                    }
+                    placeholder="e.g. cookie"
+                    className="w-32"
+                  />
+                </div>
+              ) : (
+                <Select
+                  value={variant.serving_unit}
+                  onValueChange={(value) => {
+                    if (value === '__custom_unit_input__') {
+                      setIsCustomInputOpen(true);
+                    } else {
+                      onUpdate(index, 'serving_unit', value);
+                    }
+                  }}
+                >
+                  <SelectTrigger id={`serving-unit-${index}`} className="w-32">
+                    {/* Render only the unit text in the trigger — never the
+                        AI indicator. AI provenance lives in the dropdown items
+                        and the "Nutrition per X Y" header badge. */}
+                    <SelectValue>
+                      {variant.serving_unit || 'Select unit'}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {UNIT_GROUPS.map((group) => (
+                      <SelectGroup key={group.label}>
+                        <SelectLabel>{group.label}</SelectLabel>
+                        {group.units.map((unit) => {
+                          const compatible =
+                            showCompatibleUnitIndicators &&
+                            compatibleUnits.includes(unit);
+                          const matchedAi = savedAiUnits?.find(
+                            (entry) => entry.unit === unit
+                          );
+                          const showCompatibilityCheck =
+                            compatible && !matchedAi;
+                          return (
+                            <SelectItem key={unit} value={unit}>
+                              <span className="flex items-center gap-1.5">
+                                {unit}
+                                {showCompatibilityCheck && (
+                                  <Check
+                                    data-testid={`compatible-unit-option-${index}-${unit}`}
+                                    className="h-3 w-3 text-green-500"
+                                  />
+                                )}
+                                {matchedAi && (
+                                  <Sparkles
+                                    data-testid={`ai-unit-option-indicator-${index}-${unit}`}
+                                    className={`h-3 w-3 ${AI_SPARKLE_TONE_CLASSES[CONFIDENCE_TONES[matchedAi.confidence]]}`}
+                                    aria-label={`AI estimate (${OVERALL_CONFIDENCE_LABELS[matchedAi.confidence]} confidence)`}
+                                    fill="currentColor"
+                                    strokeWidth={0.75}
+                                  />
+                                )}
+                              </span>
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectGroup>
+                    ))}
+                    {customUnitsForDropdown.length > 0 && (
+                      <SelectGroup key="custom-units">
+                        <SelectLabel>Custom</SelectLabel>
+                        {customUnitsForDropdown.map((unit) => {
+                          const compatible =
+                            showCompatibleUnitIndicators &&
+                            compatibleUnits.includes(unit);
+                          const matchedAi = savedAiUnits?.find(
+                            (entry) => entry.unit === unit
+                          );
+                          const showCompatibilityCheck =
+                            compatible && !matchedAi;
+                          return (
+                            <SelectItem key={unit} value={unit}>
+                              <span className="flex items-center gap-1.5">
+                                {unit}
+                                {showCompatibilityCheck && (
+                                  <Check
+                                    data-testid={`compatible-unit-option-${index}-${unit}`}
+                                    className="h-3 w-3 text-green-500"
+                                  />
+                                )}
+                                {matchedAi && (
+                                  <Sparkles
+                                    data-testid={`ai-unit-option-indicator-${index}-${unit}`}
+                                    className={`h-3 w-3 ${AI_SPARKLE_TONE_CLASSES[CONFIDENCE_TONES[matchedAi.confidence]]}`}
+                                    aria-label={`AI estimate (${OVERALL_CONFIDENCE_LABELS[matchedAi.confidence]} confidence)`}
+                                    fill="currentColor"
+                                    strokeWidth={0.75}
+                                  />
+                                )}
+                              </span>
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectGroup>
+                    )}
+                    <SelectGroup key="type-custom-unit">
+                      <SelectItem
+                        value="__custom_unit_input__"
+                        className="text-primary font-medium cursor-pointer"
+                      >
+                        + Type Custom Unit...
+                      </SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              )}
             </div>
           </div>
 
