@@ -26,6 +26,12 @@ export const waterContainerKeys = {
   primary: () => [...waterContainerKeys.all, 'primary'] as const,
 };
 
+export const sodaContainerKeys = {
+  all: ['sodaContainers'] as const,
+  lists: () => [...sodaContainerKeys.all, 'list'] as const,
+  primary: () => [...sodaContainerKeys.all, 'primary'] as const,
+};
+
 export const apiKeyKeys = {
   all: ['apiKeys'] as const,
   lists: () => [...apiKeyKeys.all, 'list'] as const,
