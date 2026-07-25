@@ -57,11 +57,16 @@ const VALID_ACTIONS = [
   'delete_food',
   'update_entry',
   'update_food_variant',
+  'update_food',
+  'add_food_variant',
   'copy_from_yesterday',
   'save_as_meal_template',
   'log_water',
   'get_nutritional_summary',
   'get_water_history',
+  'get_meal_details',
+  'set_meal_cooked_weight',
+  'auto_sum_meal_weight',
 ];
 
 // Provider types the no-provider cascade may search (exercise/health
@@ -584,6 +589,30 @@ async function findFoodByExactName(userId: string, name: string) {
   );
 }
 
+// Resolves meal_id/meal_name (as accepted by get_meal_details,
+// set_meal_cooked_weight, auto_sum_meal_weight) to a concrete meal record.
+// Mirrors log_meal's resolution: an id is looked up directly, a name is
+// matched case-insensitively against search_meal results.
+// Callers must check `!args.meal_id && !args.meal_name` themselves (matching
+// log_meal's inline guard) and return ERRORS.VALIDATION directly — this
+// function assumes at least one identifier is present.
+async function resolveMealIdentity(
+  userId: string,
+  args: { meal_id?: string; meal_name?: string }
+) {
+  if (args.meal_id) {
+    return await mealService.getMealById(userId, args.meal_id);
+  }
+  const meals = await mealService.searchMeals(userId, args.meal_name);
+  const name = (args.meal_name as string).toLowerCase();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const match = meals.find((m: any) => String(m.name).toLowerCase() === name);
+  if (!match) {
+    throw new Error(`Meal "${args.meal_name}" not found.`);
+  }
+  return await mealService.getMealById(userId, match.id);
+}
+
 // Per-day nutrition totals with the user's energy-unit conversion applied —
 // MCP's getNutritionalSummary row shape (fiber/sugar aliases included).
 // Shared with the report tools.
@@ -805,7 +834,7 @@ Actions:
 - list_meal_types() — lists the user's built-in and custom meal types with IDs, names, and sort order.
 - log_food(quantity, meal_type_id?|meal_type?, food_name?|food_id?, unit?, entry_date?, variant_id?) — use meal_type_id for custom meal types; the legacy meal_type fallback accepts "breakfast"|"lunch"|"dinner"|"snacks". meal_type_id takes precedence when both are supplied. Provide food_name or food_id (an internal food UUID, never a lookup result's External ID); unit defaults to the food's serving unit, entry_date defaults to today. Works only for foods already in the database (source='internal').
 - log_external_food(food_name, meal_type_id?|meal_type?, quantity?, unit?, entry_date?, external_id?, provider_type?) — PREFERRED way to log an external lookup_food_nutrition match (usda/openfoodfacts/...): the server re-fetches the provider result, saves it with full nutrition, and logs it in one call. quantity is in servings and defaults to 1.
-- create_food(food_name, calories, protein, carbs, fat, brand?, quantity?, unit?, meal_type_id?, meal_type?, entry_date?, saturated_fat?, fiber?, sugar?, sodium?, ...) — MANDATORY: You must run lookup_food_nutrition first. Call only when lookup returns source='ai_estimate' (no match anywhere) or for custom/homemade foods, using AI-estimated values; for external lookup matches use log_external_food instead. Include meal_type_id (or legacy meal_type) + entry_date to also log the food in the same call. Populate as many micro-nutrients, GI classification, and brand ('Homemade' or 'Traditional' if generic) as possible rather than just core macros.
+- create_food(food_name, calories, protein, carbs, fat, brand?, quantity?, unit?, meal_type_id?, meal_type?, entry_date?, saturated_fat?, fiber?, sugar?, sodium?, ...) — MANDATORY: You must run lookup_food_nutrition first. Call only when lookup returns source='ai_estimate' (no match anywhere) or for custom/homemade foods, using AI-estimated values; for external lookup matches use log_external_food instead. Only include meal_type_id (or legacy meal_type) + entry_date (to also log the food in the same call) if the user explicitly asked to log/eat/add this food to their diary — otherwise omit them and just create the food without logging it. Populate as many micro-nutrients, GI classification, and brand ('Homemade' or 'Traditional' if generic) as possible rather than just core macros.
 - search_meal(meal_name)
 - log_meal(meal_type_id?|meal_type?, entry_date, meal_id?, meal_name?, quantity?)
 - list_diary(entry_date?)
@@ -813,11 +842,16 @@ Actions:
 - delete_food(food_id?|food_name?) — deletes food + variants + all diary entries referencing it
 - update_entry(entry_id, entry_type, quantity?, unit?, meal_type_id?, meal_type?) — changes quantity/unit and/or moves the entry to another meal type.
 - update_food_variant(food_id?|variant_id?, serving_size?, serving_unit?, calories?, protein?, carbs?, fat?, saturated_fat?, fiber?, sugar?, sodium?, ..., update_existing_entries?) — updates an existing food variant without deleting the food. Defaults to leaving existing diary entries unchanged.
+- update_food(food_id?|food_name?, new_name?, brand?) — renames a food and/or changes its brand. At least one of new_name/brand is required.
+- add_food_variant(food_id?|food_name?, serving_size, serving_unit, calories, protein?, carbs?, fat?, ..., is_default?) — adds a new alternate serving size ("equivalent size") to an existing food without touching its other variants.
 - copy_from_yesterday(target_date?, source_date?, meal_type_id?|meal_type?)
 - save_as_meal_template(entry_date, meal_type_id?|meal_type?, meal_name, description?) — REQUIRES EXPLICIT action field. Saves diary entries for a given date and meal type as a reusable meal template.
 - log_water(amount_ml, entry_date)
 - get_nutritional_summary(start_date, end_date) — returns macro breakdown for a range of dates
-- get_water_history(start_date?, end_date?)`,
+- get_water_history(start_date?, end_date?)
+- get_meal_details(meal_id?|meal_name?) — full ingredient breakdown for a meal template, including cooked_weight_g/cooked_weight_source and, per ingredient, resolved_weight_g/weight_source/weight_confidence if auto_sum_meal_weight has been run.
+- set_meal_cooked_weight(meal_id?|meal_name?, cooked_weight_g) — manually sets a meal template's total cooked/plate weight in grams (marks cooked_weight_source='manual'). This is what a diary "log by plate weight" unit picker requires being set on the template first.
+- auto_sum_meal_weight(meal_id?|meal_name?) — computes cooked_weight_g as the sum of every ingredient's weight in grams: deterministic conversion for weight units, AI density estimate for volume units (cup, tbsp), AI "typical weight of one unit" estimate for count units (slice, piece, serving). Persists per-ingredient provenance and writes cooked_weight_g (cooked_weight_source='auto_sum') only if at least one ingredient resolved; reports any ingredients it couldn't resolve (e.g. no AI service configured, or a linked meal with no cooked weight of its own).`,
       inputSchema: manageFoodInput,
       execute: async (rawArgs) => {
         const normalized = normalizeActionArgs(
@@ -2138,6 +2172,139 @@ Actions:
               );
             }
 
+            case 'update_food': {
+              if (!args.food_id && !args.food_name) {
+                return ERRORS.VALIDATION(
+                  'Either food_id or food_name must be provided'
+                );
+              }
+              if (args.new_name === undefined && args.brand === undefined) {
+                return ERRORS.VALIDATION(
+                  'At least one of new_name or brand must be provided'
+                );
+              }
+              let foodId = args.food_id;
+              let currentName = args.food_name;
+              if (!foodId) {
+                const row = await findFoodByExactName(
+                  userId,
+                  args.food_name ?? ''
+                );
+                if (!row) {
+                  return ERRORS.VALIDATION(
+                    `Food "${args.food_name}" not found.`
+                  );
+                }
+                foodId = row.id;
+                currentName = row.name;
+              } else {
+                const row = await foodRepository.getFoodById(foodId, userId);
+                if (!row) {
+                  return ERRORS.NOT_FOUND(
+                    'Food',
+                    args.food_id || args.food_name || 'unknown'
+                  );
+                }
+                currentName = row.name;
+              }
+              const foodData: Record<string, unknown> = {};
+              if (args.new_name !== undefined) foodData.name = args.new_name;
+              if (args.brand !== undefined) foodData.brand = args.brand;
+              try {
+                await foodCoreService.updateFood(userId, foodId, foodData);
+              } catch (error) {
+                if (
+                  error instanceof Error &&
+                  (error.message.includes('not found') ||
+                    error.message.includes('Forbidden'))
+                ) {
+                  return ERRORS.NOT_FOUND(
+                    'Food',
+                    args.food_id || args.food_name || 'unknown'
+                  );
+                }
+                throw error;
+              }
+              return formatConfirmation(
+                args.new_name
+                  ? `Food "${currentName}" renamed to "${args.new_name}".`
+                  : `Food "${currentName}" updated.`
+              );
+            }
+
+            case 'add_food_variant': {
+              if (!args.food_id && !args.food_name) {
+                return ERRORS.VALIDATION(
+                  'Either food_id or food_name must be provided'
+                );
+              }
+              let foodId = args.food_id;
+              let foodName = args.food_name;
+              if (!foodId) {
+                const row = await findFoodByExactName(
+                  userId,
+                  args.food_name ?? ''
+                );
+                if (!row) {
+                  return ERRORS.VALIDATION(
+                    `Food "${args.food_name}" not found.`
+                  );
+                }
+                foodId = row.id;
+                foodName = row.name;
+              } else {
+                const row = await foodRepository.getFoodById(foodId, userId);
+                if (!row) {
+                  return ERRORS.NOT_FOUND(
+                    'Food',
+                    args.food_id || args.food_name || 'unknown'
+                  );
+                }
+                foodName = row.name;
+              }
+              try {
+                await foodCoreService.createFoodVariant(userId, {
+                  food_id: foodId,
+                  serving_size: args.serving_size,
+                  serving_unit: args.serving_unit,
+                  calories: args.calories,
+                  protein: args.protein,
+                  carbs: args.carbs,
+                  fat: args.fat,
+                  saturated_fat: args.saturated_fat,
+                  polyunsaturated_fat: args.polyunsaturated_fat,
+                  monounsaturated_fat: args.monounsaturated_fat,
+                  trans_fat: args.trans_fat,
+                  cholesterol: args.cholesterol,
+                  sodium: args.sodium,
+                  potassium: args.potassium,
+                  dietary_fiber: args.fiber,
+                  sugars: args.sugar,
+                  vitamin_a: args.vitamin_a,
+                  vitamin_c: args.vitamin_c,
+                  calcium: args.calcium,
+                  iron: args.iron,
+                  glycemic_index: args.gi,
+                  is_default: args.is_default ?? false,
+                });
+              } catch (error) {
+                if (
+                  error instanceof Error &&
+                  (error.message.includes('not found') ||
+                    error.message.includes('Forbidden'))
+                ) {
+                  return ERRORS.NOT_FOUND(
+                    'Food',
+                    args.food_id || args.food_name || 'unknown'
+                  );
+                }
+                throw error;
+              }
+              return formatConfirmation(
+                `New serving size added for "${foodName}": ${args.serving_size}${args.serving_unit} (${args.calories} kcal).`
+              );
+            }
+
             case 'copy_from_yesterday': {
               // MCP's defaults: target falls back to today, source to
               // yesterday-of-today (not yesterday-of-target).
@@ -2259,6 +2426,76 @@ Actions:
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 (h: any) => `**${h.entry_date}**: ${h.amount} ${h.unit}`
               );
+            }
+
+            case 'get_meal_details': {
+              if (!args.meal_id && !args.meal_name) {
+                return ERRORS.VALIDATION(
+                  'Either meal_id or meal_name must be provided'
+                );
+              }
+              const meal = await resolveMealIdentity(userId, args);
+              let text = `**${meal.name}**\n`;
+              text += meal.cooked_weight_g
+                ? `Cooked weight: ${meal.cooked_weight_g}g (${meal.cooked_weight_source || 'unknown'})\n`
+                : 'Cooked weight: not set\n';
+              text += 'Ingredients:\n';
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              for (const f of meal.foods as any[]) {
+                const name = f.child_meal_name || f.food_name;
+                text += `- ${name}: ${f.quantity} ${f.unit}`;
+                if (f.resolved_weight_g) {
+                  text +=
+                    f.weight_source === 'ai_estimated'
+                      ? ` (${f.resolved_weight_g}g, AI estimated, confidence: ${f.weight_confidence})`
+                      : ` (${f.resolved_weight_g}g)`;
+                }
+                text += '\n';
+              }
+              return formatConfirmation(text.trim());
+            }
+
+            case 'set_meal_cooked_weight': {
+              if (!args.meal_id && !args.meal_name) {
+                return ERRORS.VALIDATION(
+                  'Either meal_id or meal_name must be provided'
+                );
+              }
+              const meal = await resolveMealIdentity(userId, args);
+              await mealService.updateMeal(userId, meal.id, {
+                cooked_weight_g: args.cooked_weight_g,
+                cooked_weight_source: 'manual',
+              });
+              return formatConfirmation(
+                `Cooked weight for "${meal.name}" set to ${args.cooked_weight_g}g.`
+              );
+            }
+
+            case 'auto_sum_meal_weight': {
+              if (!args.meal_id && !args.meal_name) {
+                return ERRORS.VALIDATION(
+                  'Either meal_id or meal_name must be provided'
+                );
+              }
+              const meal = await resolveMealIdentity(userId, args);
+              const result = await mealService.resolveMealIngredientWeights(
+                userId,
+                meal.id
+              );
+              let text = `**${result.mealName}** auto-sum result:\n`;
+              for (const r of result.resolved) {
+                text +=
+                  r.source === 'ai_estimated'
+                    ? `- ${r.foodName}: ${r.weightG.toFixed(1)}g (AI estimated, confidence: ${r.confidence})\n`
+                    : `- ${r.foodName}: ${r.weightG.toFixed(1)}g (manual)\n`;
+              }
+              for (const u of result.unresolved) {
+                text += `- ${u.foodName}: could not resolve — ${u.reason}\n`;
+              }
+              text += result.cookedWeightUpdated
+                ? `Total: ${result.totalGrams.toFixed(1)}g — cooked_weight_g updated.`
+                : 'Total: 0g — no ingredients could be resolved, cooked_weight_g was NOT changed.';
+              return formatConfirmation(text);
             }
 
             default:

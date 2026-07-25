@@ -283,6 +283,46 @@ const searchMealSchema = z
   })
   .strict();
 
+// meal_id/meal_name identify the target meal template for the three
+// cooked-weight actions below (get_meal_details, set_meal_cooked_weight,
+// auto_sum_meal_weight); both optional, at least one required at runtime.
+const mealIdentitySchema = {
+  meal_id: uuidSchema.optional().describe('UUID of the meal template'),
+  meal_name: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Name of the meal template (alternative to ID)'),
+};
+
+const getMealDetailsSchema = z
+  .object({
+    action: z.literal('get_meal_details'),
+    ...mealIdentitySchema,
+  })
+  .strict();
+
+const setMealCookedWeightSchema = z
+  .object({
+    action: z.literal('set_meal_cooked_weight'),
+    ...mealIdentitySchema,
+    cooked_weight_g: z
+      .number()
+      .positive()
+      .describe(
+        'Total mass in grams of the full recipe as finished/cooked (e.g. the whole pot weighed on a scale)'
+      ),
+  })
+  .strict();
+
+const autoSumMealWeightSchema = z
+  .object({
+    action: z.literal('auto_sum_meal_weight'),
+    ...mealIdentitySchema,
+  })
+  .strict();
+
 const logMealSchema = z
   .object({
     action: z.literal('log_meal'),
@@ -370,7 +410,7 @@ const updateFoodVariantSchema = z
       ),
     serving_size: z.coerce
       .number()
-      .min(0)
+      .gt(0)
       .optional()
       .describe('Updated serving size value'),
     serving_unit: z
@@ -461,6 +501,115 @@ const updateFoodVariantSchema = z
       .default(false)
       .describe(
         'If true, also updates existing diary food entries referencing this variant. Defaults to false.'
+      ),
+  })
+  .strict();
+
+const updateFoodSchema = z
+  .object({
+    action: z.literal('update_food'),
+    food_id: uuidSchema
+      .optional()
+      .describe(
+        'UUID of the food to update. Used as an alternative to food_name.'
+      ),
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('Current name of the food to update — alternative to food_id.'),
+    new_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('New name for the food.'),
+    brand: z.string().max(200).optional().describe('New brand for the food.'),
+  })
+  .strict();
+
+const addFoodVariantSchema = z
+  .object({
+    action: z.literal('add_food_variant'),
+    food_id: uuidSchema
+      .optional()
+      .describe(
+        'UUID of the food to add an alternate serving size to. Used as an alternative to food_name.'
+      ),
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe(
+        'Name of the food to add an alternate serving size to — alternative to food_id.'
+      ),
+    serving_size: z.coerce
+      .number()
+      .gt(0)
+      .describe('Serving size value for the new variant (e.g. 1).'),
+    serving_unit: z
+      .string()
+      .min(1)
+      .max(50)
+      .describe(
+        "Serving unit for the new variant (e.g. 'cup', 'slice', 'can')."
+      ),
+    calories: z.coerce
+      .number()
+      .min(0)
+      .describe('Calories (kcal) for this serving size.'),
+    protein: z.coerce.number().min(0).optional().describe('Protein (g).'),
+    carbs: z.coerce.number().min(0).optional().describe('Carbohydrates (g).'),
+    fat: z.coerce.number().min(0).optional().describe('Total fat (g).'),
+    saturated_fat: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Saturated fat (g).'),
+    polyunsaturated_fat: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Polyunsaturated fat (g).'),
+    monounsaturated_fat: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Monounsaturated fat (g).'),
+    trans_fat: z.coerce.number().min(0).optional().describe('Trans fat (g).'),
+    cholesterol: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Cholesterol (mg).'),
+    sodium: z.coerce.number().min(0).optional().describe('Sodium (mg).'),
+    potassium: z.coerce.number().min(0).optional().describe('Potassium (mg).'),
+    fiber: z.coerce.number().min(0).optional().describe('Dietary fiber (g).'),
+    sugar: z.coerce.number().min(0).optional().describe('Sugars (g).'),
+    vitamin_a: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Vitamin A (% Daily Value).'),
+    vitamin_c: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Vitamin C (% Daily Value).'),
+    calcium: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Calcium (% Daily Value).'),
+    iron: z.coerce.number().min(0).optional().describe('Iron (% Daily Value).'),
+    gi: giIndexEnum.optional().describe('Glycemic Index classification.'),
+    is_default: z.coerce
+      .boolean()
+      .optional()
+      .describe(
+        'Whether this new variant should become the default serving size for the food. Defaults to false.'
       ),
   })
   .strict();
@@ -567,11 +716,16 @@ export const manageFoodSchema = z.discriminatedUnion('action', [
   deleteFoodSchema,
   updateEntrySchema,
   updateFoodVariantSchema,
+  updateFoodSchema,
+  addFoodVariantSchema,
   copyFromYesterdaySchema,
   saveAsMealTemplateSchema,
   logWaterSchema,
   getNutritionalSummarySchema,
   getWaterHistorySchema,
+  getMealDetailsSchema,
+  setMealCookedWeightSchema,
+  autoSumMealWeightSchema,
 ]);
 
 export type ManageFoodInput = z.infer<typeof manageFoodSchema>;
@@ -596,11 +750,16 @@ export const manageFoodInput = z.object({
       'delete_food',
       'update_entry',
       'update_food_variant',
+      'update_food',
+      'add_food_variant',
       'copy_from_yesterday',
       'save_as_meal_template',
       'log_water',
       'get_nutritional_summary',
       'get_water_history',
+      'get_meal_details',
+      'set_meal_cooked_weight',
+      'auto_sum_meal_weight',
     ])
     .optional()
     .describe(
@@ -638,9 +797,21 @@ export const manageFoodInput = z.object({
     .describe(
       'For update_food_variant: if true, also updates existing diary entries referencing this variant'
     ),
+  new_name: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('For update_food: new name for the food'),
+  is_default: z.coerce
+    .boolean()
+    .optional()
+    .describe(
+      'For add_food_variant: whether the new variant should become the default serving size'
+    ),
   serving_size: z.coerce
     .number()
-    .min(0)
+    .gt(0)
     .optional()
     .describe('For update_food_variant: updated serving size value'),
   serving_unit: z
@@ -686,6 +857,13 @@ export const manageFoodInput = z.object({
     .max(200)
     .optional()
     .describe('Meal template name'),
+  cooked_weight_g: z
+    .number()
+    .positive()
+    .optional()
+    .describe(
+      'For set_meal_cooked_weight: total mass in grams of the full recipe as finished/cooked'
+    ),
   // search
   search_type: searchTypeEnum
     .optional()

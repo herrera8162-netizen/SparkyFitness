@@ -12,6 +12,7 @@ import {
   STANDARD_UNIT_KEYS,
   areUnitsCompatible,
   getUnitCategory,
+  SERVING_UNIT_GROUP,
 } from "../utils/servingSizeConversions.ts";
 
 /** Units AI is allowed to convert between. Derived from the canonical weight + volume tables. */
@@ -43,6 +44,28 @@ export function shouldOfferAiConversion(
   return !areUnitsCompatible(fromUnit, toUnit);
 }
 
+/**
+ * True iff `fromUnit` is a quantity-style unit (piece, slice, serving, ...)
+ * and `toUnit` is grams. Used exclusively by the meal-weight auto-sum path
+ * (`resolveMealIngredientWeights` in the server's mealService) to let the AI
+ * estimate "typical weight of one <unit>" for ingredients logged in a count
+ * unit with no gram variant on file.
+ *
+ * Deliberately NOT folded into `isAiConvertibleUnit`/`shouldOfferAiConversion`
+ * — those gate the general-purpose unit-conversion picker (FoodUnitSelector /
+ * VariantCard) and must keep excluding quantity units there, per this file's
+ * existing design.
+ */
+export function isCountToGramEstimate(
+  fromUnit: string,
+  toUnit: string,
+): boolean {
+  const normalizedFrom = fromUnit.toLowerCase().trim();
+  const normalizedTo = toUnit.toLowerCase().trim();
+  if (normalizedTo !== "g") return false;
+  return SERVING_UNIT_GROUP.units.includes(normalizedFrom);
+}
+
 /** Confidence levels the AI provider is asked to return. */
 export const aiConfidenceSchema = z.enum(["high", "medium", "low"]);
 export type AiConfidence = z.infer<typeof aiConfidenceSchema>;
@@ -63,7 +86,9 @@ export const aiUnitConversionRequestSchema = z.object({
   toUnit: z.string().min(1),
   knownVariants: z.array(aiKnownVariantSchema).default([]),
 });
-export type AiUnitConversionRequest = z.infer<typeof aiUnitConversionRequestSchema>;
+export type AiUnitConversionRequest = z.infer<
+  typeof aiUnitConversionRequestSchema
+>;
 
 /** Response body for POST /api/ai/convert-unit. */
 export const aiUnitConversionResponseSchema = z.object({
@@ -73,7 +98,9 @@ export const aiUnitConversionResponseSchema = z.object({
   fromAmount: z.number().positive(),
   toUnit: z.string(),
 });
-export type AiUnitConversionResponse = z.infer<typeof aiUnitConversionResponseSchema>;
+export type AiUnitConversionResponse = z.infer<
+  typeof aiUnitConversionResponseSchema
+>;
 
 /** Raw JSON shape expected from the LLM (snake_case to match the prompt). */
 export const aiProviderRawResponseSchema = z.object({

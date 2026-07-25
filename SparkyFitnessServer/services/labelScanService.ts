@@ -20,6 +20,11 @@ const LABEL_SCAN_PROMPT =
   'All numeric fields should be absolute amounts (not percent daily value), as numbers not strings. ' +
   'serving_size should be a number. ' +
   'Use null for any field not visible on the label. ' +
+  "Many labels state the serving size as a count alongside a weight/volume, e.g. 'Serving size 5 wafers (31g)' or '2 cookies (28g)'. " +
+  'When the label gives such a paired count, also return alt_serving_size (number; the count, e.g. 5) and ' +
+  "alt_serving_unit (string; the singular unit name for that count, e.g. 'wafer', 'cookie', 'piece'). " +
+  'These represent the exact same serving as serving_size/serving_unit, just expressed in a different unit — not a separate quantity. ' +
+  'Use null for alt_serving_size and alt_serving_unit if the label only gives one unit for the serving size. ' +
   'Return only the JSON object, no other text.';
 
 // 'no_ai_configured' is the only category this service mints itself; every
