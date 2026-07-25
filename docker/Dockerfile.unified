@@ -1,0 +1,85 @@
+# Stage 1: Build the React Frontend
+FROM node:24-alpine AS frontend_builder
+
+WORKDIR /app
+
+# Enable corepack and use the version specified in package.json
+RUN corepack enable
+
+# Copy workspace root configuration files
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+
+# Copy all workspace member package.json files for dependency resolution
+COPY SparkyFitnessServer/package.json ./SparkyFitnessServer/
+COPY SparkyFitnessFrontend/package.json ./SparkyFitnessFrontend/
+COPY SparkyFitnessMobile/package.json ./SparkyFitnessMobile/
+COPY shared/package.json ./shared/
+
+# Copy patch files referenced by pnpm.patchedDependencies
+COPY patches/ ./patches/
+
+# Install workspace dependencies for frontend
+RUN pnpm install --frozen-lockfile --filter sparkyfitnessfrontend...
+
+# Copy the frontend and shared source code
+COPY SparkyFitnessFrontend/ ./SparkyFitnessFrontend/
+COPY shared/ ./shared/
+
+# Build the frontend assets
+RUN pnpm --filter sparkyfitnessfrontend run build
+
+
+# Stage 2: Install dependencies and deploy the Backend Server
+FROM --platform=$BUILDPLATFORM node:24-alpine AS backend_builder
+
+WORKDIR /app
+
+# Enable corepack
+RUN corepack enable
+
+# Copy workspace root configuration files
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+
+# Copy workspace member package.json files
+COPY SparkyFitnessServer/package.json SparkyFitnessServer/
+COPY SparkyFitnessFrontend/package.json SparkyFitnessFrontend/
+COPY SparkyFitnessMobile/package.json SparkyFitnessMobile/
+COPY shared/package.json shared/
+
+# Copy patch files
+COPY patches/ patches/
+
+# Install workspace dependencies for backend
+RUN pnpm install --frozen-lockfile --filter sparkyfitnessserver...
+
+# Copy backend and shared source code
+COPY SparkyFitnessServer/ SparkyFitnessServer/
+COPY shared/ shared/
+
+# Deploy the server to a standalone directory (flattens node_modules, resolves workspace symlinks)
+RUN pnpm --filter=sparkyfitnessserver deploy --legacy /deploy
+
+
+# Stage 3: Runtime container serving both backend API and static frontend assets
+FROM node:24-alpine
+
+WORKDIR /app/SparkyFitnessServer
+
+# Install runtime dependencies
+RUN apk add --no-cache curl postgresql18-client tar gzip
+
+# Copy the deployed backend server (source + standalone node_modules)
+COPY --from=backend_builder /deploy ./
+COPY --from=backend_builder /deploy/package.json /app/package.json
+
+# Copy the built frontend static assets into the location the backend expects
+COPY --from=frontend_builder /app/SparkyFitnessFrontend/dist /app/SparkyFitnessFrontend/dist
+
+# Expose backend port (handles API, MCP, uploads, and static web pages)
+EXPOSE 3010
+
+# Healthcheck targets the backend health endpoint
+HEALTHCHECK --interval=5s --timeout=10s --retries=5 CMD ["/usr/bin/curl", "-f", "http://127.0.0.1:3010/api/health"]
+
+# Start the server
+CMD ["./node_modules/.bin/tsx", "index.ts"]

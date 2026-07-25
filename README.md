@@ -30,8 +30,19 @@
 
 # SparkyFitness
 
+> [!NOTE]
+> **SparkyFitness Patch Fork Features**
+> This fork maintains high upstream compatibility with `CodeWithCJ/SparkyFitness` while introducing several patch-style feature enhancements:
+> 
+> - **Unified Single-Container Deployment**: Hosts both the React frontend and Express backend in a single Node.js process (`Dockerfile.unified` & `docker/docker-compose.unified.yml`), removing the need for a separate Nginx container and simplifying reverse proxy configuration on port `3010`.
+> - **Soda Intake & Container Tracking**: Dedicated soda intake logging (`/diary/soda`), custom container size management, and volume preferences on Web and API (`/api/v2/soda-intake`).
+> - **Meal Weight & Portion Provenance**: Track cooked meal weights (`cooked_weight_g`), plate-weight portion logging in unit selectors, and automatic ingredient mass summation in MealBuilder.
+> - **AI & Chatbot Enhancements**: Expanded AI tools for dynamic food unit variant creation, food editing (`update_food`, `add_food_variant`), nutrition label OCR scanning, and mass inference.
+> - **Family Sharing Permissions**: Allows delegate users with `can_manage_diary` permissions to edit shared custom foods and meal templates.
+
 A self-hosted, privacy-first alternative to MyFitnessPal. Track nutrition, exercise, body metrics, and health data while keeping full control of your data.
 <img width="1280" height="600" alt="image" src="https://github.com/user-attachments/assets/67a5fb86-cc98-42ce-aa1e-ded7c57647c9" />
+
 
 
 
