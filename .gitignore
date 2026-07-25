@@ -76,3 +76,16 @@ dossier sans titre/
 
 # Local MCP server config (contains bearer tokens)
 .mcp.json
+
+# Personal scratch/planning notes and memos
+/REVIEW_NOTES.md
+/TODO.md
+/MEAL_WEIGHT_PLAN.md
+*_PLAN.md
+*_NOTES.md
+*_MEMO.md
+*.note.md
+*.memo.md
+/notes/
+/memos/
+/drafts/
