@@ -70,7 +70,8 @@ const MEAL_FOODS_SELECT = `
          COALESCE(mf.calcium, fv.calcium)                         AS calcium,
          COALESCE(mf.iron, fv.iron)                               AS iron,
          COALESCE(mf.glycemic_index, fv.glycemic_index)           AS glycemic_index,
-         COALESCE(mf.custom_nutrients, fv.custom_nutrients)       AS custom_nutrients
+         COALESCE(mf.custom_nutrients, fv.custom_nutrients)       AS custom_nutrients,
+         mf.resolved_weight_g, mf.weight_source, mf.weight_confidence
   FROM meal_foods mf
   LEFT JOIN foods f ON mf.food_id = f.id
   LEFT JOIN food_variants fv ON mf.variant_id = fv.id
@@ -136,14 +137,43 @@ function buildMealFoodValues(mealId: string) {
     ];
   };
 }
+// Targeted single-row update for one meal_foods ingredient's resolved gram
+// weight. Used by the auto-sum meal-weight action — deliberately separate
+// from updateMeal's foods handling, which deletes and reinserts every
+// meal_foods row for the meal (that would discard the ids this call targets).
+async function updateMealFoodWeight(
+  mealFoodId: string,
+  userId: string,
+  data: {
+    resolved_weight_g: number;
+    weight_source: 'deterministic' | 'ai_estimated';
+    weight_confidence: 'high' | 'medium' | 'low' | null;
+  }
+) {
+  const client = await getClient(userId);
+  try {
+    await client.query(
+      `UPDATE meal_foods SET resolved_weight_g = $1, weight_source = $2, weight_confidence = $3
+       WHERE id = $4`,
+      [
+        data.resolved_weight_g,
+        data.weight_source,
+        data.weight_confidence,
+        mealFoodId,
+      ]
+    );
+  } finally {
+    client.release();
+  }
+}
 // --- Meal Template CRUD Operations ---
 async function createMeal(mealData: MealInput) {
   const client = await getClient(mealData.user_id); // User-specific operation
   try {
     await client.query('BEGIN');
     const mealResult = await client.query(
-      `INSERT INTO meals (user_id, name, description, is_public, serving_size, serving_unit, total_servings, images, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, now(), now()) RETURNING id, user_id, name, description, is_public, serving_size, serving_unit, total_servings, images, created_at, updated_at`,
+      `INSERT INTO meals (user_id, name, description, is_public, serving_size, serving_unit, total_servings, images, cooked_weight_g, cooked_weight_source, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, now(), now()) RETURNING id, user_id, name, description, is_public, serving_size, serving_unit, total_servings, images, cooked_weight_g, cooked_weight_source, created_at, updated_at`,
       [
         mealData.user_id,
         mealData.name,
@@ -153,6 +183,8 @@ async function createMeal(mealData: MealInput) {
         mealData.serving_unit,
         mealData.total_servings,
         JSON.stringify(toImageArray(mealData.images)),
+        mealData.cooked_weight_g ?? null,
+        mealData.cooked_weight_source ?? null,
       ]
     );
     const newMeal = mealResult.rows[0];
@@ -208,7 +240,7 @@ async function getMeals(userId: string, filter = 'all') {
   const client = await getClient(userId); // User-specific operation
   try {
     let query = `
-      SELECT id, user_id, name, description, is_public, serving_size, serving_unit, total_servings, images, created_at, updated_at
+      SELECT id, user_id, name, description, is_public, serving_size, serving_unit, total_servings, images, cooked_weight_g, cooked_weight_source, created_at, updated_at
       FROM meals
       WHERE 1=1`; // Start with a true condition to easily append AND clauses
     const queryParams = [];
@@ -255,7 +287,7 @@ async function searchMeals(
     }
 
     let query = `
-      SELECT id, user_id, name, description, is_public, serving_size, serving_unit, total_servings, images
+      SELECT id, user_id, name, description, is_public, serving_size, serving_unit, total_servings, images, cooked_weight_g, cooked_weight_source
       FROM meals
       ${whereSql}
       ORDER BY ${orderClause}`;
@@ -275,7 +307,7 @@ async function getMealById(mealId: string, userId: string) {
   const client = await getClient(userId); // User-specific operation (RLS will handle access)
   try {
     const mealResult = await client.query(
-      `SELECT id, user_id, name, description, is_public, serving_size, serving_unit, total_servings, images, created_at, updated_at
+      `SELECT id, user_id, name, description, is_public, serving_size, serving_unit, total_servings, images, cooked_weight_g, cooked_weight_source, created_at, updated_at
        FROM meals WHERE id = $1`,
       [mealId]
     );
@@ -305,9 +337,11 @@ async function updateMeal(
         serving_unit = COALESCE($5, serving_unit),
         total_servings = COALESCE($6, total_servings),
         images = COALESCE($7::jsonb, images),
+        cooked_weight_g = CASE WHEN $8::boolean THEN $9 ELSE cooked_weight_g END,
+        cooked_weight_source = CASE WHEN $10::boolean THEN $11 ELSE cooked_weight_source END,
         updated_at = now()
-       WHERE id = $8
-       RETURNING id, user_id, name, description, is_public, serving_size, serving_unit, total_servings, images, created_at, updated_at`,
+       WHERE id = $12
+       RETURNING id, user_id, name, description, is_public, serving_size, serving_unit, total_servings, images, cooked_weight_g, cooked_weight_source, created_at, updated_at`,
       [
         updateData.name,
         updateData.description,
@@ -319,6 +353,10 @@ async function updateMeal(
         updateData.images === undefined
           ? null
           : JSON.stringify(toImageArray(updateData.images)),
+        updateData.cooked_weight_g !== undefined,
+        updateData.cooked_weight_g ?? null,
+        updateData.cooked_weight_source !== undefined,
+        updateData.cooked_weight_source ?? null,
         mealId,
       ]
     );
@@ -652,7 +690,7 @@ async function getRecentMeals(userId: string, limit = 3) {
         m.serving_size,
         m.serving_unit,
         m.total_servings,
-        m.images,
+        m.images, m.cooked_weight_g,
         m.created_at,
         m.updated_at,
         lu.last_used_date
@@ -704,7 +742,7 @@ async function getTopMeals(userId: string, limit = 3) {
         m.serving_size,
         m.serving_unit,
         m.total_servings,
-        m.images,
+        m.images, m.cooked_weight_g,
         m.created_at,
         m.updated_at,
         COUNT(*) AS usage_count
@@ -954,7 +992,7 @@ async function getPublicMeals(userId: string) {
   const client = await getClient(userId); // User-specific operation for RLS
   try {
     const result =
-      await client.query(`SELECT id, user_id, name, description, is_public, serving_size, serving_unit, total_servings, images, created_at, updated_at
+      await client.query(`SELECT id, user_id, name, description, is_public, serving_size, serving_unit, total_servings, images, cooked_weight_g, created_at, updated_at
        FROM meals
        WHERE is_public = TRUE
        ORDER BY name ASC`);
@@ -972,7 +1010,7 @@ async function getFamilyMeals(userId: string) {
     // For now, let's assume it fetches meals shared with the user via family access.
     // This might need to be refined based on actual family sharing implementation.
     const result = await client.query(
-      `SELECT m.id, m.user_id, m.name, m.description, m.is_public, m.serving_size, m.serving_unit, m.total_servings, m.images, m.created_at, m.updated_at
+      `SELECT m.id, m.user_id, m.name, m.description, m.is_public, m.serving_size, m.serving_unit, m.total_servings, m.images, m.cooked_weight_g, m.created_at, m.updated_at
        FROM meals m
        JOIN family_access fa ON m.user_id = fa.owner_user_id
        WHERE fa.family_user_id = $1 AND fa.is_active = TRUE
@@ -998,7 +1036,7 @@ async function getFavoriteMeals(userId: string) {
         m.serving_size,
         m.serving_unit,
         m.total_servings,
-        m.images,
+        m.images, m.cooked_weight_g,
         m.created_at,
         m.updated_at,
         ff.created_at AS favorited_at
@@ -1074,6 +1112,7 @@ export default {
   getMeals,
   getMealById,
   updateMeal,
+  updateMealFoodWeight,
   deleteMeal,
   createMealPlanEntry,
   getMealPlanEntries,

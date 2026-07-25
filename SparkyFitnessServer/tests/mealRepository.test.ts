@@ -81,6 +81,8 @@ describe('mealRepository', () => {
           undefined,
           // images: absent from the payload serializes to an empty array
           '[]',
+          null,
+          null,
         ]
       );
       // pg-format creates a single formatted string, not array parameters
@@ -380,6 +382,10 @@ describe('mealRepository', () => {
           undefined,
           // images: omitted from the payload leaves the column untouched
           null,
+          false,
+          null,
+          false,
+          null,
           mealId,
         ]
       );
@@ -441,6 +447,10 @@ describe('mealRepository', () => {
           undefined,
           undefined,
           // images: omitted from the payload leaves the column untouched
+          null,
+          false,
+          null,
+          false,
           null,
           mealId,
         ]
