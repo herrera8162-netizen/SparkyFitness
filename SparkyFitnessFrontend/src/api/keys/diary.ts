@@ -47,3 +47,11 @@ export const waterIntakeKeys = {
   goals: (date: string, userId: string) =>
     ['goals', 'water', date, userId] as const,
 };
+
+export const sodaIntakeKeys = {
+  all: ['sodaIntake'] as const,
+  daily: (date: string, userId: string) =>
+    [...sodaIntakeKeys.all, date, userId] as const,
+  log: (date: string, userId: string) =>
+    [...sodaIntakeKeys.all, 'log', date, userId] as const,
+};

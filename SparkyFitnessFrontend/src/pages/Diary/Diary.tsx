@@ -7,6 +7,7 @@ import DayNavigator from '@/components/DayNavigator';
 import NutritionSummaryCard, { DayTotals } from './NutritionSummaryCard';
 import DailyProgress from './DailyProgress';
 import WaterIntake from './WaterIntake';
+import SodaIntake from './SodaIntake';
 import MealCard from './MealCard';
 import ExerciseCard from './ExerciseCard';
 import DiaryWidgetGrid, { type DiaryWidget } from './DiaryWidgetGrid';
@@ -15,6 +16,7 @@ import {
   Flame,
   Salad,
   Droplet,
+  CupSoda,
   UtensilsCrossed,
   Dumbbell,
   HeartPulse,
@@ -384,6 +386,12 @@ const Diary = () => {
         title: t('diary.waterIntake', 'Water Intake'),
         icon: Droplet,
         render: () => <WaterIntake selectedDate={selectedDate} />,
+      },
+      {
+        key: 'soda',
+        title: t('diary.sodaIntake', 'Soda Intake'),
+        icon: CupSoda,
+        render: () => <SodaIntake selectedDate={selectedDate} />,
       },
     ];
 

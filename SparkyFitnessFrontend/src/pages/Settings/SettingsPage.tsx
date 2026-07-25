@@ -38,6 +38,7 @@ import { DeveloperResources } from './DevloperResources';
 import { AccountSecurity } from './AccountSecurity';
 import { ApiSettings } from './ApiSettings';
 import { WaterTrackingSettings } from './WaterTrackingSettings';
+import { SodaTrackingSettings } from './SodaTrackingSettings';
 import CycleSettings from './CycleSettings';
 import { PreferenceSettings } from './PreferenceSettings';
 import { ProfileInformation } from './ProfileInformation';
@@ -341,6 +342,12 @@ const Settings = () => {
               className="border rounded-lg mb-4"
             >
               <WaterTrackingSettings />
+            </AccordionItem>
+            <AccordionItem
+              value="soda-tracking"
+              className="border rounded-lg mb-4"
+            >
+              <SodaTrackingSettings />
             </AccordionItem>
           </Accordion>
         </TabsContent>
