@@ -73,6 +73,8 @@ import { applyMigrations } from './utils/dbMigrations.js';
 import { applyRlsPolicies } from './utils/applyRlsPolicies.js';
 import waterContainerRoutes from './routes/waterContainerRoutes.js';
 import waterIntakeRoutesV2 from './routes/v2/waterIntakeRoutes.js';
+import sodaContainerRoutes from './routes/sodaContainerRoutes.js';
+import sodaIntakeRoutesV2 from './routes/v2/sodaIntakeRoutes.js';
 import medicationRoutesV2 from './routes/v2/medicationRoutes.js';
 import symptomRoutesV2 from './routes/v2/symptomRoutes.js';
 import cycleRoutesV2 from './routes/v2/cycleRoutes.js';
@@ -464,15 +466,23 @@ if (isPublicApiDocsEnabled) {
 
 // Apply authentication middleware to all protected routes
 app.use((req, res, next) => {
-  const isPublic = publicRoutes.some((route) => {
-    // Exact match or subpath match with trailing slash to prevent partial matches
-    // e.g. "/api/health" matches "/api/health" and "/api/health/" but NOT "/api/health-data"
-    // e.g. "/api/onboarding" matches "/api/onboarding" and "/api/onboarding/step1"
-    if (req.path === route || req.path.startsWith(route + '/')) {
-      return true;
-    }
-    return false;
-  });
+  // If it's a static frontend route, let it pass (it will be served by express.static later)
+  const isStatic =
+    !req.path.startsWith('/api') &&
+    !req.path.startsWith('/mcp') &&
+    !req.path.startsWith('/uploads');
+
+  const isPublic =
+    isStatic ||
+    publicRoutes.some((route) => {
+      // Exact match or subpath match with trailing slash to prevent partial matches
+      // e.g. "/api/health" matches "/api/health" and "/api/health/" but NOT "/api/health-data"
+      // e.g. "/api/onboarding" matches "/api/onboarding" and "/api/onboarding/step1"
+      if (req.path === route || req.path.startsWith(route + '/')) {
+        return true;
+      }
+      return false;
+    });
   if (isPublic) {
     return next();
   }
@@ -544,6 +554,8 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/admin/auth', (req, res, next) => adminAuthRoutes(req, res, next));
 app.use('/api/water-containers', waterContainerRoutes);
 app.use('/api/v2/measurements', waterIntakeRoutesV2);
+app.use('/api/soda-containers', sodaContainerRoutes);
+app.use('/api/v2/measurements', sodaIntakeRoutesV2);
 app.use('/api/v2/medications', medicationRoutesV2);
 app.use('/api/v2/symptoms', symptomRoutesV2);
 app.use('/api/v2/cycle', cycleRoutesV2);
@@ -568,6 +580,55 @@ app.get(
 );
 app.get('/api/api-docs/json', (_req, res) => res.json(swaggerSpecs));
 app.get('/api/api-docs', (_req, res) => res.redirect('/api/api-docs/swagger'));
+
+// Serve frontend static files if they exist
+const FRONTEND_DIST_DIR =
+  process.env.SPARKY_FITNESS_FRONTEND_DIST_PATH ||
+  path.join(__dirname, '../SparkyFitnessFrontend/dist');
+
+if (fs.existsSync(FRONTEND_DIST_DIR)) {
+  console.log(
+    `[Static] Serving frontend static files from: ${FRONTEND_DIST_DIR}`
+  );
+
+  // Serve static assets with a long cache expiration (1 year), similar to Nginx
+  app.use(
+    '/assets',
+    express.static(path.join(FRONTEND_DIST_DIR, 'assets'), {
+      maxAge: '1y',
+      immutable: true,
+      fallthrough: false, // If an asset is missing under /assets, don't fall through to index.html (return 404)
+    })
+  );
+
+  // Serve other static files (like favicon, icons, manifest etc.)
+  app.use(
+    express.static(FRONTEND_DIST_DIR, {
+      etag: true,
+      lastModified: true,
+    })
+  );
+
+  // Wildcard fallback for React SPA client-side routing
+  app.get(/(.*)/, (req, res, next) => {
+    // Only serve index.html for non-API, non-uploads, non-mcp routes
+    if (
+      req.path.startsWith('/api/') ||
+      req.path.startsWith('/uploads/') ||
+      req.path.startsWith('/mcp') ||
+      req.path === '/api' ||
+      req.path === '/uploads'
+    ) {
+      return next();
+    }
+    res.sendFile(path.join(FRONTEND_DIST_DIR, 'index.html'));
+  });
+} else {
+  console.log(
+    `[Static] Frontend static directory not found at ${FRONTEND_DIST_DIR}. Skipping static hosting.`
+  );
+}
+
 // Backup scheduling is handled by services/backupScheduler.ts
 // Session cleanup scheduling
 const scheduleSessionCleanup = async () => {
