@@ -1,9 +1,6 @@
-name: Auto Publish Unified Docker Image
+name: Publish Unified Docker Image
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 jobs:
