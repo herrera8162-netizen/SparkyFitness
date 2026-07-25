@@ -79,6 +79,8 @@ describe('mealRepository', () => {
           undefined,
           undefined,
           undefined,
+          null,
+          null,
         ]
       );
       // pg-format creates a single formatted string, not array parameters
@@ -376,6 +378,10 @@ describe('mealRepository', () => {
           undefined,
           undefined,
           undefined,
+          false,
+          null,
+          false,
+          null,
           mealId,
         ]
       );
@@ -436,6 +442,10 @@ describe('mealRepository', () => {
           undefined,
           undefined,
           undefined,
+          false,
+          null,
+          false,
+          null,
           mealId,
         ]
       );

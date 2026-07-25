@@ -13,13 +13,18 @@ import {
 } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
-import { Plus, X, Edit, Link2, Clock } from 'lucide-react';
+import { Plus, X, Edit, Link2, Clock, Sparkles } from 'lucide-react';
 import { useActiveUser } from '@/contexts/ActiveUserContext';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import { toast } from '@/hooks/use-toast';
 import { warn, error } from '@/utils/logging';
 import type { Food, FoodVariant, GlycemicIndex } from '@/types/food';
-import type { Meal, MealFood, MealPayload } from '@/types/meal';
+import type {
+  Meal,
+  MealFood,
+  MealPayload,
+  MealWeightResolution,
+} from '@/types/meal';
 import FoodUnitSelector from '@/components/FoodUnitSelector';
 import FoodSearchDialog from './FoodSearch/FoodSearchDialog';
 import MealUnitSelector from '@/pages/Foods/MealUnitSelector';
@@ -28,6 +33,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { toHourMinute, userHourMinute } from '@workspace/shared';
 import {
   mealViewOptions,
+  useAutoSumMealWeightMutation,
   useCreateMealMutation,
   useUpdateMealMutation,
 } from '@/hooks/Foods/useMeals';
@@ -40,6 +46,7 @@ import {
   useCreateFoodEntryMealMutation,
   useUpdateFoodEntryMealMutation,
 } from '@/hooks/Diary/useFoodEntries';
+import { useMealTypes } from '@/hooks/Diary/useMealTypes';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
@@ -137,6 +144,27 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
   const [servingUnit, setServingUnit] = useState<string>(
     initialServingUnit || 'serving'
   );
+  // Cooked weight (MEAL_WEIGHT_PLAN.md Phase 1/3): mass in grams of the whole
+  // finished dish. An alternate denominator alongside serving_size ×
+  // total_servings — lets a serving-based meal ALSO be logged by plate
+  // weight. Empty string means "not set" (meal-management mode only).
+  const [cookedWeightText, setCookedWeightText] = useState<string>('');
+  // Provenance of the current cookedWeightText value. 'auto_sum' when populated
+  // by the auto-sum action; flips to 'manual' as soon as the user hand-edits
+  // the field, so a later Save preserves the correct cooked_weight_source.
+  const [cookedWeightSource, setCookedWeightSource] = useState<
+    'manual' | 'auto_sum'
+  >('manual');
+  // Auto-sum in-flight flag and the last resolution result (per-ingredient
+  // breakdown shown under the field). Null until auto-sum has been run.
+  const [isAutoSumming, setIsAutoSumming] = useState(false);
+  const [autoSumResult, setAutoSumResult] =
+    useState<MealWeightResolution | null>(null);
+  // Diary-mode meal slot (breakfast/lunch/dinner/snacks/custom). Editable so a
+  // logged meal can be moved to a different slot; seeded from the prop.
+  const [mealTypeSelection, setMealTypeSelection] = useState<string>(
+    foodEntryMealType || ''
+  );
   // total_servings = how many portions the recipe yields (denominator alongside
   // serving_size in the uniform multiplier: quantity / (serving_size × total_servings)).
   // For serving-unit meals, this is what the user types directly.
@@ -181,19 +209,27 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
     unit: string;
     total_servings: number;
     legacy_serving_unit_math: boolean;
+    // cooked_weight_g (MEAL_WEIGHT_PLAN.md Phase 3): mass in grams of the
+    // template's whole finished dish, when set. Lets the food-diary unit
+    // selector below offer 'g' (plate weight) as an alternate to the
+    // template's native serving_unit.
+    cooked_weight_g: number | null;
   }>({
     id: null,
     size: 1,
     unit: 'serving',
     total_servings: 1,
     legacy_serving_unit_math: false,
+    cooked_weight_g: null,
   });
   const queryClient = useQueryClient();
 
   const { mutateAsync: updateMeal } = useUpdateMealMutation();
   const { mutateAsync: createMeal } = useCreateMealMutation();
+  const { mutateAsync: autoSumMealWeight } = useAutoSumMealWeightMutation();
   const { mutateAsync: createFoodEntryMeal } = useCreateFoodEntryMealMutation();
   const { mutateAsync: updateFoodEntryMeal } = useUpdateFoodEntryMealMutation();
+  const { data: availableMealTypes } = useMealTypes();
   // Tracks which source (meal/entry) has already seeded the form, so the load
   // effect seeds once per source and does NOT re-run when an unrelated
   // dependency changes (language, logging level, a new initialFoods array
@@ -241,6 +277,8 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                 (loadedServingSize * loadedTotalServings).toPrecision(15)
               ).toString()
             );
+            setCookedWeightText(meal.cooked_weight_g?.toString() || '');
+            setCookedWeightSource(meal.cooked_weight_source || 'manual');
             setMealFoods(meal.foods || []);
           }
         } catch (err) {
@@ -276,6 +314,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                     total_servings: templateMeal.total_servings || 1,
                     legacy_serving_unit_math:
                       loggedMeal.legacy_serving_unit_math === true,
+                    cooked_weight_g: templateMeal.cooked_weight_g ?? null,
                   });
                 } else {
                   // If template not found, still perserve ID for scaling
@@ -290,6 +329,9 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                     total_servings: 1,
                     legacy_serving_unit_math:
                       loggedMeal.legacy_serving_unit_math === true,
+                    // Template unavailable, so its cooked_weight_g can't be
+                    // known here; plate-weight switching stays unavailable.
+                    cooked_weight_g: null,
                   });
                 }
               } catch (err) {
@@ -306,6 +348,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                   total_servings: 1,
                   legacy_serving_unit_math:
                     loggedMeal.legacy_serving_unit_math === true,
+                  cooked_weight_g: null,
                 });
               }
             } else {
@@ -316,6 +359,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                 unit: 'serving',
                 total_servings: 1,
                 legacy_serving_unit_math: false,
+                cooked_weight_g: null,
               });
             }
           }
@@ -348,6 +392,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
               unit: meal.serving_unit || 'serving',
               total_servings: meal.total_servings || 1,
               legacy_serving_unit_math: false,
+              cooked_weight_g: meal.cooked_weight_g ?? null,
             });
           }
         } catch (err) {
@@ -361,6 +406,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
         // For new food-diary entries or when initialFoods are pre-loaded
         setMealFoods(initialFoods);
         setMealName(foodEntryMealType || 'Logged Meal');
+        setMealTypeSelection(foodEntryMealType || '');
         setMealDescription('');
         // Set template info based on props for scaling logic, defaults to 1 serving otherwise
         const initialSize = initialServingSize || 1;
@@ -371,6 +417,9 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
           unit: initialUnit,
           total_servings: 1,
           legacy_serving_unit_math: false,
+          // No meal record here (ad-hoc initialFoods), so no cooked_weight_g
+          // to offer plate-weight logging against.
+          cooked_weight_g: null,
         });
         // Also ensure state logic respects props if re-mounted or updated, but initial state handles first render.
         // If we want to support prop updates:
@@ -648,6 +697,79 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
     });
   };
 
+  // cooked_weight_g (MEAL_WEIGHT_PLAN.md Phase 3) is an alternate denominator:
+  // when the template has it set, a food-diary log can ALSO be entered as
+  // plate weight in grams, independent of the template's serving_unit. Only
+  // offer the choice when the two units actually differ — mirrors
+  // MealUnitSelector's canLogByPlateWeight.
+  const canLogByPlateWeight =
+    !!templateInfo.cooked_weight_g && templateInfo.unit !== 'g';
+
+  const handleDiaryUnitChange = (newUnit: string) => {
+    setServingUnit(newUnit);
+    // Reset the consumed quantity to a sensible default for the newly
+    // selected unit so a stale serving-count doesn't get interpreted as a
+    // gram amount (or vice versa).
+    if (newUnit === 'g' && templateInfo.cooked_weight_g) {
+      setServingSize(templateInfo.cooked_weight_g.toString());
+    } else {
+      setServingSize((templateInfo.size || 1).toString());
+    }
+  };
+
+  // Auto-sum: ask the server to resolve every ingredient to grams and total
+  // them into cooked_weight_g. Only available for a saved meal template with
+  // ingredients (the server reads them from the DB), so this is gated on mealId
+  // in the UI. The endpoint persists cooked_weight_g (source='auto_sum') itself;
+  // we mirror the total into the field and remember the provenance so a later
+  // Save doesn't downgrade it to 'manual'.
+  const handleAutoSumWeight = async () => {
+    if (!mealId) return;
+    setIsAutoSumming(true);
+    try {
+      const result = await autoSumMealWeight({ mealId });
+      setAutoSumResult(result);
+      if (result.cookedWeightUpdated) {
+        setCookedWeightText(
+          Number(result.totalGrams.toPrecision(15)).toString()
+        );
+        setCookedWeightSource('auto_sum');
+        toast({
+          title: t('mealBuilder.autoSumDoneTitle', 'Cooked weight updated'),
+          description: t(
+            'mealBuilder.autoSumDoneDescription',
+            'Summed {{count}} ingredient(s) to {{grams}}g.',
+            {
+              count: result.resolved.length,
+              grams: result.totalGrams.toFixed(1),
+            }
+          ),
+        });
+      } else {
+        toast({
+          title: t('mealBuilder.autoSumEmptyTitle', 'Nothing to sum'),
+          description: t(
+            'mealBuilder.autoSumEmptyDescription',
+            'No ingredients could be resolved to grams. Cooked weight was left unchanged.'
+          ),
+          variant: 'destructive',
+        });
+      }
+    } catch (err) {
+      error(loggingLevel, 'Auto-sum meal weight failed:', err);
+      toast({
+        title: t('mealBuilder.errorTitle', 'Error'),
+        description: t(
+          'mealBuilder.autoSumFailed',
+          'Could not auto-sum the cooked weight. Please try again.'
+        ),
+        variant: 'destructive',
+      });
+    } finally {
+      setIsAutoSumming(false);
+    }
+  };
+
   const handleSaveMeal = async () => {
     if (mealFoods.length === 0) {
       toast({
@@ -731,6 +853,26 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
           )
         );
       }
+
+      // cooked_weight_g is optional and independent of serving_unit; empty
+      // clears a previously-set value, a non-positive number is rejected.
+      let persistedCookedWeightG: number | null = null;
+      if (cookedWeightText.trim() !== '') {
+        const parsedCookedWeight = parseFloat(cookedWeightText);
+        if (!Number.isFinite(parsedCookedWeight) || parsedCookedWeight <= 0) {
+          toast({
+            title: t('mealBuilder.errorTitle', 'Error'),
+            description: t(
+              'mealBuilder.invalidCookedWeight',
+              'Cooked weight must be greater than zero.'
+            ),
+            variant: 'destructive',
+          });
+          return;
+        }
+        persistedCookedWeightG = parsedCookedWeight;
+      }
+
       const mealData: MealPayload = {
         name: mealName,
         description: mealDescription,
@@ -738,6 +880,10 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
         serving_size: persistedServingSize,
         serving_unit: servingUnit,
         total_servings: persistedTotalServings,
+        cooked_weight_g: persistedCookedWeightG,
+        cooked_weight_source: persistedCookedWeightG
+          ? cookedWeightSource
+          : null,
         foods: mealFoods.map((mf) => ({
           item_type: mf.item_type || 'food',
           food_id: mf.food_id,
@@ -781,7 +927,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
         error(loggingLevel, 'Error saving meal:', err);
       }
     } else if (source === 'food-diary') {
-      if (!foodEntryDate || !foodEntryMealType || !activeUserId) {
+      if (!foodEntryDate || !mealTypeSelection || !activeUserId) {
         error(loggingLevel, 'Missing foodEntry context for food-diary save.');
         toast({
           title: t('mealBuilder.errorTitle', 'Error'),
@@ -796,7 +942,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
 
       const foodEntryMealData = {
         meal_template_id: templateInfo.id, // Preserve template ID for proper scaling now that it has logic to handle missing template info
-        meal_type: foodEntryMealType,
+        meal_type: mealTypeSelection,
         entry_date: foodEntryDate,
         name: mealName.trim() || 'Custom Meal', // Use edited name or default
         description: mealDescription,
@@ -842,7 +988,19 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
     let multiplier = 1;
     if (source === 'food-diary' && templateInfo.id) {
       const qty = parseFloat(servingSize) || 1;
-      if (templateInfo.legacy_serving_unit_math && servingUnit === 'serving') {
+      // cooked_weight_g is an alternate denominator: a 'g' selection here
+      // means plate weight against the whole recipe's cooked mass, not the
+      // uniform serving_size × total_servings model. Mirrors the server-side
+      // multiplier in foodEntryService.ts.
+      if (servingUnit === 'g' && templateInfo.cooked_weight_g) {
+        multiplier =
+          templateInfo.cooked_weight_g > 0
+            ? qty / templateInfo.cooked_weight_g
+            : 1;
+      } else if (
+        templateInfo.legacy_serving_unit_math &&
+        servingUnit === 'serving'
+      ) {
         multiplier = qty;
       } else {
         const denominator =
@@ -986,6 +1144,26 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                           {t('mealBuilder.linkedMealBadge', 'Linked meal')}
                         </Badge>
                       )}
+                      {mf.weight_source === 'ai_estimated' && (
+                        <Badge
+                          variant="outline"
+                          className="flex items-center gap-1 text-amber-600 border-amber-400 dark:text-amber-400 dark:border-amber-600"
+                          title={t(
+                            'mealBuilder.aiEstimatedWeightTooltip',
+                            '{{weight}}g estimated by AI (confidence: {{confidence}}), not manually weighed',
+                            {
+                              weight: mf.resolved_weight_g,
+                              confidence: mf.weight_confidence,
+                            }
+                          )}
+                        >
+                          <Sparkles className="h-3 w-3" />
+                          {t(
+                            'mealBuilder.aiEstimatedWeightBadge',
+                            'AI-estimated weight'
+                          )}
+                        </Badge>
+                      )}
                     </div>
                     <div className="flex items-center space-x-1">
                       <Button
@@ -1062,7 +1240,27 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
 
         {source === 'food-diary' ? (
           // Diary mode: keep the existing "Quantity Consumed" + locked unit pair + time.
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="mealTypeSelection">
+                {t('mealBuilder.mealSlot', 'Meal')}
+              </Label>
+              <Select
+                value={mealTypeSelection}
+                onValueChange={setMealTypeSelection}
+              >
+                <SelectTrigger id="mealTypeSelection">
+                  <SelectValue placeholder="Select meal" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(availableMealTypes ?? []).map((mt) => (
+                    <SelectItem key={mt.id} value={mt.name}>
+                      {mt.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-2">
               <Label htmlFor="servingSize">
                 {t('mealBuilder.consumedQuantity', 'Quantity Consumed')}
@@ -1080,25 +1278,32 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
               <Label htmlFor="servingUnit">
                 {t('mealBuilder.servingUnit', 'Unit')}
               </Label>
-              <Select
-                value={servingUnit}
-                onValueChange={setServingUnit}
-                disabled
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Unit" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="serving">serving</SelectItem>
-                  <SelectItem value="g">grams (g)</SelectItem>
-                  <SelectItem value="ml">milliliters (ml)</SelectItem>
-                  <SelectItem value="oz">ounces (oz)</SelectItem>
-                  <SelectItem value="cup">cup</SelectItem>
-                  <SelectItem value="tbsp">tablespoon (tbsp)</SelectItem>
-                  <SelectItem value="tsp">teaspoon (tsp)</SelectItem>
-                  <SelectItem value="piece">piece</SelectItem>
-                </SelectContent>
-              </Select>
+              {canLogByPlateWeight ? (
+                <Select
+                  value={servingUnit}
+                  onValueChange={handleDiaryUnitChange}
+                >
+                  <SelectTrigger id="servingUnit">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={templateInfo.unit}>
+                      {templateInfo.unit}
+                    </SelectItem>
+                    <SelectItem value="g">
+                      {t('mealUnitSelector.plateWeight', 'Plate weight (g)')}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  id="servingUnit"
+                  type="text"
+                  value={servingUnit}
+                  disabled
+                  className="bg-muted"
+                />
+              )}
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -1257,6 +1462,109 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                   />
                 </div>
                 <div />
+              </div>
+            )}
+            {/* cooked_weight_g is an alternate denominator alongside
+                serving_size × total_servings, independent of serving_unit —
+                shown regardless of which unit is selected above. */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="cookedWeight">
+                  {t('mealBuilder.cookedWeight', 'Cooked Weight (g)')}
+                </Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="cookedWeight"
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={cookedWeightText}
+                    onChange={(e) => {
+                      setCookedWeightText(e.target.value);
+                      // A hand-edit makes the value manual again, even if it was
+                      // just populated by auto-sum.
+                      setCookedWeightSource('manual');
+                    }}
+                    placeholder={t(
+                      'mealBuilder.cookedWeightPlaceholder',
+                      'Optional'
+                    )}
+                  />
+                  {/* Auto-sum only works on a saved meal with ingredients — the
+                      server resolves them from the DB. */}
+                  {mealId && mealFoods.length > 0 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      disabled={isAutoSumming}
+                      onClick={handleAutoSumWeight}
+                    >
+                      <Sparkles className="h-4 w-4 mr-1" />
+                      {isAutoSumming
+                        ? t('mealBuilder.autoSumming', 'Summing…')
+                        : t('mealBuilder.autoSum', 'Auto-sum')}
+                    </Button>
+                  )}
+                </div>
+                {cookedWeightSource === 'auto_sum' &&
+                  cookedWeightText.trim() !== '' && (
+                    <Badge variant="secondary" className="text-xs">
+                      {t('mealBuilder.cookedWeightAutoSummed', 'Auto-summed')}
+                    </Badge>
+                  )}
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    'mealBuilder.cookedWeightHelp',
+                    'Weigh the finished dish, minus the pan. Lets you log a partial plate by weight without giving up serving-based portions.'
+                  )}
+                </p>
+                {mealId && mealFoods.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {t(
+                      'mealBuilder.autoSumHelp',
+                      'Or Auto-sum to estimate it from ingredient weights (AI fills gaps for volume/count units).'
+                    )}
+                  </p>
+                )}
+              </div>
+              <div />
+            </div>
+            {/* Per-ingredient breakdown from the last auto-sum run. */}
+            {autoSumResult && (
+              <div className="rounded-md border border-border p-3 space-y-1 text-xs">
+                <p className="font-medium">
+                  {t('mealBuilder.autoSumBreakdown', 'Auto-sum breakdown')}
+                </p>
+                {autoSumResult.resolved.map((r) => (
+                  <div
+                    key={r.mealFoodId}
+                    className="flex justify-between gap-2"
+                  >
+                    <span className="text-muted-foreground truncate">
+                      {r.foodName}
+                      {r.source === 'ai_estimated' &&
+                        ` (${t('mealBuilder.autoSumAiTag', 'AI')}${
+                          r.confidence ? `, ${r.confidence}` : ''
+                        })`}
+                    </span>
+                    <span>{r.weightG.toFixed(1)}g</span>
+                  </div>
+                ))}
+                {autoSumResult.unresolved.map((u) => (
+                  <div
+                    key={u.mealFoodId}
+                    className="flex justify-between gap-2 text-destructive"
+                  >
+                    <span className="truncate">{u.foodName}</span>
+                    <span className="shrink-0">{u.reason}</span>
+                  </div>
+                ))}
+                <div className="flex justify-between gap-2 font-medium border-t border-border pt-1 mt-1">
+                  <span>{t('mealBuilder.autoSumTotal', 'Total')}</span>
+                  <span>{autoSumResult.totalGrams.toFixed(1)}g</span>
+                </div>
               </div>
             )}
           </div>
@@ -1422,7 +1730,9 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
         </Button>
         <Button onClick={handleSaveMeal}>
           {source === 'food-diary'
-            ? t('mealBuilder.updateEntryButton', 'Update Entry')
+            ? foodEntryId
+              ? t('mealBuilder.updateEntryButton', 'Update Entry')
+              : t('mealBuilder.addToMealButton', 'Add to Meal')
             : t('mealBuilder.saveMealButton', 'Save Meal')}
         </Button>
       </div>

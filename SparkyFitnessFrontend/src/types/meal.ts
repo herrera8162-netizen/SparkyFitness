@@ -9,6 +9,13 @@ export interface Meal {
   serving_size?: number;
   serving_unit?: string;
   total_servings?: number;
+  // Mass in grams of the full recipe as finished/cooked. An alternate
+  // denominator alongside serving_size × total_servings: when set, this meal
+  // may also be logged by plate weight in grams regardless of serving_unit.
+  cooked_weight_g?: number | null;
+  // How cooked_weight_g was set: 'manual' (typed by the user) or 'auto_sum'
+  // (computed from ingredient weights via the auto_sum_meal_weight MCP action).
+  cooked_weight_source?: 'manual' | 'auto_sum' | null;
   foods?: MealFood[];
   // ISO timestamp of when the current user starred this meal. Present only on
   // items returned by the favorites endpoint; used to order the Favorites list.
@@ -54,6 +61,11 @@ export interface MealFood {
   custom_nutrients?: Record<string, string | number>;
   serving_size?: number;
   serving_unit?: string;
+  // Gram weight last resolved by the auto_sum_meal_weight MCP action, and its
+  // provenance. Null/absent until auto-sum has run for this ingredient.
+  resolved_weight_g?: number | null;
+  weight_source?: 'deterministic' | 'ai_estimated' | null;
+  weight_confidence?: 'high' | 'medium' | 'low' | null;
 }
 
 export interface MealPayload {
@@ -63,6 +75,8 @@ export interface MealPayload {
   serving_size?: number;
   serving_unit?: string;
   total_servings?: number;
+  cooked_weight_g?: number | null;
+  cooked_weight_source?: 'manual' | 'auto_sum' | null;
   foods: MealFoodPayload[];
 }
 
@@ -124,6 +138,33 @@ export interface MealPlanTemplate {
 export interface MealDeletionImpact {
   usedByOtherUsers: boolean;
   usedByCurrentUser: boolean;
+}
+
+// Result of POST /meals/:id/auto-sum-weight — mirrors the server's
+// MealWeightResolution (services/mealService.ts). Each ingredient is either
+// resolved to grams or reported back unresolved with a reason.
+export interface ResolvedIngredientWeight {
+  mealFoodId: string;
+  foodName: string;
+  quantity: number;
+  unit: string;
+  weightG: number;
+  source: 'deterministic' | 'ai_estimated';
+  confidence?: 'high' | 'medium' | 'low';
+}
+
+export interface UnresolvedIngredientWeight {
+  mealFoodId: string;
+  foodName: string;
+  reason: string;
+}
+
+export interface MealWeightResolution {
+  mealName: string;
+  resolved: ResolvedIngredientWeight[];
+  unresolved: UnresolvedIngredientWeight[];
+  totalGrams: number;
+  cookedWeightUpdated: boolean;
 }
 
 // New interface for FoodEntryMeal
