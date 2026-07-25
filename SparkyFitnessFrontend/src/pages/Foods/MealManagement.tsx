@@ -33,6 +33,8 @@ import {
   DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu';
 import { usePreferences } from '@/contexts/PreferencesContext';
+import { useActiveUser } from '@/contexts/ActiveUserContext';
+import { useAuth } from '@/hooks/useAuth';
 import { error } from '@/utils/logging';
 import type { Meal, MealFilter, MealFood, MealPayload } from '@/types/meal';
 import type { MealDeletionImpact } from '@/types/meal';
@@ -82,6 +84,8 @@ import {
 const MealManagement: React.FC = () => {
   const { t } = useTranslation();
   const { loggingLevel } = usePreferences();
+  const { user } = useAuth();
+  const { hasWritePermission } = useActiveUser();
   const [searchTerm, setSearchTerm] = useState('');
   const [filter, setFilter] = useState<MealFilter>('all');
   const [editingMealId, setEditingMealId] = useState<string | undefined>(
@@ -173,7 +177,19 @@ const MealManagement: React.FC = () => {
   const queryClient = useQueryClient();
   const invalidateMeals = useMealInvalidation();
 
-  const editableMealIds = (filteredMeals || []).map((m) => m.id!);
+  // Meals are a Tier 2 exception: a delegate with can_manage_diary access to
+  // the meal's owner may write to it too, not just the owner (mirrors
+  // useFoodDatabaseManager's canEdit for foods).
+  const canEdit = React.useCallback(
+    (meal: Meal) =>
+      !!meal.user_id &&
+      (meal.user_id === user?.id || hasWritePermission('diary', meal.user_id)),
+    [user?.id, hasWritePermission]
+  );
+
+  const editableMealIds = (filteredMeals || [])
+    .filter((m) => canEdit(m))
+    .map((m) => m.id!);
 
   const allSelected =
     editableMealIds.length > 0 && selectedCount === editableMealIds.length;
@@ -360,6 +376,7 @@ const MealManagement: React.FC = () => {
             checked={row.getIsSelected()}
             onCheckedChange={(value) => row.toggleSelected(!!value)}
             aria-label="Select row"
+            disabled={!canEdit(row.original)}
           />
         ),
         enableSorting: false,
@@ -466,6 +483,7 @@ const MealManagement: React.FC = () => {
         header: t('common.actions', 'Actions'),
         cell: ({ row }) => {
           const meal = row.original;
+          const isEditable = canEdit(meal);
           return (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -482,7 +500,10 @@ const MealManagement: React.FC = () => {
                   <Eye className="mr-2 h-4 w-4" />
                   {t('mealManagement.viewMealDetails', 'View Details')}
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleEditMeal(meal.id!)}>
+                <DropdownMenuItem
+                  disabled={!isEditable}
+                  onClick={() => handleEditMeal(meal.id!)}
+                >
                   <Edit className="mr-2 h-4 w-4" />
                   {t('mealManagement.editMeal', 'Edit Meal')}
                 </DropdownMenuItem>
@@ -516,6 +537,7 @@ const MealManagement: React.FC = () => {
                     : t('mealManagement.addToFavorites', 'Add to favorites')}
                 </DropdownMenuItem>
                 <DropdownMenuItem
+                  disabled={!isEditable}
                   onClick={() =>
                     meal.is_public
                       ? handleUnshareMeal(meal.id!)
@@ -536,6 +558,7 @@ const MealManagement: React.FC = () => {
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
+                  disabled={!isEditable}
                   className="text-destructive focus:text-destructive"
                   onClick={() => openDeleteConfirmation(meal.id!)}
                 >
@@ -553,6 +576,7 @@ const MealManagement: React.FC = () => {
       visibleNutrients,
       energyUnit,
       convertEnergy,
+      canEdit,
       handleEditMeal,
       handleDuplicateMeal,
       openDeleteConfirmation,
@@ -698,7 +722,7 @@ const MealManagement: React.FC = () => {
             selectAll(editableMealIds);
             const newSelection: RowSelectionState = {};
             filteredMeals.forEach((meal, index) => {
-              if (meal.id) newSelection[index] = true;
+              if (meal.id && canEdit(meal)) newSelection[index] = true;
             });
             setRowSelection(newSelection);
           } else {

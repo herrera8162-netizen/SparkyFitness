@@ -45,6 +45,7 @@ async function updateUserPreferences(userId: any, preferenceData: any) {
         active_vision_ai_service_id = CASE WHEN $42 THEN $41 ELSE active_vision_ai_service_id END,
         measurement_decimal_places = COALESCE($40, measurement_decimal_places),
         added_sugar_algorithm = COALESCE($43, added_sugar_algorithm),
+        soda_display_unit = COALESCE($45, soda_display_unit),
         updated_at = now()
       WHERE user_id = $28
       RETURNING *`,
@@ -93,6 +94,7 @@ async function updateUserPreferences(userId: any, preferenceData: any) {
         'active_vision_ai_service_id' in preferenceData,
         preferenceData.added_sugar_algorithm,
         preferenceData.time_format,
+        preferenceData.soda_display_unit,
       ]
     );
     return result.rows[0];
@@ -179,6 +181,7 @@ async function upsertUserPreferences(preferenceData: any) {
        measurement_decimal_places,
        active_vision_ai_service_id,
        added_sugar_algorithm,
+       soda_display_unit,
        created_at, updated_at
      ) VALUES (
        $1, COALESCE($2, 'yyyy-MM-dd'), COALESCE($44, 'HH:mm'), COALESCE($3, 'lbs'), COALESCE($4, 'in'), COALESCE($5, 'km'),
@@ -204,6 +207,7 @@ async function upsertUserPreferences(preferenceData: any) {
        COALESCE($40, 0),
        $41,
        COALESCE($43, 'WHO_IDEAL'),
+       COALESCE($45, 'ml'),
        now(), now()
      )
      ON CONFLICT (user_id) DO UPDATE SET
@@ -247,6 +251,7 @@ async function upsertUserPreferences(preferenceData: any) {
        measurement_decimal_places = COALESCE(EXCLUDED.measurement_decimal_places, user_preferences.measurement_decimal_places),
        added_sugar_algorithm = COALESCE(EXCLUDED.added_sugar_algorithm, user_preferences.added_sugar_algorithm),
        time_format = COALESCE($44, user_preferences.time_format),
+       soda_display_unit = COALESCE(EXCLUDED.soda_display_unit, user_preferences.soda_display_unit),
        updated_at = now()
      RETURNING *`,
       [
@@ -294,6 +299,7 @@ async function upsertUserPreferences(preferenceData: any) {
         'active_vision_ai_service_id' in preferenceData,
         preferenceData.added_sugar_algorithm,
         preferenceData.time_format,
+        preferenceData.soda_display_unit,
       ]
     );
     return result.rows[0];
