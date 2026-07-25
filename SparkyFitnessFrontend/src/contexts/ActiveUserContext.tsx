@@ -14,7 +14,7 @@ interface ActiveUserContextType {
   switchToUser: (userId: string | null) => Promise<void>;
   loadAccessibleUsers: () => void;
   hasPermission: (permission: string) => boolean;
-  hasWritePermission: (permission: string) => boolean;
+  hasWritePermission: (permission: string, targetUserId?: string) => boolean;
 }
 
 const ActiveUserContext = createContext<ActiveUserContextType | undefined>(
@@ -99,12 +99,13 @@ export const ActiveUserProvider: React.FC<{ children: React.ReactNode }> = ({
   );
 
   const hasWritePermission = useCallback(
-    (permission: string): boolean => {
-      if (!user || !activeUserId) return false;
-      if (activeUserId === user.id) return true;
+    (permission: string, targetUserId?: string): boolean => {
+      const resolvedTargetUserId = targetUserId ?? activeUserId;
+      if (!user || !resolvedTargetUserId) return false;
+      if (resolvedTargetUserId === user.id) return true;
 
       const accessibleUser = accessibleUsers.find(
-        (u) => u.user_id === activeUserId
+        (u) => u.user_id === resolvedTargetUserId
       );
 
       return (

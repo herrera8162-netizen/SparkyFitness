@@ -45,6 +45,14 @@ async function createFoodVariant(variantData: any, userId: any) {
         variantData.traces ?? null,
       ]
     );
+    // If this variant is created as default, ensure all other variants for
+    // this food_id are demoted so the food keeps exactly one default.
+    if (variantData.is_default) {
+      await client.query(
+        'UPDATE food_variants SET is_default = FALSE WHERE food_id = $1 AND id != $2',
+        [variantData.food_id, result.rows[0].id]
+      );
+    }
     return result.rows[0];
   } finally {
     client.release();
