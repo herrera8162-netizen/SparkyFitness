@@ -5,6 +5,7 @@ import type {
   MealPlanTemplate,
   MealDeletionImpact,
   MealFilter,
+  MealWeightResolution,
 } from '@/types/meal';
 
 export const createMeal = async (mealData: MealPayload): Promise<Meal> => {
@@ -56,6 +57,16 @@ export const updateMeal = async (
   mealData: Partial<MealPayload>
 ): Promise<Meal> => {
   return await apiCall(`/meals/${mealId}`, { method: 'PUT', body: mealData });
+};
+
+// Computes cooked_weight_g as the sum of every ingredient's weight in grams
+// (deterministic for weight units, AI-estimated for volume/count units) and
+// persists it on the meal with cooked_weight_source='auto_sum'. Only valid for
+// a saved meal template that already has ingredients.
+export const autoSumMealWeight = async (
+  mealId: string
+): Promise<MealWeightResolution> => {
+  return await apiCall(`/meals/${mealId}/auto-sum-weight`, { method: 'POST' });
 };
 
 export const deleteMeal = async (

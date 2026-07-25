@@ -1,5 +1,6 @@
 import { foodKeys, mealKeys } from '@/api/keys/meals';
 import {
+  autoSumMealWeight,
   createMeal,
   deleteMeal,
   getMealById,
@@ -155,6 +156,21 @@ export const useUpdateMealMutation = () => {
         'mealManagement.mealUpdatedSuccessfully',
         'Meal updated successfully.'
       ),
+    },
+  });
+};
+// Auto-sums a saved meal template's cooked weight from its ingredient weights.
+// The endpoint persists cooked_weight_g itself; the caller handles the
+// result-specific toasts, so no meta success/error message here. Invalidates
+// the meal cache so the refreshed cooked weight/provenance is reflected.
+export const useAutoSumMealWeightMutation = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ mealId }: { mealId: string }) => autoSumMealWeight(mealId),
+    onSuccess: () => {
+      return queryClient.invalidateQueries({
+        queryKey: mealKeys.all,
+      });
     },
   });
 };

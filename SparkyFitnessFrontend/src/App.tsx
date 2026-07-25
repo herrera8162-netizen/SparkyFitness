@@ -9,6 +9,7 @@ import { ChatbotVisibilityProvider } from '@/contexts/ChatbotVisibilityContext';
 import { ChatToolCategoriesProvider } from '@/contexts/ChatToolCategoriesContext';
 import LanguageHandler from '@/components/LanguageHandler';
 import { WaterContainerProvider } from '@/contexts/WaterContainerContext';
+import { SodaContainerProvider } from '@/contexts/SodaContainerContext';
 import {
   ActiveUserProvider,
   useActiveUser,
@@ -177,99 +178,101 @@ const Root = () => {
           <ThemeProvider>
             <ActiveUserProvider>
               <WaterContainerProvider>
-                <LanguageHandler />
-                <AppSetup
-                  setLatestRelease={setLatestRelease}
-                  setShowNewReleaseDialog={setShowNewReleaseDialog}
-                  setAnnouncement={setAnnouncement}
-                  setShowAnnouncementDialog={setShowAnnouncementDialog}
-                />
-                <Suspense
-                  fallback={
-                    <div className="min-h-screen flex items-center justify-center">
-                      Loading Site...
-                    </div>
-                  }
-                >
-                  <Outlet
-                    context={{
-                      setShowAboutDialog,
-                      setShowNewReleaseDialog: handleShowNewReleaseDialog,
-                    }}
+                <SodaContainerProvider>
+                  <LanguageHandler />
+                  <AppSetup
+                    setLatestRelease={setLatestRelease}
+                    setShowNewReleaseDialog={setShowNewReleaseDialog}
+                    setAnnouncement={setAnnouncement}
+                    setShowAnnouncementDialog={setShowAnnouncementDialog}
                   />
-                </Suspense>
-                <ErrorBoundary
-                  fallback={<ComponentFallback />}
-                  onError={(error, { componentStack }) => {
-                    logError(
-                      getUserLoggingLevel(),
-                      'DraggableChatbotButton failed:',
-                      error,
-                      componentStack
-                    );
-                  }}
-                >
-                  <DraggableChatbotButton />
-                </ErrorBoundary>
-                <ErrorBoundary
-                  fallback={<ComponentFallback />}
-                  onError={(error, { componentStack }) => {
-                    logError(
-                      getUserLoggingLevel(),
-                      'DraggableChatbotButton failed:',
-                      error,
-                      componentStack
-                    );
-                  }}
-                >
-                  <AboutDialog
-                    isOpen={showAboutDialog}
-                    onClose={() => setShowAboutDialog(false)}
-                    version={appVersion?.version ?? ''}
-                  />
-                </ErrorBoundary>
-                <ErrorBoundary
-                  fallback={<ComponentFallback />}
-                  onError={(error, { componentStack }) => {
-                    logError(
-                      getUserLoggingLevel(),
-                      'DraggableChatbotButton failed:',
-                      error,
-                      componentStack
-                    );
-                  }}
-                >
-                  <NewReleaseDialog
-                    key={
-                      showNewReleaseDialog
-                        ? latestRelease?.version || 'open'
-                        : 'closed'
+                  <Suspense
+                    fallback={
+                      <div className="min-h-screen flex items-center justify-center">
+                        Loading Site...
+                      </div>
                     }
-                    isOpen={showNewReleaseDialog}
-                    onClose={() => setShowNewReleaseDialog(false)}
-                    releaseInfo={latestRelease}
-                    onDismissForVersion={handleDismissRelease}
-                  />
-                </ErrorBoundary>
-                <ErrorBoundary
-                  fallback={<ComponentFallback />}
-                  onError={(error, { componentStack }) => {
-                    logError(
-                      getUserLoggingLevel(),
-                      'AnnouncementDialog failed:',
-                      error,
-                      componentStack
-                    );
-                  }}
-                >
-                  <AnnouncementDialog
-                    isOpen={showAnnouncementDialog}
-                    onClose={() => setShowAnnouncementDialog(false)}
-                    announcement={announcement}
-                    onDismiss={handleDismissAnnouncement}
-                  />
-                </ErrorBoundary>
-                <Toaster />
+                  >
+                    <Outlet
+                      context={{
+                        setShowAboutDialog,
+                        setShowNewReleaseDialog: handleShowNewReleaseDialog,
+                      }}
+                    />
+                  </Suspense>
+                  <ErrorBoundary
+                    fallback={<ComponentFallback />}
+                    onError={(error, { componentStack }) => {
+                      logError(
+                        getUserLoggingLevel(),
+                        'DraggableChatbotButton failed:',
+                        error,
+                        componentStack
+                      );
+                    }}
+                  >
+                    <DraggableChatbotButton />
+                  </ErrorBoundary>
+                  <ErrorBoundary
+                    fallback={<ComponentFallback />}
+                    onError={(error, { componentStack }) => {
+                      logError(
+                        getUserLoggingLevel(),
+                        'DraggableChatbotButton failed:',
+                        error,
+                        componentStack
+                      );
+                    }}
+                  >
+                    <AboutDialog
+                      isOpen={showAboutDialog}
+                      onClose={() => setShowAboutDialog(false)}
+                      version={appVersion?.version ?? ''}
+                    />
+                  </ErrorBoundary>
+                  <ErrorBoundary
+                    fallback={<ComponentFallback />}
+                    onError={(error, { componentStack }) => {
+                      logError(
+                        getUserLoggingLevel(),
+                        'DraggableChatbotButton failed:',
+                        error,
+                        componentStack
+                      );
+                    }}
+                  >
+                    <NewReleaseDialog
+                      key={
+                        showNewReleaseDialog
+                          ? latestRelease?.version || 'open'
+                          : 'closed'
+                      }
+                      isOpen={showNewReleaseDialog}
+                      onClose={() => setShowNewReleaseDialog(false)}
+                      releaseInfo={latestRelease}
+                      onDismissForVersion={handleDismissRelease}
+                    />
+                  </ErrorBoundary>
+                  <ErrorBoundary
+                    fallback={<ComponentFallback />}
+                    onError={(error, { componentStack }) => {
+                      logError(
+                        getUserLoggingLevel(),
+                        'AnnouncementDialog failed:',
+                        error,
+                        componentStack
+                      );
+                    }}
+                  >
+                    <AnnouncementDialog
+                      isOpen={showAnnouncementDialog}
+                      onClose={() => setShowAnnouncementDialog(false)}
+                      announcement={announcement}
+                      onDismiss={handleDismissAnnouncement}
+                    />
+                  </ErrorBoundary>
+                  <Toaster />
+                </SodaContainerProvider>
               </WaterContainerProvider>
             </ActiveUserProvider>
           </ThemeProvider>
