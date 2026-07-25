@@ -135,6 +135,8 @@ export interface MealInput {
   serving_unit?: string | null;
   total_servings?: unknown;
   images?: string[] | null;
+  cooked_weight_g?: unknown;
+  cooked_weight_source?: unknown;
   foods?: MealFoodInput[];
 }
 
