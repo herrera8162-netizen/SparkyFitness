@@ -29,7 +29,7 @@ import { useQueryClient } from '@tanstack/react-query';
 export function useFoodDatabaseManager() {
   const { t } = useTranslation();
   const { user } = useAuth();
-  const { activeUserId } = useActiveUser();
+  const { activeUserId, hasWritePermission } = useActiveUser();
   const { nutrientDisplayPreferences, loggingLevel, timezone } =
     usePreferences();
   const isMobile = useIsMobile();
@@ -85,7 +85,12 @@ export function useFoodDatabaseManager() {
     ? Math.ceil(foodData.totalCount / itemsPerPage)
     : 0;
 
-  const canEdit = (food: Food) => food.user_id === user?.id;
+  // Foods are a Tier 2 exception: a delegate with can_manage_diary access to
+  // the food's owner may write to it too, not just the owner (see
+  // db_schema_backup.sql / database-security-tiers.md).
+  const canEdit = (food: Food) =>
+    !!food.user_id &&
+    (food.user_id === user?.id || hasWritePermission('diary', food.user_id));
 
   const handleSearchChange = (term: string) => {
     setSearchTerm(term);
