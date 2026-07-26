@@ -147,8 +147,20 @@ const createFoodSchema = z
       .describe(
         "Create a food. AI clients: you MUST search the web and populate as many micro-nutrients (fat details, fiber, sugar, sodium, potassium, calcium, iron, vitamins), GI classification, and brand ('Homemade' or 'Traditional' if generic) as possible rather than just core macros."
       ),
-    food_name: z.string().min(1).max(200).describe('Name of the new food item'),
-    brand: z.string().max(200).optional().describe('Brand name of the food'),
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe(
+        'Name of the new food item. CRITICAL: Do NOT include the brand inside food_name (e.g. use "Tomato Paste", NOT "Tomato Paste, Great Value" or "Great Value Tomato Paste"). Place the brand name strictly in the dedicated brand field.'
+      ),
+    brand: z
+      .string()
+      .max(200)
+      .optional()
+      .describe(
+        'Brand name of the food (e.g. "Great Value", "Nutter Butter"). Always separate brand into this field rather than combining it into food_name.'
+      ),
     calories: z.coerce.number().min(0).describe('Calories (kcal)'),
     protein: z.coerce.number().min(0).describe('Protein (g)'),
     carbs: z.coerce.number().min(0).describe('Carbohydrates (g)'),
