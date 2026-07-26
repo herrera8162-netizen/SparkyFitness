@@ -10,7 +10,9 @@ import { deriveAiNetworkPolicy } from '../utils/outboundUrlPolicy.js';
 const LABEL_SCAN_PROMPT =
   'Extract the nutrition facts from this food label image. ' +
   'Return a JSON object with these fields: ' +
-  'name (string), brand (string), serving_size (number), ' +
+  'name (string; the food item name alone — NEVER include the brand inside name, e.g. "Tomato Paste" NOT "Great Value Tomato Paste"), ' +
+  'brand (string; the brand name alone, e.g. "Great Value", "Nutter Butter"), ' +
+  'serving_size (number), ' +
   "serving_unit (string; the primary unit shown on the label for the serving size, e.g. 'g', 'ml', 'oz'; prefer weight in 'g' or volume in 'ml' for liquids), " +
   'calories (number), protein (number in grams), carbs (number in grams), fat (number in grams), ' +
   'fiber (number in grams), saturated_fat (number in grams), trans_fat (number in grams), ' +
