@@ -1276,6 +1276,58 @@ describe('log_food', () => {
       'Error [VALIDATION]: Food or variant not found for snapshotting.'
     );
   });
+  it('converts units automatically when requested unit is compatible with variant unit (e.g. oz to g)', async () => {
+    vi.mocked(foodRepository.getFoodById).mockResolvedValue({
+      id: FOOD_ID,
+      name: 'Chicken Breast',
+      default_variant: {
+        id: VARIANT_ID,
+        serving_unit: 'g',
+        serving_size: 100,
+        calories: 165,
+      },
+    } as any);
+    vi.mocked(foodRepository.getFoodVariantsByFoodId).mockResolvedValue([
+      {
+        id: VARIANT_ID,
+        serving_unit: 'g',
+        serving_size: 100,
+        calories: 165,
+      } as any,
+    ]);
+    vi.mocked(foodEntryService.createFoodEntry).mockResolvedValue({
+      id: 'entry-123',
+      food_name: 'Chicken Breast',
+      food_id: FOOD_ID,
+    } as any);
+
+    // User asks for 3.5 oz of chicken breast, where the variant is 100g.
+    // 3.5 oz = 3.5 * 28.3495 g = 99.22325 g.
+    // 99.22325 g / 100 g per serving = 0.9922325 servings of 100g variant.
+    const result = await tools.sparky_manage_food.execute!(
+      {
+        action: 'log_food',
+        food_name: 'Chicken Breast',
+        food_id: FOOD_ID,
+        quantity: 3.5,
+        unit: 'oz',
+        meal_type: 'lunch',
+      },
+      opts
+    );
+
+    expect(result).toContain('Logged "Chicken Breast" (0.9922325 g)');
+    expect(foodEntryService.createFoodEntry).toHaveBeenCalledWith(
+      'user-1',
+      'user-1',
+      expect.objectContaining({
+        food_id: FOOD_ID,
+        variant_id: VARIANT_ID,
+        quantity: expect.closeTo(0.9922325, 4),
+        unit: 'g',
+      })
+    );
+  });
 });
 
 describe('log_external_food', () => {

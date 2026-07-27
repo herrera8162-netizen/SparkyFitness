@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { addDays, todayInZone } from '@workspace/shared';
+import { addDays, todayInZone, getConversionFactor } from '@workspace/shared';
 import { log } from '../../config/logging.js';
 import foodCoreService from '../../services/foodCoreService.js';
 import foodEntryService from '../../services/foodEntryService.js';
@@ -302,6 +302,19 @@ function resolveQuantityForVariantUnit(args: {
       quantity: args.requestedQuantity,
       unit: args.variant.serving_unit,
     };
+  }
+
+  if (requestedUnit && variantUnit) {
+    const factor = getConversionFactor(variantUnit, requestedUnit);
+    if (factor !== null) {
+      const convertedQuantity = args.requestedQuantity * factor;
+      const servingSize = Number(args.variant.serving_size) || 1;
+      const finalQuantity = convertedQuantity / servingSize;
+      return {
+        quantity: finalQuantity,
+        unit: args.variant.serving_unit,
+      };
+    }
   }
 
   return null;
