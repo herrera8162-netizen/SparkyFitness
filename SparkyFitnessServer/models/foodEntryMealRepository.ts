@@ -20,6 +20,8 @@ interface FoodEntryMealInput {
   quantity?: number | null;
   unit?: string | null;
   legacy_serving_unit_math?: boolean;
+  cooked_weight_g?: number | null;
+  cooked_weight_source?: 'manual' | 'auto_sum' | null;
 }
 
 /** The subset of fields an update may change. */
@@ -54,10 +56,10 @@ async function createFoodEntryMeal(
     const result = await client.query(
       `INSERT INTO food_entry_meals (
                 user_id, meal_template_id, meal_type_id, entry_date, entry_time, name, description,
-                quantity, unit, legacy_serving_unit_math,
+                quantity, unit, legacy_serving_unit_math, cooked_weight_g, cooked_weight_source,
                 created_by_user_id, updated_by_user_id, images
             ) VALUES (
-              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
               COALESCE(
                 (SELECT m.images FROM meals m WHERE m.id = $2),
                 '[]'::jsonb
@@ -75,6 +77,8 @@ async function createFoodEntryMeal(
         foodEntryMealData.quantity,
         foodEntryMealData.unit,
         foodEntryMealData.legacy_serving_unit_math ?? false,
+        foodEntryMealData.cooked_weight_g ?? null,
+        foodEntryMealData.cooked_weight_source ?? null,
         createdByUserId,
         createdByUserId,
       ]
@@ -122,6 +126,8 @@ async function updateFoodEntryMeal(
                 -- COALESCE cannot clear a value; $10 flags whether entry_time
                 -- was provided so an explicit null clears it.
                 entry_time = CASE WHEN $10::boolean THEN $11::time ELSE entry_time END,
+                cooked_weight_g = CASE WHEN $12::boolean THEN $13::numeric ELSE cooked_weight_g END,
+                cooked_weight_source = CASE WHEN $12::boolean THEN $14::text ELSE cooked_weight_source END,
                 updated_at = CURRENT_TIMESTAMP,
                 updated_by_user_id = $8
             WHERE id = $9
@@ -138,6 +144,9 @@ async function updateFoodEntryMeal(
         foodEntryMealId,
         foodEntryMealData.entry_time !== undefined,
         foodEntryMealData.entry_time ?? null,
+        foodEntryMealData.cooked_weight_g !== undefined,
+        foodEntryMealData.cooked_weight_g ?? null,
+        foodEntryMealData.cooked_weight_source ?? null,
       ]
     );
     if (result.rows.length === 0) {
@@ -176,6 +185,8 @@ async function getFoodEntryMealById(foodEntryMealId: string, userId: string) {
             fem.quantity,
             fem.unit,
             fem.legacy_serving_unit_math,
+            fem.cooked_weight_g,
+            fem.cooked_weight_source,
             fem.created_at,
             fem.updated_at,
             fem.created_by_user_id,
@@ -223,6 +234,8 @@ async function getFoodEntryMealsByDate(userId: string, selectedDate: string) {
             fem.quantity,
             fem.unit,
             fem.legacy_serving_unit_math,
+            fem.cooked_weight_g,
+            fem.cooked_weight_source,
             fem.created_at,
             fem.updated_at,
             fem.created_by_user_id,

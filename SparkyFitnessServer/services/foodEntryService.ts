@@ -85,6 +85,8 @@ interface LoggedMealInput {
   quantity?: unknown;
   unit?: string | null;
   legacy_serving_unit_math?: boolean;
+  cooked_weight_g?: number | null;
+  cooked_weight_source?: 'manual' | 'auto_sum' | null;
   foods?: MealFoodInput[];
   // Set by newer clients so the server can tell which nutrition model to use.
   _clientMealModelVersion?: number;
@@ -1899,6 +1901,8 @@ async function createFoodEntryMeal(
         quantity: Number(mealData.quantity) || 1.0, // Default to 1.0
         unit: mealData.unit || 'serving', // Default to 'serving'
         legacy_serving_unit_math: useLegacyServingMath,
+        cooked_weight_g: mealData.cooked_weight_g ?? null,
+        cooked_weight_source: mealData.cooked_weight_source ?? null,
       },
       actingUserId
     );
@@ -1912,14 +1916,24 @@ async function createFoodEntryMeal(
     // Full recipe nutrition is stored in component foods scaled by mf.quantity / mf.serving_size,
     // so this multiplier scales the WHOLE recipe down to the consumed portion.
     const consumedQuantity = Number(mealData.quantity) || 1.0;
+    const effectiveCookedWeightG =
+      mealData.cooked_weight_g ?? mealCookedWeightG;
     const useCookedWeight =
-      (mealData.unit || 'serving') === 'g' && !!mealCookedWeightG;
+      ((mealData.unit || 'serving') === 'g' ||
+        (mealData.unit || 'serving') === 'oz') &&
+      !!effectiveCookedWeightG;
     let multiplier = 1.0;
-    if (mealData.meal_template_id) {
-      if (useCookedWeight) {
+    if (mealData.meal_template_id || effectiveCookedWeightG) {
+      if (mealData.unit === '%') {
+        multiplier = consumedQuantity / 100;
+      } else if (useCookedWeight) {
+        const gramsConsumed =
+          mealData.unit === 'oz'
+            ? consumedQuantity * 28.3495
+            : consumedQuantity;
         multiplier =
-          (mealCookedWeightG as number) > 0
-            ? consumedQuantity / (mealCookedWeightG as number)
+          (effectiveCookedWeightG as number) > 0
+            ? gramsConsumed / (effectiveCookedWeightG as number)
             : 1.0;
       } else if (useLegacyServingMath) {
         multiplier = consumedQuantity;
@@ -2051,6 +2065,8 @@ async function updateFoodEntryMeal(
           meal_template_id: updatedMealData.meal_template_id, // Pass meal_template_id
           quantity: updatedMealData.quantity as number | null | undefined, // Update quantity
           unit: updatedMealData.unit, // Update unit
+          cooked_weight_g: updatedMealData.cooked_weight_g,
+          cooked_weight_source: updatedMealData.cooked_weight_source,
         },
         authenticatedUserId
       );
@@ -2086,13 +2102,23 @@ async function updateFoodEntryMeal(
         const referenceServingSize = Number(mealTemplate.serving_size) || 1.0;
         const referenceTotalServings =
           Number(mealTemplate.total_servings) || 1.0;
-        const referenceCookedWeightG = mealTemplate.cooked_weight_g
-          ? Number(mealTemplate.cooked_weight_g)
-          : null;
-        if (updatedMealData.unit === 'g' && referenceCookedWeightG) {
+        const referenceCookedWeightG =
+          updatedFoodEntryMeal.cooked_weight_g ??
+          updatedMealData.cooked_weight_g ??
+          (mealTemplate?.cooked_weight_g
+            ? Number(mealTemplate.cooked_weight_g)
+            : null);
+        if (updatedMealData.unit === '%' && referenceCookedWeightG) {
+          multiplier = newQuantity / 100;
+        } else if (
+          (updatedMealData.unit === 'g' || updatedMealData.unit === 'oz') &&
+          referenceCookedWeightG
+        ) {
+          const gramsConsumed =
+            updatedMealData.unit === 'oz' ? newQuantity * 28.3495 : newQuantity;
           multiplier =
             referenceCookedWeightG > 0
-              ? newQuantity / referenceCookedWeightG
+              ? gramsConsumed / referenceCookedWeightG
               : 1.0;
         } else if (legacyMath && updatedMealData.unit === 'serving') {
           multiplier = newQuantity;

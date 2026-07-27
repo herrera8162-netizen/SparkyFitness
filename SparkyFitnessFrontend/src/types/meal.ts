@@ -190,6 +190,8 @@ export interface FoodEntryMeal {
    * the meal template. Empty means "fall back to `meal_images`".
    */
   images?: string[] | null;
+  cooked_weight_g?: number | null;
+  cooked_weight_source?: 'manual' | 'auto_sum' | null;
   foods: MealFood[]; // The component foods of this logged meal
   calories?: number; // Aggregated calories
   protein?: number; // Aggregated protein

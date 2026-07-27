@@ -30,6 +30,8 @@ export const foodEntryMealsSchema = z.object({
   meal_type_id: mealTypesIdSchema,
   legacy_serving_unit_math: z.boolean(),
   images: z.array(z.string()),
+  cooked_weight_g: z.number().nullable().optional(),
+  cooked_weight_source: z.enum(["manual", "auto_sum"]).nullable().optional(),
 });
 
 export const foodEntryMealsInitializerSchema = z.object({
@@ -49,6 +51,8 @@ export const foodEntryMealsInitializerSchema = z.object({
   meal_type_id: mealTypesIdSchema,
   legacy_serving_unit_math: z.boolean().optional(),
   images: z.array(z.string()).optional(),
+  cooked_weight_g: z.number().optional().nullable(),
+  cooked_weight_source: z.enum(["manual", "auto_sum"]).optional().nullable(),
 });
 
 export const foodEntryMealsMutatorSchema = z.object({
@@ -68,6 +72,8 @@ export const foodEntryMealsMutatorSchema = z.object({
   meal_type_id: mealTypesIdSchema.optional(),
   legacy_serving_unit_math: z.boolean().optional(),
   images: z.array(z.string()).optional(),
+  cooked_weight_g: z.number().optional().nullable(),
+  cooked_weight_source: z.enum(["manual", "auto_sum"]).optional().nullable(),
 });
 
 export type FoodEntryMeals = z.infer<typeof foodEntryMealsSchema>;
