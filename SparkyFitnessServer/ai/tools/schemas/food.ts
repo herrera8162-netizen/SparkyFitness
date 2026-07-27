@@ -1069,6 +1069,16 @@ export const manageFoodInput = z.object({
     .describe(
       'For set_meal_cooked_weight: total mass in grams of the full recipe as finished/cooked'
     ),
+  cooked_weight_source: z
+    .enum(['manual', 'auto_sum'])
+    .optional()
+    .describe('Source of cooked weight value'),
+  auto_sum_cooked_weight: z.coerce
+    .boolean()
+    .optional()
+    .describe(
+      'If true, automatically computes total cooked weight by auto-summing raw ingredient weights'
+    ),
   // search
   search_type: searchTypeEnum
     .optional()
