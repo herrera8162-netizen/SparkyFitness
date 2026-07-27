@@ -420,69 +420,83 @@ describe('MealBuilder', () => {
 
   // MEAL_WEIGHT_PLAN.md Phase 3: cooked_weight_g is an optional alternate
   // denominator, independent of serving_unit.
-  it('persists cooked_weight_g when provided', async () => {
-    mockCreateMeal.mockResolvedValue({ id: 'new-meal', name: 'My Meal' });
+  it('persists cooked_weight_g when provided in food-diary mode', async () => {
+    mockCreateFoodEntryMeal.mockResolvedValue({ id: 'new-entry' });
 
-    renderWithClient(<MealBuilder initialFoods={sampleFoods} />);
+    renderWithClient(
+      <MealBuilder
+        source="food-diary"
+        initialFoods={sampleFoods}
+        foodEntryDate="2026-07-28"
+        foodEntryMealType="lunch"
+      />
+    );
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Meal Name')).toHaveValue('Logged Meal');
-    });
-    fireEvent.change(screen.getByLabelText('Meal Name'), {
-      target: { value: 'My Meal' },
+      expect(screen.getByLabelText('Cooked Weight (g)')).toBeInTheDocument();
     });
     fireEvent.change(screen.getByLabelText('Cooked Weight (g)'), {
       target: { value: '800' },
     });
-    fireEvent.click(screen.getByText('Save Meal'));
+    fireEvent.click(screen.getByText('Add to Meal'));
 
     await waitFor(() => {
-      expect(mockCreateMeal).toHaveBeenCalledWith(
-        expect.objectContaining({ cooked_weight_g: 800 })
+      expect(mockCreateFoodEntryMeal).toHaveBeenCalledWith(
+        expect.objectContaining({ cooked_weight_g: 800 }),
+        expect.anything()
       );
     });
   });
 
-  it('sends cooked_weight_g as null when left empty', async () => {
-    mockCreateMeal.mockResolvedValue({ id: 'new-meal', name: 'My Meal' });
+  it('sends cooked_weight_g as null when left empty in food-diary mode', async () => {
+    mockCreateFoodEntryMeal.mockResolvedValue({ id: 'new-entry' });
 
-    renderWithClient(<MealBuilder initialFoods={sampleFoods} />);
+    renderWithClient(
+      <MealBuilder
+        source="food-diary"
+        initialFoods={sampleFoods}
+        foodEntryDate="2026-07-28"
+        foodEntryMealType="lunch"
+      />
+    );
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Meal Name')).toHaveValue('Logged Meal');
+      expect(screen.getByLabelText('Cooked Weight (g)')).toBeInTheDocument();
     });
-    fireEvent.change(screen.getByLabelText('Meal Name'), {
-      target: { value: 'My Meal' },
-    });
-    fireEvent.click(screen.getByText('Save Meal'));
+    fireEvent.click(screen.getByText('Add to Meal'));
 
     await waitFor(() => {
-      expect(mockCreateMeal).toHaveBeenCalledWith(
-        expect.objectContaining({ cooked_weight_g: null })
+      expect(mockCreateFoodEntryMeal).toHaveBeenCalledWith(
+        expect.objectContaining({ cooked_weight_g: null }),
+        expect.anything()
       );
     });
   });
 
-  it('rejects a zero cooked_weight_g with a validation toast', async () => {
-    renderWithClient(<MealBuilder initialFoods={sampleFoods} />);
+  it('rejects a zero cooked_weight_g with a validation toast in food-diary mode', async () => {
+    renderWithClient(
+      <MealBuilder
+        source="food-diary"
+        initialFoods={sampleFoods}
+        foodEntryDate="2026-07-28"
+        foodEntryMealType="lunch"
+      />
+    );
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Meal Name')).toHaveValue('Logged Meal');
-    });
-    fireEvent.change(screen.getByLabelText('Meal Name'), {
-      target: { value: 'My Meal' },
+      expect(screen.getByLabelText('Cooked Weight (g)')).toBeInTheDocument();
     });
     fireEvent.change(screen.getByLabelText('Cooked Weight (g)'), {
       target: { value: '0' },
     });
-    fireEvent.click(screen.getByText('Save Meal'));
+    fireEvent.click(screen.getByText('Add to Meal'));
 
     expect(mockToast).toHaveBeenCalledWith({
       title: 'Error',
       description: 'Cooked weight must be greater than zero.',
       variant: 'destructive',
     });
-    expect(mockCreateMeal).not.toHaveBeenCalled();
+    expect(mockCreateFoodEntryMeal).not.toHaveBeenCalled();
   });
 
   // MEAL_WEIGHT_PLAN.md Phase 3 gap fix: cooked_weight_g must be selectable

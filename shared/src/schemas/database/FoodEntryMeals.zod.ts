@@ -29,6 +29,8 @@ export const foodEntryMealsSchema = z.object({
   unit: z.string().nullable(),
   meal_type_id: mealTypesIdSchema,
   legacy_serving_unit_math: z.boolean(),
+  cooked_weight_g: z.number().nullable().optional(),
+  cooked_weight_source: z.enum(["manual", "auto_sum"]).nullable().optional(),
 });
 
 export const foodEntryMealsInitializerSchema = z.object({
@@ -47,6 +49,8 @@ export const foodEntryMealsInitializerSchema = z.object({
   unit: z.string().optional().nullable(),
   meal_type_id: mealTypesIdSchema,
   legacy_serving_unit_math: z.boolean().optional(),
+  cooked_weight_g: z.number().optional().nullable(),
+  cooked_weight_source: z.enum(["manual", "auto_sum"]).optional().nullable(),
 });
 
 export const foodEntryMealsMutatorSchema = z.object({

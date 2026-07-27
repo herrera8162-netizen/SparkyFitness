@@ -702,32 +702,37 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
   // plate weight in grams, independent of the template's serving_unit. Only
   // offer the choice when the two units actually differ — mirrors
   // MealUnitSelector's canLogByPlateWeight.
+  const activeCookedWeightG =
+    (cookedWeightText.trim() !== '' ? parseFloat(cookedWeightText) : null) ??
+    templateInfo.cooked_weight_g ??
+    null;
+
   const canLogByPlateWeight =
-    !!templateInfo.cooked_weight_g && templateInfo.unit !== 'g';
+    !!activeCookedWeightG &&
+    Number.isFinite(activeCookedWeightG) &&
+    activeCookedWeightG > 0;
 
   const handleDiaryUnitChange = (newUnit: string) => {
     setServingUnit(newUnit);
-    // Reset the consumed quantity to a sensible default for the newly
-    // selected unit so a stale serving-count doesn't get interpreted as a
-    // gram amount (or vice versa).
-    if (newUnit === 'g' && templateInfo.cooked_weight_g) {
-      setServingSize(templateInfo.cooked_weight_g.toString());
+    if (newUnit === 'g' && activeCookedWeightG) {
+      setServingSize(activeCookedWeightG.toString());
+    } else if (newUnit === 'oz' && activeCookedWeightG) {
+      setServingSize(
+        Number((activeCookedWeightG / 28.3495).toFixed(2)).toString()
+      );
+    } else if (newUnit === '%') {
+      setServingSize('100');
     } else {
       setServingSize((templateInfo.size || 1).toString());
     }
   };
 
-  // Auto-sum: ask the server to resolve every ingredient to grams and total
-  // them into cooked_weight_g. Only available for a saved meal template with
-  // ingredients (the server reads them from the DB), so this is gated on mealId
-  // in the UI. The endpoint persists cooked_weight_g (source='auto_sum') itself;
-  // we mirror the total into the field and remember the provenance so a later
-  // Save doesn't downgrade it to 'manual'.
   const handleAutoSumWeight = async () => {
-    if (!mealId) return;
+    const targetMealId = mealId || templateInfo.id;
+    if (!targetMealId) return;
     setIsAutoSumming(true);
     try {
-      const result = await autoSumMealWeight({ mealId });
+      const result = await autoSumMealWeight({ mealId: targetMealId });
       setAutoSumResult(result);
       if (result.cookedWeightUpdated) {
         setCookedWeightText(
@@ -940,6 +945,23 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
         return;
       }
 
+      let parsedCookedWeight: number | null = null;
+      if (cookedWeightText.trim() !== '') {
+        const parsed = parseFloat(cookedWeightText);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          toast({
+            title: t('mealBuilder.errorTitle', 'Error'),
+            description: t(
+              'mealBuilder.invalidCookedWeight',
+              'Cooked weight must be greater than zero.'
+            ),
+            variant: 'destructive',
+          });
+          return;
+        }
+        parsedCookedWeight = parsed;
+      }
+
       const foodEntryMealData = {
         meal_template_id: templateInfo.id, // Preserve template ID for proper scaling now that it has logic to handle missing template info
         meal_type: mealTypeSelection,
@@ -948,6 +970,8 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
         description: mealDescription,
         quantity: parseFloat(servingSize) || 1,
         unit: servingUnit,
+        cooked_weight_g: parsedCookedWeight,
+        cooked_weight_source: parsedCookedWeight ? cookedWeightSource : null,
         foods: mealFoods,
         entry_time: entryTime || null,
       };
@@ -986,26 +1010,35 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
     //   quantity / (template.serving_size × template.total_servings).
     // Meal-management mode shows the FULL recipe (multiplier = 1).
     let multiplier = 1;
-    if (source === 'food-diary' && templateInfo.id) {
+    if (source === 'food-diary') {
       const qty = parseFloat(servingSize) || 1;
-      // cooked_weight_g is an alternate denominator: a 'g' selection here
-      // means plate weight against the whole recipe's cooked mass, not the
-      // uniform serving_size × total_servings model. Mirrors the server-side
-      // multiplier in foodEntryService.ts.
-      if (servingUnit === 'g' && templateInfo.cooked_weight_g) {
-        multiplier =
-          templateInfo.cooked_weight_g > 0
-            ? qty / templateInfo.cooked_weight_g
-            : 1;
+      const activeCookedWeight =
+        (cookedWeightText.trim() !== ''
+          ? parseFloat(cookedWeightText)
+          : null) ??
+        templateInfo.cooked_weight_g ??
+        null;
+
+      if (servingUnit === '%') {
+        multiplier = qty / 100;
+      } else if (
+        (servingUnit === 'g' || servingUnit === 'oz') &&
+        activeCookedWeight &&
+        activeCookedWeight > 0
+      ) {
+        const gramsConsumed = servingUnit === 'oz' ? qty * 28.3495 : qty;
+        multiplier = gramsConsumed / activeCookedWeight;
       } else if (
         templateInfo.legacy_serving_unit_math &&
         servingUnit === 'serving'
       ) {
         multiplier = qty;
-      } else {
+      } else if (templateInfo.id) {
         const denominator =
           (templateInfo.size || 1) * (templateInfo.total_servings || 1);
         multiplier = denominator > 0 ? qty / denominator : 1;
+      } else {
+        multiplier = qty;
       }
     }
 
@@ -1239,109 +1272,215 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
         )}
 
         {source === 'food-diary' ? (
-          // Diary mode: keep the existing "Quantity Consumed" + locked unit pair + time.
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="mealTypeSelection">
-                {t('mealBuilder.mealSlot', 'Meal')}
-              </Label>
-              <Select
-                value={mealTypeSelection}
-                onValueChange={setMealTypeSelection}
-              >
-                <SelectTrigger id="mealTypeSelection">
-                  <SelectValue placeholder="Select meal" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(availableMealTypes ?? []).map((mt) => (
-                    <SelectItem key={mt.id} value={mt.name}>
-                      {mt.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="servingSize">
-                {t('mealBuilder.consumedQuantity', 'Quantity Consumed')}
-              </Label>
-              <Input
-                id="servingSize"
-                type="number"
-                step="any"
-                value={servingSize}
-                onChange={(e) => setServingSize(e.target.value)}
-                placeholder="1"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="servingUnit">
-                {t('mealBuilder.servingUnit', 'Unit')}
-              </Label>
-              {canLogByPlateWeight ? (
+          // Diary mode: keep the existing "Quantity Consumed" + unit selection + time + Cooked Weight.
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="mealTypeSelection">
+                  {t('mealBuilder.mealSlot', 'Meal')}
+                </Label>
                 <Select
-                  value={servingUnit}
-                  onValueChange={handleDiaryUnitChange}
+                  value={mealTypeSelection}
+                  onValueChange={setMealTypeSelection}
                 >
-                  <SelectTrigger id="servingUnit">
-                    <SelectValue />
+                  <SelectTrigger id="mealTypeSelection">
+                    <SelectValue placeholder="Select meal" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value={templateInfo.unit}>
-                      {templateInfo.unit}
-                    </SelectItem>
-                    <SelectItem value="g">
-                      {t('mealUnitSelector.plateWeight', 'Plate weight (g)')}
-                    </SelectItem>
+                    {(availableMealTypes ?? []).map((mt) => (
+                      <SelectItem key={mt.id} value={mt.name}>
+                        {mt.name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
-              ) : (
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="servingSize">
+                  {t('mealBuilder.consumedQuantity', 'Quantity Consumed')}
+                </Label>
                 <Input
-                  id="servingUnit"
-                  type="text"
-                  value={servingUnit}
-                  disabled
-                  className="bg-muted"
+                  id="servingSize"
+                  type="number"
+                  step="any"
+                  value={servingSize}
+                  onChange={(e) => setServingSize(e.target.value)}
+                  placeholder="1"
                 />
-              )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="servingUnit">
+                  {t('mealBuilder.servingUnit', 'Unit')}
+                </Label>
+                {canLogByPlateWeight ? (
+                  <Select
+                    value={servingUnit}
+                    onValueChange={handleDiaryUnitChange}
+                  >
+                    <SelectTrigger id="servingUnit">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={templateInfo.unit}>
+                        {templateInfo.unit}
+                      </SelectItem>
+                      <SelectItem value="g">
+                        {t('mealUnitSelector.plateWeight', 'Plate weight (g)')}
+                      </SelectItem>
+                      <SelectItem value="oz">
+                        {t('mealBuilder.plateWeightOz', 'Plate weight (oz)')}
+                      </SelectItem>
+                      <SelectItem value="%">
+                        {t(
+                          'mealBuilder.percentOfMeal',
+                          'Percentage of meal (%)'
+                        )}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input
+                    id="servingUnit"
+                    type="text"
+                    value={servingUnit}
+                    disabled
+                    className="bg-muted"
+                  />
+                )}
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="entryTime">Time (optional)</Label>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setEntryTime('')}
+                      disabled={!entryTime}
+                      className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-muted-foreground shadow-sm hover:bg-destructive/10 hover:text-destructive transition-colors disabled:opacity-40 disabled:pointer-events-none"
+                      title="Clear time"
+                    >
+                      <X className="h-4 w-4" />
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const { hour, minute } = userHourMinute(timezone);
+                        setEntryTime(
+                          `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+                        );
+                      }}
+                      className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                      title="Set to current local time"
+                    >
+                      <Clock className="h-4 w-4" />
+                      Now
+                    </button>
+                  </div>
+                </div>
+                <Input
+                  id="entryTime"
+                  type="time"
+                  value={entryTime}
+                  onChange={(e) => setEntryTime(e.target.value)}
+                />
+              </div>
             </div>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="entryTime">Time (optional)</Label>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setEntryTime('')}
-                    disabled={!entryTime}
-                    className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-muted-foreground shadow-sm hover:bg-destructive/10 hover:text-destructive transition-colors disabled:opacity-40 disabled:pointer-events-none"
-                    title="Clear time"
-                  >
-                    <X className="h-4 w-4" />
-                    Clear
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const { hour, minute } = userHourMinute(timezone);
-                      setEntryTime(
-                        `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
-                      );
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-border pt-4 mt-2">
+              <div className="space-y-2">
+                <Label htmlFor="cookedWeight">
+                  {t('mealBuilder.cookedWeight', 'Cooked Weight (g)')}
+                </Label>
+                <div className="flex items-center gap-2">
+                  <Input
+                    id="cookedWeight"
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={cookedWeightText}
+                    onChange={(e) => {
+                      setCookedWeightText(e.target.value);
+                      setCookedWeightSource('manual');
                     }}
-                    className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-                    title="Set to current local time"
+                    placeholder={t(
+                      'mealBuilder.cookedWeightPlaceholder',
+                      'Optional'
+                    )}
+                  />
+                  {(mealId || templateInfo.id) && mealFoods.length > 0 && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      disabled={isAutoSumming}
+                      onClick={handleAutoSumWeight}
+                    >
+                      <Sparkles className="h-4 w-4 mr-1" />
+                      {isAutoSumming
+                        ? t('mealBuilder.autoSumming', 'Summing…')
+                        : t('mealBuilder.autoSum', 'Auto-sum')}
+                    </Button>
+                  )}
+                </div>
+                {cookedWeightSource === 'auto_sum' &&
+                  cookedWeightText.trim() !== '' && (
+                    <Badge variant="secondary" className="text-xs">
+                      {t('mealBuilder.cookedWeightAutoSummed', 'Auto-summed')}
+                    </Badge>
+                  )}
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    'mealBuilder.cookedWeightHelp',
+                    'Weigh the finished dish, minus the pan. Lets you log a partial plate by weight without giving up serving-based portions.'
+                  )}
+                </p>
+                {(mealId || templateInfo.id) && mealFoods.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {t(
+                      'mealBuilder.autoSumHelp',
+                      'Or Auto-sum to estimate it from raw ingredient weights. Note: Auto-sum calculates total raw ingredient weight and does not account for water loss/evaporation during cooking.'
+                    )}
+                  </p>
+                )}
+              </div>
+              <div />
+            </div>
+            {autoSumResult && (
+              <div className="rounded-md border border-border p-3 space-y-1 text-xs max-w-md">
+                <p className="font-medium">
+                  {t('mealBuilder.autoSumBreakdown', 'Auto-sum breakdown')}
+                </p>
+                {autoSumResult.resolved.map((r) => (
+                  <div
+                    key={r.mealFoodId}
+                    className="flex justify-between gap-2"
                   >
-                    <Clock className="h-4 w-4" />
-                    Now
-                  </button>
+                    <span className="text-muted-foreground truncate">
+                      {r.foodName}
+                      {r.source === 'ai_estimated' &&
+                        ` (${t('mealBuilder.autoSumAiTag', 'AI')}${
+                          r.confidence ? `, ${r.confidence}` : ''
+                        })`}
+                    </span>
+                    <span>{r.weightG.toFixed(1)}g</span>
+                  </div>
+                ))}
+                {autoSumResult.unresolved.map((u) => (
+                  <div
+                    key={u.mealFoodId}
+                    className="flex justify-between gap-2 text-destructive"
+                  >
+                    <span className="truncate">{u.foodName}</span>
+                    <span className="shrink-0">{u.reason}</span>
+                  </div>
+                ))}
+                <div className="flex justify-between gap-2 font-medium border-t border-border pt-1 mt-1">
+                  <span>{t('mealBuilder.autoSumTotal', 'Total')}</span>
+                  <span>{autoSumResult.totalGrams.toFixed(1)}g</span>
                 </div>
               </div>
-              <Input
-                id="entryTime"
-                type="time"
-                value={entryTime}
-                onChange={(e) => setEntryTime(e.target.value)}
-              />
-            </div>
+            )}
           </div>
         ) : (
           // Meal-management mode:
@@ -1462,109 +1601,6 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
                   />
                 </div>
                 <div />
-              </div>
-            )}
-            {/* cooked_weight_g is an alternate denominator alongside
-                serving_size × total_servings, independent of serving_unit —
-                shown regardless of which unit is selected above. */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="cookedWeight">
-                  {t('mealBuilder.cookedWeight', 'Cooked Weight (g)')}
-                </Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="cookedWeight"
-                    type="number"
-                    step="any"
-                    min="0"
-                    value={cookedWeightText}
-                    onChange={(e) => {
-                      setCookedWeightText(e.target.value);
-                      // A hand-edit makes the value manual again, even if it was
-                      // just populated by auto-sum.
-                      setCookedWeightSource('manual');
-                    }}
-                    placeholder={t(
-                      'mealBuilder.cookedWeightPlaceholder',
-                      'Optional'
-                    )}
-                  />
-                  {/* Auto-sum only works on a saved meal with ingredients — the
-                      server resolves them from the DB. */}
-                  {mealId && mealFoods.length > 0 && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="shrink-0"
-                      disabled={isAutoSumming}
-                      onClick={handleAutoSumWeight}
-                    >
-                      <Sparkles className="h-4 w-4 mr-1" />
-                      {isAutoSumming
-                        ? t('mealBuilder.autoSumming', 'Summing…')
-                        : t('mealBuilder.autoSum', 'Auto-sum')}
-                    </Button>
-                  )}
-                </div>
-                {cookedWeightSource === 'auto_sum' &&
-                  cookedWeightText.trim() !== '' && (
-                    <Badge variant="secondary" className="text-xs">
-                      {t('mealBuilder.cookedWeightAutoSummed', 'Auto-summed')}
-                    </Badge>
-                  )}
-                <p className="text-xs text-muted-foreground">
-                  {t(
-                    'mealBuilder.cookedWeightHelp',
-                    'Weigh the finished dish, minus the pan. Lets you log a partial plate by weight without giving up serving-based portions.'
-                  )}
-                </p>
-                {mealId && mealFoods.length > 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    {t(
-                      'mealBuilder.autoSumHelp',
-                      'Or Auto-sum to estimate it from ingredient weights (AI fills gaps for volume/count units).'
-                    )}
-                  </p>
-                )}
-              </div>
-              <div />
-            </div>
-            {/* Per-ingredient breakdown from the last auto-sum run. */}
-            {autoSumResult && (
-              <div className="rounded-md border border-border p-3 space-y-1 text-xs">
-                <p className="font-medium">
-                  {t('mealBuilder.autoSumBreakdown', 'Auto-sum breakdown')}
-                </p>
-                {autoSumResult.resolved.map((r) => (
-                  <div
-                    key={r.mealFoodId}
-                    className="flex justify-between gap-2"
-                  >
-                    <span className="text-muted-foreground truncate">
-                      {r.foodName}
-                      {r.source === 'ai_estimated' &&
-                        ` (${t('mealBuilder.autoSumAiTag', 'AI')}${
-                          r.confidence ? `, ${r.confidence}` : ''
-                        })`}
-                    </span>
-                    <span>{r.weightG.toFixed(1)}g</span>
-                  </div>
-                ))}
-                {autoSumResult.unresolved.map((u) => (
-                  <div
-                    key={u.mealFoodId}
-                    className="flex justify-between gap-2 text-destructive"
-                  >
-                    <span className="truncate">{u.foodName}</span>
-                    <span className="shrink-0">{u.reason}</span>
-                  </div>
-                ))}
-                <div className="flex justify-between gap-2 font-medium border-t border-border pt-1 mt-1">
-                  <span>{t('mealBuilder.autoSumTotal', 'Total')}</span>
-                  <span>{autoSumResult.totalGrams.toFixed(1)}g</span>
-                </div>
               </div>
             )}
           </div>
