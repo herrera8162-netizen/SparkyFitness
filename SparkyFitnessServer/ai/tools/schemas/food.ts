@@ -328,10 +328,57 @@ const setMealCookedWeightSchema = z
   })
   .strict();
 
+const mealIngredientInputSchema = z
+  .object({
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('Food name (alternative to food_id)'),
+    food_id: uuidSchema.optional().describe('Internal food UUID'),
+    variant_id: uuidSchema.optional().describe('Food variant UUID'),
+    child_meal_id: uuidSchema
+      .optional()
+      .describe('Child meal template UUID (for sub-meals)'),
+    child_meal_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('Child meal template name'),
+    item_type: z
+      .enum(['food', 'meal'])
+      .optional()
+      .describe('Item type: "food" or "meal"'),
+    quantity: z.coerce
+      .number()
+      .positive()
+      .describe('Quantity of the ingredient'),
+    unit: z
+      .string()
+      .min(1)
+      .max(50)
+      .describe('Unit of measurement (e.g. "g", "cup", "serving", "piece")'),
+  })
+  .strict();
+
 const autoSumMealWeightSchema = z
   .object({
     action: z.literal('auto_sum_meal_weight'),
-    ...mealIdentitySchema,
+    meal_id: uuidSchema.optional().describe('UUID of the meal template'),
+    meal_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('Name of the meal template (alternative to ID)'),
+    foods: z
+      .union([z.array(mealIngredientInputSchema), z.string()])
+      .optional()
+      .describe(
+        'Inline list of ingredients for unsaved/ad-hoc meals (alternative to meal_id/meal_name)'
+      ),
   })
   .strict();
 
@@ -360,12 +407,29 @@ const logMealSchema = z
       .number()
       .min(0)
       .optional()
-      .describe('Multiplier for the meal template'),
+      .describe('Multiplier for the meal template or portion quantity'),
     unit: z
       .string()
       .max(50)
       .optional()
-      .describe('Unit for the meal template multiplier'),
+      .describe(
+        "Unit for portion multiplier ('serving', 'g' for plate weight in grams, 'oz' for plate weight in ounces, '%' for percentage)"
+      ),
+    cooked_weight_g: z.coerce
+      .number()
+      .positive()
+      .optional()
+      .describe('Total cooked weight in grams for this logged meal entry'),
+    cooked_weight_source: z
+      .enum(['manual', 'auto_sum'])
+      .optional()
+      .describe('Source of cooked weight value'),
+    auto_sum_cooked_weight: z.coerce
+      .boolean()
+      .optional()
+      .describe(
+        'If true, automatically computes total cooked weight by auto-summing raw ingredient weights'
+      ),
   })
   .strict();
 
@@ -646,41 +710,6 @@ const copyFromYesterdaySchema = z
   })
   .strict();
 
-const mealIngredientInputSchema = z
-  .object({
-    food_name: z
-      .string()
-      .min(1)
-      .max(200)
-      .optional()
-      .describe('Food name (alternative to food_id)'),
-    food_id: uuidSchema.optional().describe('Internal food UUID'),
-    variant_id: uuidSchema.optional().describe('Food variant UUID'),
-    child_meal_id: uuidSchema
-      .optional()
-      .describe('Child meal template UUID (for sub-meals)'),
-    child_meal_name: z
-      .string()
-      .min(1)
-      .max(200)
-      .optional()
-      .describe('Child meal template name'),
-    item_type: z
-      .enum(['food', 'meal'])
-      .optional()
-      .describe('Item type: "food" or "meal"'),
-    quantity: z.coerce
-      .number()
-      .positive()
-      .describe('Quantity of the ingredient'),
-    unit: z
-      .string()
-      .min(1)
-      .max(50)
-      .describe('Unit of measurement (e.g. "g", "cup", "serving", "piece")'),
-  })
-  .strict();
-
 const createMealTemplateSchema = z
   .object({
     action: z.literal('create_meal_template'),
@@ -718,6 +747,16 @@ const createMealTemplateSchema = z
       .positive()
       .optional()
       .describe('Total cooked weight in grams'),
+    cooked_weight_source: z
+      .enum(['manual', 'auto_sum'])
+      .optional()
+      .describe('Source of cooked weight value'),
+    auto_sum_cooked_weight: z.coerce
+      .boolean()
+      .optional()
+      .describe(
+        'If true, automatically computes total cooked weight by auto-summing raw ingredient weights'
+      ),
     foods: z
       .union([z.array(mealIngredientInputSchema), z.string()])
       .describe('List of ingredients (foods or sub-meals)'),

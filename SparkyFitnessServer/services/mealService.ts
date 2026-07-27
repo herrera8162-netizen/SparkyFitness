@@ -667,29 +667,27 @@ async function updateMeal(
 // Auto-sum core: resolves each ingredient's weight in grams (deterministic
 // unit math for weight units, AI density/count-weight estimation for volume
 // and quantity units via aiUnitConversionService), persists the per-ingredient
-// resolution on meal_foods, and — if at least one ingredient resolved — sums
-// them into the meal's cooked_weight_g (marked cooked_weight_source:
-// 'auto_sum'). Ingredients that can't be resolved (no AI service configured,
-// a linked meal with no cooked_weight_g of its own, etc.) are reported back
-// rather than silently dropped or failing the whole call.
-async function resolveMealIngredientWeights(
+// Auto-sums ingredient weights to grams. Deterministic for mass units
+// (g, oz, lb); AI estimation for volume/count units.
+async function resolveIngredientListWeights(
   userId: string,
-  mealId: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  items: any[],
   actorIsAdmin = false
-): Promise<MealWeightResolution> {
-  const meal = await mealRepository.getMealById(mealId, userId);
-  if (!meal) {
-    throw new Error('Meal not found.');
-  }
-
+): Promise<{
+  resolved: ResolvedIngredientWeight[];
+  unresolved: UnresolvedIngredientWeight[];
+  totalGrams: number;
+}> {
   const resolved: ResolvedIngredientWeight[] = [];
   const unresolved: UnresolvedIngredientWeight[] = [];
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  for (const item of (meal.foods || []) as any[]) {
+  for (const item of items as any[]) {
     const displayName = item.food_name || item.child_meal_name || 'Ingredient';
     const quantity = Number(item.quantity);
     const unit = String(item.unit || '').toLowerCase();
+    const itemId = item.id || item.food_id || displayName;
 
     if (item.item_type === 'meal') {
       const childCookedWeightG = item.child_meal_id
@@ -709,7 +707,7 @@ async function resolveMealIngredientWeights(
         const gramsPerNativeUnit =
           Number(childCookedWeightG) / (childServingSize * childTotalServings);
         resolved.push({
-          mealFoodId: item.id,
+          mealFoodId: itemId,
           foodName: displayName,
           quantity,
           unit,
@@ -718,7 +716,7 @@ async function resolveMealIngredientWeights(
         });
       } else {
         unresolved.push({
-          mealFoodId: item.id,
+          mealFoodId: itemId,
           foodName: displayName,
           reason:
             'Linked meal has no cooked weight set — set its Cooked Weight (g) first.',
@@ -731,7 +729,7 @@ async function resolveMealIngredientWeights(
     if (category === 'weight') {
       const factor = getConversionFactor(unit, 'g');
       resolved.push({
-        mealFoodId: item.id,
+        mealFoodId: itemId,
         foodName: displayName,
         quantity,
         unit,
@@ -760,7 +758,7 @@ async function resolveMealIngredientWeights(
         { allowCountUnit: true }
       );
       resolved.push({
-        mealFoodId: item.id,
+        mealFoodId: itemId,
         foodName: displayName,
         quantity,
         unit,
@@ -770,7 +768,7 @@ async function resolveMealIngredientWeights(
       });
     } catch (error) {
       unresolved.push({
-        mealFoodId: item.id,
+        mealFoodId: itemId,
         foodName: displayName,
         reason:
           error instanceof Error
@@ -780,16 +778,38 @@ async function resolveMealIngredientWeights(
     }
   }
 
-  for (const r of resolved) {
-    // eslint-disable-next-line no-await-in-loop
-    await mealRepository.updateMealFoodWeight(r.mealFoodId, userId, {
-      resolved_weight_g: r.weightG,
-      weight_source: r.source,
-      weight_confidence: r.confidence ?? null,
-    });
+  const totalGrams = resolved.reduce((sum, r) => sum + r.weightG, 0);
+  return { resolved, unresolved, totalGrams };
+}
+
+// Auto-sums a saved meal template's cooked weight from its ingredient weights.
+// Runs resolution on meal_foods, and — if at least one ingredient resolved — sums
+// them into the meal's cooked_weight_g (marked cooked_weight_source:
+// 'auto_sum').
+async function resolveMealIngredientWeights(
+  userId: string,
+  mealId: string,
+  actorIsAdmin = false
+): Promise<MealWeightResolution> {
+  const meal = await mealRepository.getMealById(mealId, userId);
+  if (!meal) {
+    throw new Error('Meal not found.');
   }
 
-  const totalGrams = resolved.reduce((sum, r) => sum + r.weightG, 0);
+  const { resolved, unresolved, totalGrams } =
+    await resolveIngredientListWeights(userId, meal.foods || [], actorIsAdmin);
+
+  for (const r of resolved) {
+    if (r.mealFoodId) {
+      // eslint-disable-next-line no-await-in-loop
+      await mealRepository.updateMealFoodWeight(r.mealFoodId, userId, {
+        resolved_weight_g: r.weightG,
+        weight_source: r.source,
+        weight_confidence: r.confidence ?? null,
+      });
+    }
+  }
+
   let cookedWeightUpdated = false;
   if (resolved.length > 0) {
     await updateMeal(userId, mealId, {
@@ -1276,6 +1296,7 @@ export { getMealsNeedingReview };
 export { updateMealEntriesSnapshot };
 export { getMealDeletionImpact };
 export { createMealFromDiaryEntries };
+export { resolveIngredientListWeights };
 export default {
   createMeal,
   getMeals,
@@ -1284,6 +1305,7 @@ export default {
   getMealById,
   updateMeal,
   resolveMealIngredientWeights,
+  resolveIngredientListWeights,
   deleteMeal,
   createMealPlanEntry,
   getMealPlanEntries,

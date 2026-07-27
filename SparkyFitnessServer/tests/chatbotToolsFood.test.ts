@@ -50,7 +50,10 @@ vi.mock('../services/mealService', () => ({
     updateMeal: vi.fn(),
     deleteMeal: vi.fn(),
     resolveMealIngredientWeights: vi.fn(),
+    resolveIngredientListWeights: vi.fn(),
   },
+  resolveIngredientListWeights: vi.fn(),
+  resolveMealIngredientWeights: vi.fn(),
 }));
 vi.mock('../services/preferenceService', () => ({
   default: {
@@ -2090,6 +2093,47 @@ describe('auto_sum_meal_weight', () => {
         'Total: 0g — no ingredients could be resolved, cooked_weight_g was NOT changed.'
     );
   });
+
+  it('supports auto_sum_meal_weight for an unsaved meal with inline foods', async () => {
+    vi.mocked(foodRepository.getFoodsWithPagination).mockResolvedValue([
+      {
+        id: FOOD_ID,
+        name: 'Chicken Breast',
+        default_variant: { id: VARIANT_ID, serving_unit: 'g' },
+      } as any,
+    ]);
+    vi.mocked(foodRepository.getFoodById).mockResolvedValue({
+      id: FOOD_ID,
+      name: 'Chicken Breast',
+      default_variant: { id: VARIANT_ID, serving_unit: 'g' },
+    } as any);
+    vi.mocked(mealService.resolveIngredientListWeights).mockResolvedValue({
+      resolved: [
+        {
+          mealFoodId: FOOD_ID,
+          foodName: 'Chicken Breast',
+          quantity: 200,
+          unit: 'g',
+          weightG: 200,
+          source: 'deterministic',
+        },
+      ],
+      unresolved: [],
+      totalGrams: 200,
+    });
+
+    const result = await tools.sparky_manage_food.execute!(
+      {
+        action: 'auto_sum_meal_weight',
+        foods: [{ food_name: 'Chicken Breast', quantity: 200, unit: 'g' }],
+      },
+      opts
+    );
+
+    expect(result).toBe(
+      '✅ **Ad-hoc Meal** auto-sum result:\n- Chicken Breast: 200.0g (manual)\nTotal: 200.0g'
+    );
+  });
 });
 
 describe('log_meal', () => {
@@ -2136,6 +2180,8 @@ describe('log_meal', () => {
         name: 'Overnight Oats',
         quantity: 1,
         unit: 'serving',
+        cooked_weight_g: null,
+        cooked_weight_source: null,
         _clientMealModelVersion: 2,
       }
     );
@@ -3689,7 +3735,8 @@ describe('create_meal_template', () => {
       serving_size: undefined,
       serving_unit: undefined,
       total_servings: undefined,
-      cooked_weight_g: undefined,
+      cooked_weight_g: null,
+      cooked_weight_source: null,
       foods: [
         {
           food_id: FOOD_ID,
@@ -3754,6 +3801,61 @@ describe('create_meal_template', () => {
     expect(result).toContain(
       'Food "NonExistentFood" not found in internal database.'
     );
+  });
+
+  it('supports auto_sum_cooked_weight on create_meal_template', async () => {
+    vi.mocked(foodRepository.getFoodsWithPagination).mockResolvedValue([
+      {
+        id: FOOD_ID,
+        name: 'Chicken Breast',
+        default_variant: { id: VARIANT_ID, serving_unit: 'g' },
+      } as any,
+    ]);
+    vi.mocked(foodRepository.getFoodById).mockResolvedValue({
+      id: FOOD_ID,
+      name: 'Chicken Breast',
+      default_variant: { id: VARIANT_ID, serving_unit: 'g' },
+    } as any);
+    vi.mocked(foodRepository.getFoodVariantsByFoodId).mockResolvedValue([
+      { id: VARIANT_ID, serving_unit: 'g' } as any,
+    ]);
+    vi.mocked(mealService.createMeal).mockResolvedValue({
+      id: MEAL_ID,
+      name: 'Chicken Bowl',
+    } as any);
+
+    const result = await tools.sparky_manage_food.execute!(
+      {
+        action: 'create_meal_template',
+        meal_name: 'Chicken Bowl',
+        auto_sum_cooked_weight: true,
+        foods: [{ food_name: 'Chicken Breast', quantity: 200, unit: 'g' }],
+      },
+      opts
+    );
+
+    expect(result).toBe(
+      '✅ Meal template "Chicken Bowl" created with 1 ingredients.'
+    );
+    expect(mealService.createMeal).toHaveBeenCalledWith('user-1', {
+      name: 'Chicken Bowl',
+      description: null,
+      is_public: false,
+      serving_size: undefined,
+      serving_unit: undefined,
+      total_servings: undefined,
+      cooked_weight_g: 200,
+      cooked_weight_source: 'auto_sum',
+      foods: [
+        {
+          food_id: FOOD_ID,
+          variant_id: VARIANT_ID,
+          item_type: 'food',
+          quantity: 200,
+          unit: 'g',
+        },
+      ],
+    });
   });
 });
 

@@ -949,7 +949,7 @@ Actions:
 - log_external_food(food_name, meal_type_id?|meal_type?, quantity?, unit?, entry_date?, external_id?, provider_type?) — PREFERRED way to log an external lookup_food_nutrition match (usda/openfoodfacts/...): the server re-fetches the provider result, saves it with full nutrition, and logs it in one call. quantity is in servings and defaults to 1.
 - create_food(food_name, calories, protein, carbs, fat, brand?, quantity?, unit?, meal_type_id?, meal_type?, entry_date?, saturated_fat?, fiber?, sugar?, sodium?, ...) — MANDATORY: You must run lookup_food_nutrition first. Call only when lookup returns source='ai_estimate' (no match anywhere) or for custom/homemade foods, using AI-estimated values; for external lookup matches use log_external_food instead. Only include meal_type_id (or legacy meal_type) + entry_date (to also log the food in the same call) if the user explicitly asked to log/eat/add this food to their diary — otherwise omit them and just create the food without logging it. Populate as many micro-nutrients, GI classification, and brand ('Homemade' or 'Traditional' if generic) as possible rather than just core macros. CRITICAL: Keep food_name clean and NEVER include the brand inside food_name (e.g. food_name: "Tomato Paste", brand: "Great Value" — NOT "Tomato Paste, Great Value").
 - search_meal(meal_name)
-- log_meal(meal_type_id?|meal_type?, entry_date, meal_id?, meal_name?, quantity?)
+- log_meal(meal_type_id?|meal_type?, entry_date, meal_id?, meal_name?, quantity?, unit?, cooked_weight_g?, cooked_weight_source?, auto_sum_cooked_weight?) — unit accepts 'serving', 'g' (plate weight in grams), 'oz' (plate weight in ounces), or '%' (percentage of cooked meal).
 - list_diary(entry_date?)
 - delete_entry(entry_id, entry_type:"food_entry"|"food_entry_meal")
 - delete_food(food_id?|food_name?) — deletes food + variants + all diary entries referencing it
@@ -959,7 +959,7 @@ Actions:
 - add_food_variant(food_id?|food_name?, serving_size, serving_unit, calories, protein?, carbs?, fat?, ..., is_default?) — adds a new alternate serving size ("equivalent size") to an existing food without touching its other variants.
 - copy_from_yesterday(target_date?, source_date?, meal_type_id?|meal_type?)
 - save_as_meal_template(entry_date, meal_type_id?|meal_type?, meal_name, description?) — REQUIRES EXPLICIT action field. Saves diary entries for a given date and meal type as a reusable meal template.
-- create_meal_template(meal_name, foods:[{food_name?|food_id?, quantity, unit, ...}], description?, is_public?, serving_size?, serving_unit?, total_servings?, cooked_weight_g?) — creates a new meal template directly with explicit ingredients.
+- create_meal_template(meal_name, foods:[{food_name?|food_id?, quantity, unit, ...}], description?, is_public?, serving_size?, serving_unit?, total_servings?, cooked_weight_g?, cooked_weight_source?, auto_sum_cooked_weight?) — creates a new meal template directly with explicit ingredients. Set auto_sum_cooked_weight=true to calculate raw cooked weight upon creation.
 - update_meal_template(meal_id?|meal_name?, new_name?, description?, is_public?, serving_size?, serving_unit?, total_servings?, cooked_weight_g?, foods?) — updates an existing meal template's metadata or replaces its ingredient list.
 - delete_meal_template(meal_id?|meal_name?) — deletes a meal template.
 - log_water(amount_ml, entry_date)
@@ -967,7 +967,7 @@ Actions:
 - get_water_history(start_date?, end_date?)
 - get_meal_details(meal_id?|meal_name?) — full ingredient breakdown for a meal template, including cooked_weight_g/cooked_weight_source and, per ingredient, resolved_weight_g/weight_source/weight_confidence if auto_sum_meal_weight has been run.
 - set_meal_cooked_weight(meal_id?|meal_name?, cooked_weight_g) — manually sets a meal template's total cooked/plate weight in grams (marks cooked_weight_source='manual'). This is what a diary "log by plate weight" unit picker requires being set on the template first.
-- auto_sum_meal_weight(meal_id?|meal_name?) — computes cooked_weight_g as the sum of every ingredient's weight in grams: deterministic conversion for weight units, AI density estimate for volume units (cup, tbsp), AI "typical weight of one unit" estimate for count units (slice, piece, serving). Persists per-ingredient provenance and writes cooked_weight_g (cooked_weight_source='auto_sum') only if at least one ingredient resolved; reports any ingredients it couldn't resolve (e.g. no AI service configured, or a linked meal with no cooked weight of its own).`,
+- auto_sum_meal_weight(meal_id?|meal_name?, foods?) — computes cooked_weight_g as the sum of every ingredient's weight in grams: deterministic conversion for weight units (g, oz, lb), AI density estimate for volume units (cup, tbsp), AI estimate for count units (slice, piece). Pass an inline 'foods' array to auto-sum an unsaved/ad-hoc meal.`,
       inputSchema: manageFoodInput,
       execute: async (rawArgs) => {
         const normalized = normalizeActionArgs(
@@ -1838,6 +1838,27 @@ Actions:
                   throw error;
                 }
               }
+
+              let cookedWeightG = args.cooked_weight_g ?? null;
+              let cookedWeightSource = cookedWeightG
+                ? args.cooked_weight_source || 'manual'
+                : null;
+
+              if (args.auto_sum_cooked_weight && mealId) {
+                try {
+                  const res = await mealService.resolveMealIngredientWeights(
+                    userId,
+                    mealId
+                  );
+                  if (res.cookedWeightUpdated && res.totalGrams > 0) {
+                    cookedWeightG = res.totalGrams;
+                    cookedWeightSource = 'auto_sum';
+                  }
+                } catch (err) {
+                  log('warn', '[foodTools] Auto-sum on log_meal failed:', err);
+                }
+              }
+
               await foodEntryService.createFoodEntryMeal(userId, userId, {
                 user_id: userId,
                 meal_template_id: mealId,
@@ -1846,6 +1867,8 @@ Actions:
                 name: mealName,
                 quantity: args.quantity || 1,
                 unit: args.unit || 'serving',
+                cooked_weight_g: cookedWeightG,
+                cooked_weight_source: cookedWeightSource,
                 _clientMealModelVersion: 2,
               });
               return formatConfirmation(
@@ -2500,6 +2523,32 @@ Actions:
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 args.foods as any[]
               );
+
+              let cookedWeightG = args.cooked_weight_g ?? null;
+              let cookedWeightSource = cookedWeightG
+                ? args.cooked_weight_source || 'manual'
+                : null;
+
+              if (args.auto_sum_cooked_weight && resolvedFoods.length > 0) {
+                try {
+                  const weightRes =
+                    await mealService.resolveIngredientListWeights(
+                      userId,
+                      resolvedFoods
+                    );
+                  if (weightRes.totalGrams > 0) {
+                    cookedWeightG = weightRes.totalGrams;
+                    cookedWeightSource = 'auto_sum';
+                  }
+                } catch (err) {
+                  log(
+                    'warn',
+                    '[foodTools] Auto-sum on create_meal_template failed:',
+                    err
+                  );
+                }
+              }
+
               const newMeal = await mealService.createMeal(userId, {
                 name: args.meal_name,
                 description: args.description ?? null,
@@ -2507,7 +2556,8 @@ Actions:
                 serving_size: args.serving_size,
                 serving_unit: args.serving_unit,
                 total_servings: args.total_servings,
-                cooked_weight_g: args.cooked_weight_g,
+                cooked_weight_g: cookedWeightG,
+                cooked_weight_source: cookedWeightSource,
                 foods: resolvedFoods,
               });
               return formatConfirmation(
@@ -2669,9 +2719,37 @@ Actions:
             }
 
             case 'auto_sum_meal_weight': {
+              if (
+                args.foods &&
+                Array.isArray(args.foods) &&
+                args.foods.length > 0
+              ) {
+                const resolvedFoods = await resolveMealIngredients(
+                  userId,
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  args.foods as any[]
+                );
+                const res = await mealService.resolveIngredientListWeights(
+                  userId,
+                  resolvedFoods
+                );
+                let text = `**Ad-hoc Meal** auto-sum result:\n`;
+                for (const r of res.resolved) {
+                  text +=
+                    r.source === 'ai_estimated'
+                      ? `- ${r.foodName}: ${r.weightG.toFixed(1)}g (AI estimated, confidence: ${r.confidence})\n`
+                      : `- ${r.foodName}: ${r.weightG.toFixed(1)}g (manual)\n`;
+                }
+                for (const u of res.unresolved) {
+                  text += `- ${u.foodName}: could not resolve — ${u.reason}\n`;
+                }
+                text += `Total: ${res.totalGrams.toFixed(1)}g`;
+                return formatConfirmation(text);
+              }
+
               if (!args.meal_id && !args.meal_name) {
                 return ERRORS.VALIDATION(
-                  'Either meal_id or meal_name must be provided'
+                  'Either meal_id, meal_name, or foods must be provided'
                 );
               }
               const meal = await resolveMealIdentity(userId, args);
