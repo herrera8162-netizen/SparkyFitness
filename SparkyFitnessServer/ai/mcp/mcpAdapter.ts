@@ -78,3 +78,55 @@ export function registerDevTools(mcpServer: McpServer, userId: string): void {
   >;
   registerToolMap(mcpServer, tools);
 }
+
+/**
+ * Registers MCP prompt templates ('prompts/list' and 'prompts/get') on the server.
+ * Enables external MCP clients (Claude Code, Cursor, etc.) to discover and fetch
+ * Sparky's system prompt and the user's custom instructions for prompt parity.
+ */
+export function registerPrompts(
+  mcpServer: McpServer,
+  getSystemPrompt: () => string,
+  getUserCustomPrompt: () => string | null
+): void {
+  mcpServer.registerPrompt(
+    'sparky_system_prompt',
+    {
+      description:
+        "Sparky's full system prompt, including persona, timezone context, custom categories, and custom instructions.",
+    },
+    () => {
+      const text = getSystemPrompt();
+      return {
+        messages: [
+          {
+            role: 'user' as const,
+            content: { type: 'text' as const, text },
+          },
+        ],
+      };
+    }
+  );
+
+  mcpServer.registerPrompt(
+    'sparky_user_custom_prompt',
+    {
+      description:
+        "The user's custom system prompt / instructions configured in AI service settings (if any).",
+    },
+    () => {
+      const customPrompt = getUserCustomPrompt();
+      const text =
+        customPrompt?.trim() ||
+        'No custom system prompt configured for the active AI service.';
+      return {
+        messages: [
+          {
+            role: 'user' as const,
+            content: { type: 'text' as const, text },
+          },
+        ],
+      };
+    }
+  );
+}

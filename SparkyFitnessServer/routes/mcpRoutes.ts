@@ -6,21 +6,25 @@ import { loadUserTimezone } from '../utils/timezoneLoader.js';
 import {
   registerRegistryTools,
   registerDevTools,
+  registerPrompts,
 } from '../ai/mcp/mcpAdapter.js';
 import { resolveIsAdmin } from '../utils/adminCheck.js';
 import versionService from '../services/versionService.js';
 import chatService from '../services/chatService.js';
+import measurementRepository from '../models/measurementRepository.js';
 import { TtlCache } from '../utils/ttlCache.js';
 
 const router = express.Router();
 
-// Per-user cache of the two DB lookups at the top of every MCP request (each
-// request builds a fresh McpServer, so tools/list + tools/call each paid a
-// timezone query plus the full active-AI-setting fetch just to read one
-// profile string). Both change rarely; a settings edit lands within a minute.
+// Per-user cache of DB lookups at the top of every MCP request (each
+// request builds a fresh McpServer, so tools/list + tools/call + prompts/list paid
+// queries for timezone, custom categories, and active AI setting).
+// All change rarely; a settings edit lands within a minute.
 const mcpContextCache = new TtlCache<{
   tz: string;
   profile: 'full' | 'core';
+  userCustomPrompt: string | null;
+  customCategoriesList: string;
 }>(60_000);
 
 // Reported to MCP clients; sourced from package.json so it tracks releases.
@@ -72,20 +76,34 @@ router.post('/', async (req, res) => {
     // their tool surface to 'core' wants the lean 20-tool list in MCP clients
     // too — MCP clients pay the full tool-list cost in their own context
     // window on every call, with no server-side prompt cache to soften it.
-    const { tz, profile } = await mcpContextCache.getOrLoad(
-      userId,
-      async () => {
-        const [tz, activeSetting] = await Promise.all([
+    const { tz, profile, userCustomPrompt, customCategoriesList } =
+      await mcpContextCache.getOrLoad(userId, async () => {
+        const [tz, activeSetting, customCategories] = await Promise.all([
           loadUserTimezone(userId),
           chatService.getActiveAiServiceSetting(userId, userId),
+          measurementRepository.getCustomCategories(userId),
         ]);
+        const customCategoriesList =
+          customCategories.length > 0
+            ? customCategories
+                .map(
+                  (cat: {
+                    name: string;
+                    measurement_type: string;
+                    frequency: string;
+                  }) =>
+                    `- ${cat.name} (${cat.measurement_type}, ${cat.frequency})`
+                )
+                .join('\n')
+            : 'None';
         return {
           tz,
           profile:
             activeSetting?.chat_tool_profile === 'core' ? 'core' : 'full',
+          userCustomPrompt: activeSetting?.system_prompt?.trim() || null,
+          customCategoriesList,
         };
-      }
-    );
+      });
 
     // Normalize null arguments to undefined (omitted) for tools/call requests.
     // This prevents validation errors (MCP -32602) on optional schema fields.
@@ -113,6 +131,18 @@ router.post('/', async (req, res) => {
     // McpServer wraps the low-level Server as `.server`.
     mcpServer.server.onerror = (e) => log('error', '[MCP] server error', e);
     registerRegistryTools(mcpServer, userId, tz, profile);
+    registerPrompts(
+      mcpServer,
+      () =>
+        chatService.getSystemPrompt(
+          tz,
+          customCategoriesList,
+          profile,
+          undefined,
+          false
+        ),
+      () => userCustomPrompt
+    );
     // Admin-only dev tools, off by default; gating at registration keeps them
     // out of non-admins' tools/list. authenticate already populated req.user.
     const devToolsAllowed =
