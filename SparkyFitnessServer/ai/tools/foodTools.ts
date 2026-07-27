@@ -61,6 +61,9 @@ const VALID_ACTIONS = [
   'add_food_variant',
   'copy_from_yesterday',
   'save_as_meal_template',
+  'create_meal_template',
+  'update_meal_template',
+  'delete_meal_template',
   'log_water',
   'get_nutritional_summary',
   'get_water_history',
@@ -613,6 +616,103 @@ async function resolveMealIdentity(
   return await mealService.getMealById(userId, match.id);
 }
 
+// Resolves a list of meal ingredient inputs (foods or sub-meals) passed by
+// model/MCP client to valid internal IDs and quantities for meal creation/update.
+async function resolveMealIngredients(
+  userId: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  rawFoods: any
+): Promise<any[]> {
+  let foodsArray = rawFoods;
+  if (typeof rawFoods === 'string') {
+    try {
+      foodsArray = JSON.parse(rawFoods);
+    } catch {
+      throw new Error('Invalid JSON format for foods ingredient array.');
+    }
+  }
+  if (!Array.isArray(foodsArray)) {
+    throw new Error('Ingredients list (foods) must be an array.');
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const resolvedFoods: any[] = [];
+  for (const item of foodsArray) {
+    const isSubMeal =
+      item.item_type === 'meal' ||
+      Boolean(item.child_meal_id) ||
+      (Boolean(item.child_meal_name) && !item.food_name && !item.food_id);
+
+    if (isSubMeal) {
+      if (!item.child_meal_id && !item.child_meal_name) {
+        throw new Error(
+          'A sub-meal ingredient requires child_meal_id or child_meal_name.'
+        );
+      }
+      const childMeal = await resolveMealIdentity(userId, {
+        meal_id: item.child_meal_id,
+        meal_name: item.child_meal_name,
+      });
+      resolvedFoods.push({
+        child_meal_id: childMeal.id,
+        item_type: 'meal',
+        quantity: item.quantity,
+        unit: item.unit,
+      });
+      continue;
+    }
+
+    let foodId = item.food_id;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let foodRow: any;
+
+    if (foodId && !uuidSchema.safeParse(foodId).success) {
+      if (item.food_name) {
+        foodId = undefined;
+      } else {
+        throw new Error(
+          `food_id '${item.food_id}' is not a valid internal food UUID.`
+        );
+      }
+    }
+
+    if (!foodId) {
+      if (!item.food_name) {
+        throw new Error('A food ingredient requires food_name or food_id.');
+      }
+      foodRow = await findFoodByExactName(userId, item.food_name);
+      if (!foodRow) {
+        throw new Error(
+          `Food "${item.food_name}" not found in internal database. Search or create the food first.`
+        );
+      }
+      foodId = foodRow.id;
+    }
+
+    const resolvedLog = await resolveFoodLogVariantAndQuantity({
+      userId,
+      foodId,
+      variantId: item.variant_id,
+      foodRow,
+      quantity: item.quantity,
+      unit: item.unit,
+    });
+
+    if (!resolvedLog.ok) {
+      throw new Error(resolvedLog.message);
+    }
+
+    resolvedFoods.push({
+      food_id: foodId,
+      variant_id: resolvedLog.variantId,
+      item_type: 'food',
+      quantity: resolvedLog.quantity,
+      unit: resolvedLog.unit,
+    });
+  }
+  return resolvedFoods;
+}
+
 // Per-day nutrition totals with the user's energy-unit conversion applied —
 // MCP's getNutritionalSummary row shape (fiber/sugar aliases included).
 // Shared with the report tools.
@@ -846,6 +946,9 @@ Actions:
 - add_food_variant(food_id?|food_name?, serving_size, serving_unit, calories, protein?, carbs?, fat?, ..., is_default?) — adds a new alternate serving size ("equivalent size") to an existing food without touching its other variants.
 - copy_from_yesterday(target_date?, source_date?, meal_type_id?|meal_type?)
 - save_as_meal_template(entry_date, meal_type_id?|meal_type?, meal_name, description?) — REQUIRES EXPLICIT action field. Saves diary entries for a given date and meal type as a reusable meal template.
+- create_meal_template(meal_name, foods:[{food_name?|food_id?, quantity, unit, ...}], description?, is_public?, serving_size?, serving_unit?, total_servings?, cooked_weight_g?) — creates a new meal template directly with explicit ingredients.
+- update_meal_template(meal_id?|meal_name?, new_name?, description?, is_public?, serving_size?, serving_unit?, total_servings?, cooked_weight_g?, foods?) — updates an existing meal template's metadata or replaces its ingredient list.
+- delete_meal_template(meal_id?|meal_name?) — deletes a meal template.
 - log_water(amount_ml, entry_date)
 - get_nutritional_summary(start_date, end_date) — returns macro breakdown for a range of dates
 - get_water_history(start_date?, end_date?)
@@ -2375,6 +2478,87 @@ Actions:
               const saved = await mealService.getMealById(userId, meal.id);
               return formatConfirmation(
                 `Meal template "${meal.name}" saved with ${saved.foods.length} food items.`
+              );
+            }
+
+            case 'create_meal_template': {
+              const resolvedFoods = await resolveMealIngredients(
+                userId,
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                args.foods as any[]
+              );
+              const newMeal = await mealService.createMeal(userId, {
+                name: args.meal_name,
+                description: args.description ?? null,
+                is_public: args.is_public ?? false,
+                serving_size: args.serving_size,
+                serving_unit: args.serving_unit,
+                total_servings: args.total_servings,
+                cooked_weight_g: args.cooked_weight_g,
+                foods: resolvedFoods,
+              });
+              return formatConfirmation(
+                `Meal template "${newMeal.name}" created with ${resolvedFoods.length} ingredients.`
+              );
+            }
+
+            case 'update_meal_template': {
+              if (!args.meal_id && !args.meal_name) {
+                return ERRORS.VALIDATION(
+                  'Either meal_id or meal_name must be provided'
+                );
+              }
+              const meal = await resolveMealIdentity(userId, args);
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const updateData: Record<string, any> = {};
+              if (args.new_name !== undefined) updateData.name = args.new_name;
+              if (args.description !== undefined)
+                updateData.description = args.description;
+              if (args.is_public !== undefined)
+                updateData.is_public = args.is_public;
+              if (args.serving_size !== undefined)
+                updateData.serving_size = args.serving_size;
+              if (args.serving_unit !== undefined)
+                updateData.serving_unit = args.serving_unit;
+              if (args.total_servings !== undefined)
+                updateData.total_servings = args.total_servings;
+              if (args.cooked_weight_g !== undefined)
+                updateData.cooked_weight_g = args.cooked_weight_g;
+
+              if (args.foods !== undefined) {
+                updateData.foods = await resolveMealIngredients(
+                  userId,
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  args.foods as any[]
+                );
+              }
+
+              if (Object.keys(updateData).length === 0) {
+                return ERRORS.VALIDATION(
+                  'No fields provided to update for meal template.'
+                );
+              }
+
+              const updated = await mealService.updateMeal(
+                userId,
+                meal.id,
+                updateData
+              );
+              return formatConfirmation(
+                `Meal template "${updated.name || meal.name}" updated successfully.`
+              );
+            }
+
+            case 'delete_meal_template': {
+              if (!args.meal_id && !args.meal_name) {
+                return ERRORS.VALIDATION(
+                  'Either meal_id or meal_name must be provided'
+                );
+              }
+              const meal = await resolveMealIdentity(userId, args);
+              await mealService.deleteMeal(userId, meal.id);
+              return formatConfirmation(
+                `Meal template "${meal.name}" deleted successfully.`
               );
             }
 

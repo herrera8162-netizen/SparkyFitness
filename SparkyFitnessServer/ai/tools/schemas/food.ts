@@ -646,6 +646,154 @@ const copyFromYesterdaySchema = z
   })
   .strict();
 
+const mealIngredientInputSchema = z
+  .object({
+    food_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('Food name (alternative to food_id)'),
+    food_id: uuidSchema.optional().describe('Internal food UUID'),
+    variant_id: uuidSchema.optional().describe('Food variant UUID'),
+    child_meal_id: uuidSchema
+      .optional()
+      .describe('Child meal template UUID (for sub-meals)'),
+    child_meal_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('Child meal template name'),
+    item_type: z
+      .enum(['food', 'meal'])
+      .optional()
+      .describe('Item type: "food" or "meal"'),
+    quantity: z.coerce
+      .number()
+      .positive()
+      .describe('Quantity of the ingredient'),
+    unit: z
+      .string()
+      .min(1)
+      .max(50)
+      .describe('Unit of measurement (e.g. "g", "cup", "serving", "piece")'),
+  })
+  .strict();
+
+const createMealTemplateSchema = z
+  .object({
+    action: z.literal('create_meal_template'),
+    meal_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe('Name for the new meal template'),
+    description: z
+      .string()
+      .max(1000)
+      .optional()
+      .describe('Description for the meal template'),
+    is_public: z.coerce
+      .boolean()
+      .optional()
+      .describe('Whether the meal template is public'),
+    serving_size: z.coerce
+      .number()
+      .positive()
+      .optional()
+      .describe('Default serving size yield'),
+    serving_unit: z
+      .string()
+      .max(50)
+      .optional()
+      .describe('Default serving unit (e.g. "serving", "g")'),
+    total_servings: z.coerce
+      .number()
+      .positive()
+      .optional()
+      .describe('Total number of servings yielded by recipe'),
+    cooked_weight_g: z.coerce
+      .number()
+      .positive()
+      .optional()
+      .describe('Total cooked weight in grams'),
+    foods: z
+      .union([z.array(mealIngredientInputSchema), z.string()])
+      .describe('List of ingredients (foods or sub-meals)'),
+  })
+  .strict();
+
+const updateMealTemplateSchema = z
+  .object({
+    action: z.literal('update_meal_template'),
+    meal_id: uuidSchema
+      .optional()
+      .describe('UUID of the meal template to update'),
+    meal_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe(
+        'Current name of the meal template to update (alternative to meal_id)'
+      ),
+    new_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('New name for the meal template'),
+    description: z
+      .string()
+      .max(1000)
+      .optional()
+      .describe('Updated description for the meal template'),
+    is_public: z.coerce.boolean().optional().describe('Updated public status'),
+    serving_size: z.coerce
+      .number()
+      .positive()
+      .optional()
+      .describe('Updated serving size yield'),
+    serving_unit: z
+      .string()
+      .max(50)
+      .optional()
+      .describe('Updated serving unit'),
+    total_servings: z.coerce
+      .number()
+      .positive()
+      .optional()
+      .describe('Updated total servings yield'),
+    cooked_weight_g: z.coerce
+      .number()
+      .positive()
+      .optional()
+      .describe('Updated cooked weight in grams'),
+    foods: z
+      .array(mealIngredientInputSchema)
+      .optional()
+      .describe(
+        'Replacement list of ingredients (replaces all existing ingredients when provided)'
+      ),
+  })
+  .strict();
+
+const deleteMealTemplateSchema = z
+  .object({
+    action: z.literal('delete_meal_template'),
+    meal_id: uuidSchema
+      .optional()
+      .describe('UUID of the meal template to delete'),
+    meal_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('Name of the meal template to delete (alternative to meal_id)'),
+  })
+  .strict();
+
 const saveAsMealTemplateSchema = z
   .object({
     action: z.literal('save_as_meal_template'),
@@ -732,6 +880,9 @@ export const manageFoodSchema = z.discriminatedUnion('action', [
   addFoodVariantSchema,
   copyFromYesterdaySchema,
   saveAsMealTemplateSchema,
+  createMealTemplateSchema,
+  updateMealTemplateSchema,
+  deleteMealTemplateSchema,
   logWaterSchema,
   getNutritionalSummarySchema,
   getWaterHistorySchema,
@@ -766,6 +917,9 @@ export const manageFoodInput = z.object({
       'add_food_variant',
       'copy_from_yesterday',
       'save_as_meal_template',
+      'create_meal_template',
+      'update_meal_template',
+      'delete_meal_template',
       'log_water',
       'get_nutritional_summary',
       'get_water_history',
@@ -814,7 +968,7 @@ export const manageFoodInput = z.object({
     .min(1)
     .max(200)
     .optional()
-    .describe('For update_food: new name for the food'),
+    .describe('For update_food / update_meal_template: new name'),
   is_default: z.coerce
     .boolean()
     .optional()
@@ -947,7 +1101,23 @@ export const manageFoodInput = z.object({
     .string()
     .max(1000)
     .optional()
-    .describe('Description (for save_as_meal_template)'),
+    .describe(
+      'Description (for save_as_meal_template / create_meal_template / update_meal_template)'
+    ),
+  // meal template parameters
+  is_public: z.coerce
+    .boolean()
+    .optional()
+    .describe('Whether the meal template is public'),
+  total_servings: z.coerce
+    .number()
+    .positive()
+    .optional()
+    .describe('Total servings yielded by recipe'),
+  foods: z
+    .union([z.array(mealIngredientInputSchema), z.string()])
+    .optional()
+    .describe('List of ingredients or JSON string'),
   // copy_from_yesterday
   target_date: optionalDateSchema.describe('Target date (defaults to today)'),
   source_date: optionalDateSchema.describe(

@@ -45,8 +45,10 @@ vi.mock('../services/mealService', () => ({
   default: {
     searchMeals: vi.fn(),
     getMealById: vi.fn(),
+    createMeal: vi.fn(),
     createMealFromDiaryEntries: vi.fn(),
     updateMeal: vi.fn(),
+    deleteMeal: vi.fn(),
     resolveMealIngredientWeights: vi.fn(),
   },
 }));
@@ -3591,6 +3593,175 @@ describe('save_as_meal_template', () => {
     );
 
     expect(result).toBe(DB_ERROR_TEXT);
+  });
+});
+
+describe('create_meal_template', () => {
+  it('creates a meal template resolving food names to internal food_id', async () => {
+    vi.mocked(foodRepository.getFoodsWithPagination).mockResolvedValue([
+      {
+        id: FOOD_ID,
+        name: 'Chicken Breast',
+        default_variant: { id: VARIANT_ID, serving_unit: 'g' },
+      } as any,
+    ]);
+    vi.mocked(foodRepository.getFoodById).mockResolvedValue({
+      id: FOOD_ID,
+      name: 'Chicken Breast',
+      default_variant: { id: VARIANT_ID, serving_unit: 'g' },
+    } as any);
+    vi.mocked(foodRepository.getFoodVariantsByFoodId).mockResolvedValue([
+      { id: VARIANT_ID, serving_unit: 'g' } as any,
+    ]);
+    vi.mocked(mealService.createMeal).mockResolvedValue({
+      id: MEAL_ID,
+      name: 'Chicken Bowl',
+    } as any);
+
+    const result = await tools.sparky_manage_food.execute!(
+      {
+        action: 'create_meal_template',
+        meal_name: 'Chicken Bowl',
+        foods: [{ food_name: 'Chicken Breast', quantity: 200, unit: 'g' }],
+      },
+      opts
+    );
+
+    expect(result).toBe(
+      '✅ Meal template "Chicken Bowl" created with 1 ingredients.'
+    );
+    expect(mealService.createMeal).toHaveBeenCalledWith('user-1', {
+      name: 'Chicken Bowl',
+      description: null,
+      is_public: false,
+      serving_size: undefined,
+      serving_unit: undefined,
+      total_servings: undefined,
+      cooked_weight_g: undefined,
+      foods: [
+        {
+          food_id: FOOD_ID,
+          variant_id: VARIANT_ID,
+          item_type: 'food',
+          quantity: 200,
+          unit: 'g',
+        },
+      ],
+    });
+  });
+
+  it('creates a meal template when foods is passed as a stringified JSON array', async () => {
+    vi.mocked(foodRepository.getFoodsWithPagination).mockResolvedValue([
+      {
+        id: FOOD_ID,
+        name: 'Chicken Breast',
+        default_variant: { id: VARIANT_ID, serving_unit: 'g' },
+      } as any,
+    ]);
+    vi.mocked(foodRepository.getFoodById).mockResolvedValue({
+      id: FOOD_ID,
+      name: 'Chicken Breast',
+      default_variant: { id: VARIANT_ID, serving_unit: 'g' },
+    } as any);
+    vi.mocked(foodRepository.getFoodVariantsByFoodId).mockResolvedValue([
+      { id: VARIANT_ID, serving_unit: 'g' } as any,
+    ]);
+    vi.mocked(mealService.createMeal).mockResolvedValue({
+      id: MEAL_ID,
+      name: 'Chicken Bowl',
+    } as any);
+
+    const result = await tools.sparky_manage_food.execute!(
+      {
+        action: 'create_meal_template',
+        meal_name: 'Chicken Bowl',
+        foods: JSON.stringify([
+          { food_name: 'Chicken Breast', quantity: 200, unit: 'g' },
+        ]),
+      },
+      opts
+    );
+
+    expect(result).toBe(
+      '✅ Meal template "Chicken Bowl" created with 1 ingredients.'
+    );
+  });
+
+  it('fails with validation error when an ingredient food name is not found', async () => {
+    vi.mocked(foodRepository.getFoodsWithPagination).mockResolvedValue([]);
+
+    const result = await tools.sparky_manage_food.execute!(
+      {
+        action: 'create_meal_template',
+        meal_name: 'Unknown Bowl',
+        foods: [{ food_name: 'NonExistentFood', quantity: 100, unit: 'g' }],
+      },
+      opts
+    );
+
+    expect(result).toContain(
+      'Food "NonExistentFood" not found in internal database.'
+    );
+  });
+});
+
+describe('update_meal_template', () => {
+  it('updates meal template metadata and ingredient list', async () => {
+    vi.mocked(mealService.searchMeals).mockResolvedValue([
+      { id: MEAL_ID, name: 'Old Meal' } as any,
+    ]);
+    vi.mocked(mealService.getMealById).mockResolvedValue({
+      id: MEAL_ID,
+      name: 'Old Meal',
+      foods: [],
+    } as any);
+    vi.mocked(mealService.updateMeal).mockResolvedValue({
+      id: MEAL_ID,
+      name: 'New Meal',
+    } as any);
+
+    const result = await tools.sparky_manage_food.execute!(
+      {
+        action: 'update_meal_template',
+        meal_name: 'Old Meal',
+        new_name: 'New Meal',
+        description: 'Updated description',
+      },
+      opts
+    );
+
+    expect(result).toBe('✅ Meal template "New Meal" updated successfully.');
+    expect(mealService.updateMeal).toHaveBeenCalledWith('user-1', MEAL_ID, {
+      name: 'New Meal',
+      description: 'Updated description',
+    });
+  });
+});
+
+describe('delete_meal_template', () => {
+  it('deletes a meal template identified by name', async () => {
+    vi.mocked(mealService.searchMeals).mockResolvedValue([
+      { id: MEAL_ID, name: 'My Meal' } as any,
+    ]);
+    vi.mocked(mealService.getMealById).mockResolvedValue({
+      id: MEAL_ID,
+      name: 'My Meal',
+      foods: [],
+    } as any);
+    vi.mocked(mealService.deleteMeal).mockResolvedValue({
+      message: 'Meal deleted',
+    } as any);
+
+    const result = await tools.sparky_manage_food.execute!(
+      {
+        action: 'delete_meal_template',
+        meal_name: 'My Meal',
+      },
+      opts
+    );
+
+    expect(result).toBe('✅ Meal template "My Meal" deleted successfully.');
+    expect(mealService.deleteMeal).toHaveBeenCalledWith('user-1', MEAL_ID);
   });
 });
 
