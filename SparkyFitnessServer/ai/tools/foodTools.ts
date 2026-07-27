@@ -2884,7 +2884,7 @@ Actions:
                   userId,
                   resolvedFoods
                 );
-                let text = `**Ad-hoc Meal** auto-sum result:\n`;
+                let text = '**Ad-hoc Meal** auto-sum result:\n';
                 for (const r of res.resolved) {
                   text +=
                     r.source === 'ai_estimated'

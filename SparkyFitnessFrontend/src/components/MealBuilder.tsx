@@ -1103,6 +1103,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
     source,
     visibleNutrients,
     templateInfo,
+    cookedWeightText,
   ]); // Recalculate on changes
 
   const mealTotals = calculateMealNutrition();

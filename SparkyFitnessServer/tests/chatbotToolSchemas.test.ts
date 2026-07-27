@@ -89,6 +89,8 @@ describe('published (flat) chatbot tool schemas', () => {
         'meal_id',
         'meal_name',
         'cooked_weight_g',
+        'cooked_weight_source',
+        'auto_sum_cooked_weight',
         'search_type',
         'limit',
         'offset',
