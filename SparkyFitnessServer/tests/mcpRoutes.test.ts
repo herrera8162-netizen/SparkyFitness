@@ -17,6 +17,9 @@ import userRepository from '../models/userRepository.js';
 // buildChatbotTools loads every domain builder; real foodEntryService trips on
 // a deep '@workspace/shared' subpath import at load and isn't exercised here.
 vi.mock('../services/foodEntryService', () => ({ default: {} }));
+vi.mock('../models/measurementRepository', () => ({
+  default: { getCustomCategories: vi.fn(async () => []) },
+}));
 vi.mock('../config/logging', () => ({ log: vi.fn() }));
 // Pin the user's timezone so day-defaults are deterministic and no DB is hit.
 vi.mock('../utils/timezoneLoader', () => ({
@@ -454,6 +457,37 @@ describe('POST /mcp', () => {
         text: `# Database Pool Stats\n\n${JSON.stringify(POOL_STATS, null, 2)}`,
       },
     ]);
+  });
+
+  it('prompts/list returns registered MCP prompt templates', async () => {
+    const res = await request(app)
+      .post('/mcp')
+      .set(MCP_HEADERS)
+      .set('Authorization', 'Bearer valid')
+      .send({ jsonrpc: '2.0', id: 9, method: 'prompts/list' });
+
+    expect(res.status).toBe(200);
+    const promptNames = res.body.result.prompts.map(
+      (p: { name: string }) => p.name
+    );
+    expect(promptNames).toContain('sparky_system_prompt');
+    expect(promptNames).toContain('sparky_user_custom_prompt');
+  });
+
+  it('prompts/get sparky_system_prompt returns system prompt content', async () => {
+    const res = await request(app)
+      .post('/mcp')
+      .set(MCP_HEADERS)
+      .set('Authorization', 'Bearer valid')
+      .send({
+        jsonrpc: '2.0',
+        id: 10,
+        method: 'prompts/get',
+        params: { name: 'sparky_system_prompt' },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.result.messages[0].content.text).toContain('Sparky');
   });
 });
 

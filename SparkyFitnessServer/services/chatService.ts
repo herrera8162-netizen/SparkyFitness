@@ -2259,4 +2259,5 @@ export default {
   processFoodOptionsRequest,
   testAiServiceConnection,
   processChatMessageStream,
+  getSystemPrompt,
 };
