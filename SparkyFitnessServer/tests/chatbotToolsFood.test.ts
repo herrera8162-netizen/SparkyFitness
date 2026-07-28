@@ -1306,7 +1306,8 @@ describe('log_food', () => {
 
     // User asks for 3.5 oz of chicken breast, where the variant is 100g.
     // 3.5 oz = 3.5 * 28.3495 g = 99.22325 g.
-    // 99.22325 g / 100 g per serving = 0.9922325 servings of 100g variant.
+    // 99.22325 g / 100 g per serving = 0.9922325 servings of 100g variant,
+    // which is within rounding tolerance of a whole serving and snaps to 1.
     const result = await tools.sparky_manage_food.execute!(
       {
         action: 'log_food',
@@ -1319,14 +1320,14 @@ describe('log_food', () => {
       opts
     );
 
-    expect(result).toContain('Logged "Chicken Breast" (0.9922325 g)');
+    expect(result).toContain('Logged "Chicken Breast" (1 g)');
     expect(foodEntryService.createFoodEntry).toHaveBeenCalledWith(
       'user-1',
       'user-1',
       expect.objectContaining({
         food_id: FOOD_ID,
         variant_id: VARIANT_ID,
-        quantity: expect.closeTo(0.9922325, 4),
+        quantity: 1,
         unit: 'g',
       })
     );

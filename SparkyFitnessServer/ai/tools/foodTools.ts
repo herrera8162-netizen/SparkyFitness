@@ -285,6 +285,19 @@ function dedupeVariantsById(variants: any[]) {
   });
 }
 
+// Unit conversion (e.g. ml -> tbsp) divides by non-round-trip-safe factors
+// (tbsp = 14.7868 ml) and produces float noise like 1.9999932372115672.
+// Snap to the nearest quarter when close (covers near-whole and near-quarter
+// results), otherwise round to 2 decimals so raw float noise never reaches
+// the diary/meal record.
+function roundConvertedQuantity(value: number): number {
+  const nearestQuarter = Math.round(value * 4) / 4;
+  if (Math.abs(value - nearestQuarter) < 0.03) {
+    return nearestQuarter;
+  }
+  return Math.round(value * 100) / 100;
+}
+
 function resolveQuantityForVariantUnit(args: {
   requestedQuantity: number;
   requestedUnit: string;
@@ -311,7 +324,7 @@ function resolveQuantityForVariantUnit(args: {
       const servingSize = Number(args.variant.serving_size) || 1;
       const finalQuantity = convertedQuantity / servingSize;
       return {
-        quantity: finalQuantity,
+        quantity: roundConvertedQuantity(finalQuantity),
         unit: args.variant.serving_unit,
       };
     }
