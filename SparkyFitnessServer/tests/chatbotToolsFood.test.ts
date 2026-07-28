@@ -106,6 +106,9 @@ vi.mock('../models/externalProviderRepository', () => ({
     getActiveProvidersByTypes: vi.fn(),
   },
 }));
+vi.mock('../utils/permissionUtils.js', () => ({
+  canAccessUserData: vi.fn().mockResolvedValue(false),
+}));
 vi.mock('../config/logging', () => ({
   log: vi.fn(),
 }));
@@ -4137,12 +4140,14 @@ describe('sparky_list_foods', () => {
             name: 'Eggs',
             is_custom: true,
             variants: [{ id: VARIANT_ID, calories: 155 }],
+            other_variants: [],
           },
           {
-            id: FOOD_ID_2,
+            id: '55555555-5555-4555-8555-555555555555',
             name: 'Quick Add',
             is_custom: true,
             variants: [],
+            other_variants: [],
           },
         ],
         has_more: false,

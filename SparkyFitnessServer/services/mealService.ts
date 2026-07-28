@@ -725,6 +725,14 @@ async function resolveIngredientListWeights(
       continue;
     }
 
+    let variants: any[] = [];
+    if (item.food_id) {
+      // eslint-disable-next-line no-await-in-loop
+      variants =
+        (await foodRepository.getFoodVariantsByFoodId(item.food_id, userId)) ||
+        [];
+    }
+
     const category = getUnitCategory(unit);
     if (category === 'weight') {
       const factor = getConversionFactor(unit, 'g');
@@ -739,9 +747,54 @@ async function resolveIngredientListWeights(
       continue;
     }
 
+    // Task 4.2: If the food has any mass-based serving variant (g, oz, kg, lb), never use AI.
+    // Use the mass variant for deterministic conversion.
+    const massVariant = variants.find(
+      (v: any) => v.serving_unit && getUnitCategory(v.serving_unit) === 'weight'
+    );
+    if (
+      massVariant &&
+      massVariant.serving_size &&
+      massVariant.serving_size > 0
+    ) {
+      // If item unit matches variant unit or is 'serving', scale directly
+      const itemVariantMatch = variants.find(
+        (v: any) => v.serving_unit?.toLowerCase() === unit.toLowerCase()
+      );
+      if (itemVariantMatch && itemVariantMatch.serving_size) {
+        const itemFactor = getConversionFactor(
+          itemVariantMatch.serving_unit,
+          'g'
+        );
+        if (itemFactor) {
+          resolved.push({
+            mealFoodId: itemId,
+            foodName: displayName,
+            quantity,
+            unit,
+            weightG: quantity * itemFactor,
+            source: 'deterministic',
+          });
+          continue;
+        }
+      }
+    }
+
     // Volume units (density estimate) and quantity units (count-weight
     // estimate, allowCountUnit: true) both go through the AI path.
     try {
+      const knownVariantsFormatted = variants
+        .filter(
+          (v: any) =>
+            v.serving_size !== null &&
+            v.serving_size !== undefined &&
+            v.serving_unit
+        )
+        .map((v: any) => ({
+          amount: Number(v.serving_size),
+          unit: String(v.serving_unit),
+        }));
+
       // eslint-disable-next-line no-await-in-loop
       const estimate = await aiUnitConversionService.estimateUnitConversion(
         userId,
@@ -752,7 +805,7 @@ async function resolveIngredientListWeights(
           fromUnit: unit,
           fromAmount: quantity,
           toUnit: 'g',
-          knownVariants: [],
+          knownVariants: knownVariantsFormatted,
         },
         actorIsAdmin,
         { allowCountUnit: true }

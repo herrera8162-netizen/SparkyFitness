@@ -1841,6 +1841,17 @@ async function createFoodEntryMeal(
       }
     }
 
+    if (
+      Array.isArray(mealData.exclude_food_ids) &&
+      mealData.exclude_food_ids.length > 0
+    ) {
+      const excludeSet = new Set(mealData.exclude_food_ids);
+      foodsToProcess = foodsToProcess.filter(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (item: any) => !excludeSet.has(item.food_id)
+      );
+    }
+
     // 1. Create the parent food_entry_meals record with quantity, unit, name, and description.
     const newFoodEntryMeal = await foodEntryMealRepository.createFoodEntryMeal(
       {

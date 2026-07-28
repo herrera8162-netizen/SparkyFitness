@@ -2,9 +2,13 @@ import { vi, beforeEach, describe, expect, it } from 'vitest';
 import foodRepository from '../models/foodRepository.js';
 import foodCoreService from '../services/foodCoreService.js';
 import preferenceService from '../services/preferenceService.js';
+import * as permissionUtils from '../utils/permissionUtils.js';
 vi.mock('../models/foodRepository');
 vi.mock('../services/preferenceService.js', () => ({
   default: { getUserPreferences: vi.fn() },
+}));
+vi.mock('../utils/permissionUtils.js', () => ({
+  canAccessUserData: vi.fn().mockResolvedValue(false),
 }));
 vi.mock('../config/logging', () => ({ log: vi.fn() }));
 const TEST_USER_ID = 'user-123';
@@ -354,17 +358,40 @@ describe('foodCoreService.deleteFoodVariant', () => {
     ).rejects.toThrow('Associated food not found.');
   });
 
-  it('should throw a Forbidden error if user does not own the parent food', async () => {
+  it('should throw a Forbidden error if user does not own the parent food and has no shared access', async () => {
     const variant = { id: 'variant-789', food_id: 'food-456' };
-    // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+    // @ts-expect-error TS(2339)
     foodRepository.getFoodVariantById.mockResolvedValue(variant);
-    // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+    // @ts-expect-error TS(2339)
     foodRepository.getFoodOwnerId.mockResolvedValue('another-user-123');
+    vi.mocked(permissionUtils.canAccessUserData).mockResolvedValue(false);
 
     await expect(
       foodCoreService.deleteFoodVariant(TEST_USER_ID, 'variant-789')
     ).rejects.toThrow(
       'Forbidden: You do not have permission to delete this food variant.'
+    );
+  });
+
+  it('should allow deletion of food variant if user has shared diary access to parent food owner', async () => {
+    const variant = { id: 'variant-789', food_id: 'food-456' };
+    // @ts-expect-error TS(2339)
+    foodRepository.getFoodVariantById.mockResolvedValue(variant);
+    // @ts-expect-error TS(2339)
+    foodRepository.getFoodOwnerId.mockResolvedValue('family-owner-123');
+    // @ts-expect-error TS(2339)
+    foodRepository.deleteFoodVariant.mockResolvedValue(true);
+    vi.mocked(permissionUtils.canAccessUserData).mockResolvedValue(true);
+
+    const result = await foodCoreService.deleteFoodVariant(
+      TEST_USER_ID,
+      'variant-789'
+    );
+    expect(result).toBe(true);
+    expect(permissionUtils.canAccessUserData).toHaveBeenCalledWith(
+      'family-owner-123',
+      'diary',
+      TEST_USER_ID
     );
   });
 });

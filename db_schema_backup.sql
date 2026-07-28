@@ -2143,7 +2143,8 @@ CREATE TABLE public.foods (
     shared_with_public boolean DEFAULT false,
     provider_type text,
     is_quick_food boolean DEFAULT false NOT NULL,
-    provider_verified boolean DEFAULT false NOT NULL
+    provider_verified boolean DEFAULT false NOT NULL,
+    is_cooked boolean DEFAULT false NOT NULL
 );
 
 

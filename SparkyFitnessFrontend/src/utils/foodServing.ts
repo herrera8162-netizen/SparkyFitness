@@ -17,11 +17,23 @@ export function formatQuantityServingLabel(
   quantity: number,
   variant: ServingLike
 ): string {
-  if (
-    variant.serving_size === quantity &&
-    variant.serving_description?.trim()
-  ) {
-    return variant.serving_description.trim();
+  const desc = variant.serving_description?.trim();
+  if (desc) {
+    if (variant.serving_size === quantity) {
+      return desc;
+    }
+    // If description starts with "[serving_size] of " or "[serving_size] ", e.g. "0.25 of 0.25 cup" or "0.25 cup"
+    const sizeStr =
+      variant.serving_size != null ? String(variant.serving_size) : '';
+    if (sizeStr) {
+      if (desc.startsWith(`${sizeStr} of `)) {
+        return `${quantity} of ${desc.slice(sizeStr.length + 4)}`.trim();
+      }
+      if (desc.startsWith(`${sizeStr} `)) {
+        return `${quantity} ${desc.slice(sizeStr.length + 1)}`.trim();
+      }
+    }
+    return `${quantity} of ${desc}`.trim();
   }
 
   return `${quantity} ${variant.serving_unit || ''}`.trim();

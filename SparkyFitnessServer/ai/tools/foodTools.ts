@@ -7,6 +7,7 @@ import foodEntryService from '../../services/foodEntryService.js';
 import mealService from '../../services/mealService.js';
 import preferenceService from '../../services/preferenceService.js';
 import measurementService from '../../services/measurementService.js';
+import { canAccessUserData } from '../../utils/permissionUtils.js';
 import {
   searchProviderFoods,
   type ProviderType,
@@ -547,12 +548,29 @@ const FULL_ENTRY_DROP: readonly string[] = [
 // folded into MCP's `variants` array shape, both compacted.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function projectCatalogFood(row: any) {
-  const { default_variant: defaultVariant, ...rest } = row;
+  const {
+    default_variant: defaultVariant,
+    variants: allVariantsRaw,
+    ...rest
+  } = row;
+  const defaultVarObj = defaultVariant?.id
+    ? compactRecord(defaultVariant, VARIANT_DROP)
+    : null;
+  const otherVariantsBrief = Array.isArray(allVariantsRaw)
+    ? allVariantsRaw
+        .filter((v: any) => v && v.id !== defaultVariant?.id)
+        .map((v: any) => ({
+          id: v.id,
+          serving_size: v.serving_size,
+          serving_unit: v.serving_unit,
+          serving_description: v.serving_description,
+        }))
+    : [];
+
   return {
     ...compactRecord(rest, CATALOG_FOOD_DROP),
-    variants: defaultVariant?.id
-      ? [compactRecord(defaultVariant, VARIANT_DROP)]
-      : [],
+    variants: defaultVarObj ? [defaultVarObj] : [],
+    other_variants: otherVariantsBrief,
   };
 }
 
@@ -983,8 +1001,24 @@ Actions:
 - auto_sum_meal_weight(meal_id?|meal_name?, foods?) — computes cooked_weight_g as the sum of every ingredient's weight in grams: deterministic conversion for weight units (g, oz, lb), AI density estimate for volume units (cup, tbsp), AI estimate for count units (slice, piece). Pass an inline 'foods' array to auto-sum an unsaved/ad-hoc meal.`,
       inputSchema: manageFoodInput,
       execute: async (rawArgs) => {
+        const rawInput =
+          rawArgs && typeof rawArgs === 'object'
+            ? { ...(rawArgs as object) }
+            : {};
+        if ((rawInput as any).action === 'list') {
+          (rawInput as any).action = 'list_diary';
+        }
+        if (
+          (rawInput as any).query &&
+          typeof (rawInput as any).query === 'string'
+        ) {
+          const q = (rawInput as any).query;
+          if (!(rawInput as any).food_name) (rawInput as any).food_name = q;
+          if (!(rawInput as any).meal_name) (rawInput as any).meal_name = q;
+          if (!(rawInput as any).search) (rawInput as any).search = q;
+        }
         const normalized = normalizeActionArgs(
-          rawArgs,
+          rawInput,
           tz,
           VALID_ACTIONS,
           (args) => {
@@ -1128,7 +1162,8 @@ Actions:
         // copy_from_yesterday) becomes entry_date instead of an
         // unrecognized-key failure.
         if (loggingActions.includes(normalized.action)) {
-          const misfiled = normalized.source_date || normalized.target_date;
+          const misfiled =
+            normalized.source_date || normalized.target_date || normalized.date;
           if (misfiled && !normalized.entry_date) {
             normalized.entry_date = misfiled;
             log(
@@ -1138,6 +1173,7 @@ Actions:
           }
           delete normalized.source_date;
           delete normalized.target_date;
+          delete normalized.date;
         }
         // Default missing entry_date to today's date string for logging actions
         if (
@@ -1882,6 +1918,7 @@ Actions:
                 unit: args.unit || 'serving',
                 cooked_weight_g: cookedWeightG,
                 cooked_weight_source: cookedWeightSource,
+                exclude_food_ids: args.exclude_food_ids,
                 _clientMealModelVersion: 2,
               });
               return formatConfirmation(
@@ -2018,7 +2055,19 @@ Actions:
 
             case 'delete_entry': {
               try {
-                if (args.entry_type === 'food_entry') {
+                let entryType = args.entry_type;
+                if (!entryType) {
+                  const foodEntry = await foodRepository.getFoodEntryById(
+                    args.entry_id,
+                    userId
+                  );
+                  if (foodEntry) {
+                    entryType = 'food_entry';
+                  } else {
+                    entryType = 'food_entry_meal';
+                  }
+                }
+                if (entryType === 'food_entry') {
                   await foodEntryService.deleteFoodEntry(userId, args.entry_id);
                 } else {
                   await foodEntryService.deleteFoodEntryMeal(
@@ -2245,8 +2294,10 @@ Actions:
                 );
                 if (
                   !food ||
-                  food.user_id !== userId ||
-                  !food.default_variant?.id
+                  !food.default_variant?.id ||
+                  (food.user_id !== null &&
+                    food.user_id !== userId &&
+                    !(await canAccessUserData(food.user_id, 'diary', userId)))
                 ) {
                   return ERRORS.VALIDATION(
                     `Default variant for food_id "${args.food_id}" not found or not editable.`
@@ -2261,7 +2312,17 @@ Actions:
               const parentFood = variant
                 ? await foodRepository.getFoodById(variant.food_id, userId)
                 : null;
-              if (!variant || !parentFood || parentFood.user_id !== userId) {
+              if (
+                !variant ||
+                !parentFood ||
+                (parentFood.user_id !== null &&
+                  parentFood.user_id !== userId &&
+                  !(await canAccessUserData(
+                    parentFood.user_id,
+                    'diary',
+                    userId
+                  )))
+              ) {
                 return ERRORS.VALIDATION(
                   `Food variant "${variantId}" not found or not editable.`
                 );

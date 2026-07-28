@@ -1,5 +1,6 @@
 import foodRepository from '../models/foodRepository.js';
 import { canAccessUserData } from '../utils/permissionUtils.js';
+import { getUnitCategory } from '@workspace/shared';
 import preferenceService from './preferenceService.js';
 import externalProviderService from './externalProviderService.js';
 import { log } from '../config/logging.js';
@@ -275,7 +276,10 @@ async function deleteFood(
       );
       throw new Error('Food not found.');
     }
-    if (foodOwnerId !== authenticatedUserId) {
+    if (
+      foodOwnerId !== authenticatedUserId &&
+      !(await canAccessUserData(foodOwnerId, 'diary', authenticatedUserId))
+    ) {
       log(
         'warn',
         `deleteFood: User ${authenticatedUserId} forbidden from deleting food ${foodId} owned by ${foodOwnerId}.`
@@ -450,6 +454,15 @@ async function createFoodVariant(authenticatedUserId: any, variantData: any) {
       },
       authenticatedUserId
     );
+    if (
+      newVariant.serving_unit &&
+      getUnitCategory(newVariant.serving_unit) === 'weight'
+    ) {
+      await foodRepository.clearAiInferredMassForFood(
+        variantData.food_id,
+        authenticatedUserId
+      );
+    }
     return newVariant;
   } catch (error) {
     log(
@@ -532,6 +545,15 @@ async function updateFoodVariant(
     if (!updatedVariant) {
       throw new Error('Food variant not found.');
     }
+    if (
+      updatedVariant.serving_unit &&
+      getUnitCategory(updatedVariant.serving_unit) === 'weight'
+    ) {
+      await foodRepository.clearAiInferredMassForFood(
+        variant.food_id,
+        authenticatedUserId
+      );
+    }
     return updatedVariant;
   } catch (error) {
     log(
@@ -559,7 +581,10 @@ async function deleteFoodVariant(authenticatedUserId: any, variantId: any) {
     if (!foodOwnerId) {
       throw new Error('Associated food not found.');
     }
-    if (foodOwnerId !== authenticatedUserId) {
+    if (
+      foodOwnerId !== authenticatedUserId &&
+      !(await canAccessUserData(foodOwnerId, 'diary', authenticatedUserId))
+    ) {
       throw new Error(
         'Forbidden: You do not have permission to delete this food variant.'
       );

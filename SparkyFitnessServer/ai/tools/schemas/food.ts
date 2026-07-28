@@ -430,6 +430,12 @@ const logMealSchema = z
       .describe(
         'If true, automatically computes total cooked weight by auto-summing raw ingredient weights'
       ),
+    exclude_food_ids: z
+      .array(uuidSchema)
+      .optional()
+      .describe(
+        'Optional list of food UUIDs to exclude from template ingredients when logging'
+      ),
   })
   .strict();
 
@@ -444,7 +450,9 @@ const deleteEntrySchema = z
   .object({
     action: z.literal('delete_entry'),
     entry_id: uuidSchema.describe('UUID of the entry to delete'),
-    entry_type: entryTypeEnum.describe('Type of diary entry'),
+    entry_type: entryTypeEnum
+      .optional()
+      .describe('Type of diary entry (auto-detected if omitted)'),
   })
   .strict();
 
@@ -970,6 +978,12 @@ export const manageFoodInput = z.object({
     .describe(
       'Optional action to perform (server infers if omitted); see tool description for per-action fields.'
     ),
+  query: z
+    .string()
+    .min(1)
+    .max(200)
+    .optional()
+    .describe('Alias for food_name / meal_name / search string'),
   // food identity
   food_name: z
     .string()

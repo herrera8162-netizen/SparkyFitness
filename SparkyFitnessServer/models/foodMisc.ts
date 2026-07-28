@@ -444,6 +444,20 @@ async function clearUserIgnoredUpdate(userId: any, variantId: any) {
     client.release();
   }
 }
+async function clearAiInferredMassForFood(foodId: string, userId: string) {
+  const client = await getClient(userId);
+  try {
+    await client.query(
+      `UPDATE meal_foods
+       SET resolved_weight_g = NULL, weight_source = NULL, weight_confidence = NULL
+       WHERE food_id = $1 AND weight_source = 'ai_estimated'`,
+      [foodId]
+    );
+  } finally {
+    client.release();
+  }
+}
+
 export { getFoodDataProviderById };
 export { getRecentFoods };
 export { getTopFoods };
@@ -452,6 +466,7 @@ export { getDailyNutritionSummary, getDailyNutritionSummariesByDates };
 export { getFoodsNeedingReview };
 export { updateFoodEntriesSnapshot };
 export { clearUserIgnoredUpdate };
+export { clearAiInferredMassForFood };
 export default {
   getFoodDataProviderById,
   getRecentFoods,
@@ -464,4 +479,5 @@ export default {
   getFoodsNeedingReview,
   updateFoodEntriesSnapshot,
   clearUserIgnoredUpdate,
+  clearAiInferredMassForFood,
 };
