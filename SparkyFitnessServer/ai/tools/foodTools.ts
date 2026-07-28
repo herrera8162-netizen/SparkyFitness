@@ -952,7 +952,7 @@ const foodUsageSchema = foodDateRangeSchema.merge(foodPaginationSchema).extend({
 export function buildFoodTools(userId: string, tz: string) {
   return {
     sparky_manage_food: tool({
-      description: `Nutrition tracking: search food, log meals, create foods, manage diary.
+      description: `Nutrition tracking: search food, search/log meals (recipes), create foods, manage diary.
 
 Actions:
 - search_food(food_name, search_type:"exact"|"broad", limit?, offset?)
@@ -961,7 +961,7 @@ Actions:
 - log_food(quantity, meal_type_id?|meal_type?, food_name?|food_id?, unit?, entry_date?, variant_id?) — use meal_type_id for custom meal types; the legacy meal_type fallback accepts "breakfast"|"lunch"|"dinner"|"snacks". meal_type_id takes precedence when both are supplied. Provide food_name or food_id (an internal food UUID, never a lookup result's External ID); unit defaults to the food's serving unit, entry_date defaults to today. Works only for foods already in the database (source='internal').
 - log_external_food(food_name, meal_type_id?|meal_type?, quantity?, unit?, entry_date?, external_id?, provider_type?) — PREFERRED way to log an external lookup_food_nutrition match (usda/openfoodfacts/...): the server re-fetches the provider result, saves it with full nutrition, and logs it in one call. quantity is in servings and defaults to 1.
 - create_food(food_name, calories, protein, carbs, fat, brand?, quantity?, unit?, meal_type_id?, meal_type?, entry_date?, saturated_fat?, fiber?, sugar?, sodium?, ...) — MANDATORY: You must run lookup_food_nutrition first. Call only when lookup returns source='ai_estimate' (no match anywhere) or for custom/homemade foods, using AI-estimated values; for external lookup matches use log_external_food instead. Only include meal_type_id (or legacy meal_type) + entry_date (to also log the food in the same call) if the user explicitly asked to log/eat/add this food to their diary — otherwise omit them and just create the food without logging it. Populate as many micro-nutrients, GI classification, and brand ('Homemade' or 'Traditional' if generic) as possible rather than just core macros. CRITICAL: Keep food_name clean and NEVER include the brand inside food_name (e.g. food_name: "Tomato Paste", brand: "Great Value" — NOT "Tomato Paste, Great Value").
-- search_meal(meal_name)
+- search_meal(meal_name) — finds a saved meal/recipe (e.g. "Shepherd's Pie") by name; use this when the user asks for a recipe, not search_food.
 - log_meal(meal_type_id?|meal_type?, entry_date, meal_id?, meal_name?, quantity?, unit?, cooked_weight_g?, cooked_weight_source?, auto_sum_cooked_weight?) — unit accepts 'serving', 'g' (plate weight in grams), 'oz' (plate weight in ounces), or '%' (percentage of cooked meal).
 - list_diary(entry_date?)
 - delete_entry(entry_id, entry_type:"food_entry"|"food_entry_meal")
