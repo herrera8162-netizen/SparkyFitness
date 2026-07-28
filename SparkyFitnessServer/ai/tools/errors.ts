@@ -77,14 +77,16 @@ export const ERRORS = {
    */
   DB_ERROR: (error?: unknown) => {
     const detail = describeDbError(error);
+    const isDebug = process.env.DEBUG === 'true';
+    let baseMsg = detail
+      ? `The database rejected this write (${detail}).`
+      : 'A database error occurred.';
+    if (isDebug && error instanceof Error) {
+      baseMsg += ` Debug detail: ${error.message}`;
+    }
     return toolError(
       'DB_ERROR',
-      detail
-        ? `The database rejected this write (${detail}).`
-        : 'A database error occurred.',
-      // Never invite a blind retry: these failures are deterministic, so an
-      // identical retry fails identically (and can double-write if an earlier
-      // step in the operation succeeded).
+      baseMsg,
       'Do NOT retry the same call — it will fail the same way. Tell the user what failed and stop.'
     );
   },

@@ -87,6 +87,7 @@ interface LoggedMealInput {
   legacy_serving_unit_math?: boolean;
   cooked_weight_g?: number | null;
   cooked_weight_source?: 'manual' | 'auto_sum' | null;
+  exclude_food_ids?: string[];
   foods?: MealFoodInput[];
   // Set by newer clients so the server can tell which nutrition model to use.
   _clientMealModelVersion?: number;
@@ -1885,6 +1886,17 @@ async function createFoodEntryMeal(
           `Meal template ${mealData.meal_template_id} not found when creating food entry meal.`
         );
       }
+    }
+
+    if (
+      Array.isArray(mealData.exclude_food_ids) &&
+      mealData.exclude_food_ids.length > 0
+    ) {
+      const excludeSet = new Set(mealData.exclude_food_ids);
+      foodsToProcess = foodsToProcess.filter(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (item: any) => !excludeSet.has(item.food_id)
+      );
     }
 
     // 1. Create the parent food_entry_meals record with quantity, unit, name, and description.

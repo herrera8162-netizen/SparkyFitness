@@ -70,6 +70,7 @@ describe('published (flat) chatbot tool schemas', () => {
       schema: manageFoodInput,
       properties: [
         'action',
+        'query',
         'food_name',
         'food_id',
         'variant_id',

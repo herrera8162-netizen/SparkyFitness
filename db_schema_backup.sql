@@ -2149,6 +2149,7 @@ CREATE TABLE public.foods (
     is_quick_food boolean DEFAULT false NOT NULL,
     provider_verified boolean DEFAULT false NOT NULL,
     images jsonb DEFAULT '[]'::jsonb NOT NULL,
+    is_cooked boolean DEFAULT false NOT NULL,
     CONSTRAINT foods_images_is_array CHECK ((jsonb_typeof(images) = 'array'::text))
 );
 
