@@ -411,7 +411,7 @@ const EditFoodEntryDialog = ({
                   </div>
                 </div>
                 <div>
-                  <Label htmlFor="meal">Meal</Label>
+                  <Label htmlFor="meal">Meal Type</Label>
                   <Select value={mealId} onValueChange={setMealId}>
                     <SelectTrigger>
                       <SelectValue />

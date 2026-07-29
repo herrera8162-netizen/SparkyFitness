@@ -88,6 +88,14 @@ interface FoodUnitSelectorProps {
     name: string;
     default_time?: string | null;
   }>;
+  /**
+   * Display name of the diary meal slot (e.g. "Snacks") this food is being
+   * logged into, when the caller already knows it and isn't showing the
+   * in-dialog meal-type picker. Used in the title so it reads "Add X to
+   * Snacks" instead of the ambiguous "Add X to Meal" ("Meal" elsewhere in
+   * this app means a saved meal template, not a diary slot).
+   */
+  targetLabel?: string | null;
 }
 
 const FoodUnitSelector = ({
@@ -104,6 +112,7 @@ const FoodUnitSelector = ({
   defaultMealTime,
   showMealTypeSelect,
   availableMealTypes,
+  targetLabel,
 }: FoodUnitSelectorProps) => {
   const {
     loggingLevel,
@@ -461,6 +470,20 @@ const FoodUnitSelector = ({
     }
   }, [open, loading]);
 
+  // A time-of-day picker only makes sense for a diary entry (a meal
+  // template has no "time eaten"), so its presence tells the two diary
+  // callers (Diary, Foods search) apart from the two meal-template-builder
+  // callers (MealBuilder, MealPlanTemplateForm), neither of which pass it.
+  const isDiaryContext = Boolean(showTimeInput);
+
+  // Prefer the resolved diary meal slot (e.g. "Snacks") over the generic
+  // "Meal" so the title/button don't read like this food is going into a
+  // saved meal template, which is what "Meal" means elsewhere in this app.
+  const resolvedMealSlotName =
+    (showMealTypeSelect
+      ? availableMealTypes?.find((t) => t.name === mealType)?.name
+      : targetLabel) || null;
+
   const displayUnit = isConverting
     ? pendingUnit.trim() || '?'
     : selectedVariant?.serving_unit || '';
@@ -481,7 +504,11 @@ const FoodUnitSelector = ({
             <span>
               {initialQuantity
                 ? `Edit ${food?.name}`
-                : `Add ${food?.name} to Meal`}
+                : resolvedMealSlotName
+                  ? `Add ${food?.name} to ${resolvedMealSlotName}`
+                  : isDiaryContext
+                    ? `Add ${food?.name}`
+                    : `Add ${food?.name} to Meal`}
             </span>
             {/* Only persisted local/saved foods can be favorited (external
                 provider search results are not saved yet, so they have no
@@ -590,10 +617,10 @@ const FoodUnitSelector = ({
                 availableMealTypes &&
                 availableMealTypes.length > 0 && (
                   <div className="space-y-1">
-                    <Label htmlFor="mealType">Meal</Label>
+                    <Label htmlFor="mealType">Meal Type</Label>
                     <Select value={mealType} onValueChange={setMealType}>
                       <SelectTrigger id="mealType" className="w-full text-sm">
-                        <SelectValue placeholder="Select meal" />
+                        <SelectValue placeholder="Select meal type" />
                       </SelectTrigger>
                       <SelectContent>
                         {availableMealTypes.map((t) => (
@@ -848,7 +875,9 @@ const FoodUnitSelector = ({
                     ? 'Saving...'
                     : initialQuantity
                       ? 'Update Food'
-                      : 'Add to Meal'}
+                      : isDiaryContext
+                        ? 'Add Food'
+                        : 'Add to Meal'}
                 </Button>
               </div>
             </div>

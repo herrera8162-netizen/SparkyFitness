@@ -494,6 +494,10 @@ const Diary = () => {
     t,
   ]);
 
+  const selectedMealTypeObj = availableMealTypes?.find(
+    (t) => t.name.toLowerCase() === selectedMealType.toLowerCase()
+  );
+
   if (loading) return <div>Loading...</div>;
   return (
     <div className="space-y-6">
@@ -531,15 +535,10 @@ const Diary = () => {
           onSelect={handleFoodUnitSelect}
           showUnitSelector={true}
           showTimeInput={true}
-          defaultMealTime={
-            availableMealTypes?.find(
-              (t) => t.name.toLowerCase() === selectedMealType.toLowerCase()
-            )?.default_time
-          }
+          targetLabel={selectedMealTypeObj?.name}
+          defaultMealTime={selectedMealTypeObj?.default_time}
           initialTime={prefillEntryTime({
-            defaultTime: availableMealTypes?.find(
-              (t) => t.name.toLowerCase() === selectedMealType.toLowerCase()
-            )?.default_time,
+            defaultTime: selectedMealTypeObj?.default_time,
             isToday: selectedDate === todayInZone(timezone),
             tz: timezone,
           })}
@@ -583,9 +582,7 @@ const Diary = () => {
         date={selectedDate}
         mealType={selectedMealType}
         initialEntryTime={prefillEntryTime({
-          defaultTime: availableMealTypes?.find(
-            (t) => t.name.toLowerCase() === selectedMealType.toLowerCase()
-          )?.default_time,
+          defaultTime: selectedMealTypeObj?.default_time,
           isToday: selectedDate === todayInZone(timezone),
           tz: timezone,
         })}
