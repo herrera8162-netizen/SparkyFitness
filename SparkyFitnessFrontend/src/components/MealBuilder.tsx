@@ -735,9 +735,7 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
       const result = await autoSumMealWeight({ mealId: targetMealId });
       setAutoSumResult(result);
       if (result.cookedWeightUpdated) {
-        setCookedWeightText(
-          Number(result.totalGrams.toPrecision(15)).toString()
-        );
+        setCookedWeightText(result.totalGrams.toFixed(1));
         setCookedWeightSource('auto_sum');
         toast({
           title: t('mealBuilder.autoSumDoneTitle', 'Cooked weight updated'),
