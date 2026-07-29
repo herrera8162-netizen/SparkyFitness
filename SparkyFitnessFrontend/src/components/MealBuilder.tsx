@@ -728,13 +728,26 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
   };
 
   const handleAutoSumWeight = async () => {
-    const targetMealId = mealId || templateInfo.id;
-    if (!targetMealId) return;
+    if (mealFoods.length === 0) {
+      toast({
+        title: t('mealBuilder.autoSumEmptyTitle', 'Nothing to sum'),
+        description: t(
+          'mealBuilder.autoSumNoFoodsDescription',
+          'Add at least one food item before auto-summing cooked weight.'
+        ),
+        variant: 'destructive',
+      });
+      return;
+    }
+    const targetMealId = mealId || templateInfo.id || null;
     setIsAutoSumming(true);
     try {
-      const result = await autoSumMealWeight({ mealId: targetMealId });
+      const result = await autoSumMealWeight({
+        mealId: targetMealId,
+        foods: mealFoods,
+      });
       setAutoSumResult(result);
-      if (result.cookedWeightUpdated) {
+      if (result.cookedWeightUpdated && result.totalGrams > 0) {
         setCookedWeightText(result.totalGrams.toFixed(1));
         setCookedWeightSource('auto_sum');
         toast({

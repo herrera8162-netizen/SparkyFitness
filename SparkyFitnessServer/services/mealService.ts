@@ -735,7 +735,7 @@ async function resolveIngredientListWeights(
 
     const category = getUnitCategory(unit);
     if (category === 'weight') {
-      const factor = getConversionFactor(unit, 'g');
+      const factor = getConversionFactor('g', unit);
       resolved.push({
         mealFoodId: itemId,
         foodName: displayName,
@@ -757,14 +757,19 @@ async function resolveIngredientListWeights(
       massVariant.serving_size &&
       massVariant.serving_size > 0
     ) {
+      const massVariantFactor =
+        getConversionFactor('g', massVariant.serving_unit) ?? 1;
+      const massVariantGrams =
+        Number(massVariant.serving_size) * massVariantFactor;
+
       // If item unit matches variant unit or is 'serving', scale directly
       const itemVariantMatch = variants.find(
         (v: any) => v.serving_unit?.toLowerCase() === unit.toLowerCase()
       );
       if (itemVariantMatch && itemVariantMatch.serving_size) {
         const itemFactor = getConversionFactor(
-          itemVariantMatch.serving_unit,
-          'g'
+          'g',
+          itemVariantMatch.serving_unit
         );
         if (itemFactor) {
           resolved.push({
@@ -772,7 +777,8 @@ async function resolveIngredientListWeights(
             foodName: displayName,
             quantity,
             unit,
-            weightG: quantity * itemFactor,
+            weightG:
+              quantity * Number(itemVariantMatch.serving_size) * itemFactor,
             source: 'deterministic',
           });
           continue;
@@ -785,8 +791,7 @@ async function resolveIngredientListWeights(
         // amount, just in different units. Scale by that ratio instead of
         // falling through to an AI guess.
         const gramsPerNativeUnit =
-          Number(massVariant.serving_size) /
-          Number(itemVariantMatch.serving_size);
+          massVariantGrams / Number(itemVariantMatch.serving_size);
         if (Number.isFinite(gramsPerNativeUnit) && gramsPerNativeUnit > 0) {
           resolved.push({
             mealFoodId: itemId,
@@ -798,6 +803,20 @@ async function resolveIngredientListWeights(
           });
           continue;
         }
+      } else if (
+        unit.toLowerCase() === 'serving' &&
+        Number.isFinite(massVariantGrams) &&
+        massVariantGrams > 0
+      ) {
+        resolved.push({
+          mealFoodId: itemId,
+          foodName: displayName,
+          quantity,
+          unit,
+          weightG: quantity * massVariantGrams,
+          source: 'deterministic',
+        });
+        continue;
       }
     }
 
@@ -856,49 +875,62 @@ async function resolveIngredientListWeights(
   return { resolved, unresolved, totalGrams };
 }
 
-// Auto-sums a saved meal template's cooked weight from its ingredient weights.
-// Runs resolution on meal_foods, and — if at least one ingredient resolved — sums
-// them into the meal's cooked_weight_g (marked cooked_weight_source:
-// 'auto_sum').
+// Auto-sums a saved or ad-hoc meal template's cooked weight from its ingredient weights.
+// Runs resolution on meal_foods (or customFoods if passed), and — if at least
+// one ingredient resolved — sums them into the meal's cooked_weight_g (marked
+// cooked_weight_source: 'auto_sum').
 async function resolveMealIngredientWeights(
   userId: string,
-  mealId: string,
-  actorIsAdmin = false
+  mealId?: string | null,
+  actorIsAdmin = false,
+  customFoods?: any[]
 ): Promise<MealWeightResolution> {
-  const meal = await mealRepository.getMealById(mealId, userId);
-  if (!meal) {
+  const isCustomFoodsProvided =
+    Array.isArray(customFoods) && customFoods.length > 0;
+  let meal: any = null;
+  let itemsToResolve: any[];
+
+  if (mealId) {
+    meal = await mealRepository.getMealById(mealId, userId);
+  }
+
+  if (isCustomFoodsProvided) {
+    itemsToResolve = customFoods!;
+  } else if (meal) {
+    itemsToResolve = meal.foods || [];
+  } else {
     throw new Error('Meal not found.');
   }
 
   const { resolved, unresolved, totalGrams } =
-    await resolveIngredientListWeights(userId, meal.foods || [], actorIsAdmin);
+    await resolveIngredientListWeights(userId, itemsToResolve, actorIsAdmin);
 
-  for (const r of resolved) {
-    if (r.mealFoodId) {
-      // eslint-disable-next-line no-await-in-loop
-      await mealRepository.updateMealFoodWeight(r.mealFoodId, userId, {
-        resolved_weight_g: r.weightG,
-        weight_source: r.source,
-        weight_confidence: r.confidence ?? null,
+  if (mealId && meal) {
+    for (const r of resolved) {
+      if (r.mealFoodId) {
+        // eslint-disable-next-line no-await-in-loop
+        await mealRepository.updateMealFoodWeight(r.mealFoodId, userId, {
+          resolved_weight_g: r.weightG,
+          weight_source: r.source,
+          weight_confidence: r.confidence ?? null,
+        });
+      }
+    }
+
+    if (resolved.length > 0) {
+      await updateMeal(userId, mealId, {
+        cooked_weight_g: totalGrams,
+        cooked_weight_source: 'auto_sum',
       });
     }
   }
 
-  let cookedWeightUpdated = false;
-  if (resolved.length > 0) {
-    await updateMeal(userId, mealId, {
-      cooked_weight_g: totalGrams,
-      cooked_weight_source: 'auto_sum',
-    });
-    cookedWeightUpdated = true;
-  }
-
   return {
-    mealName: meal.name,
+    mealName: meal ? meal.name : 'Ad-hoc Meal',
     resolved,
     unresolved,
     totalGrams,
-    cookedWeightUpdated,
+    cookedWeightUpdated: resolved.length > 0,
   };
 }
 

@@ -692,11 +692,30 @@ router.delete('/:id', authenticate, async (req, res, next) => {
  *       404:
  *         description: Meal not found.
  */
-router.post('/:id/auto-sum-weight', authenticate, async (req, res, next) => {
+router.post('/auto-sum-weight', authenticate, async (req, res, next) => {
   try {
+    const foods = req.body?.foods;
     const result = await mealService.resolveMealIngredientWeights(
       req.userId,
-      req.params.id
+      null,
+      req.user?.role === 'admin',
+      foods
+    );
+    res.status(200).json(result);
+  } catch (error) {
+    log('error', 'Error auto-summing ad-hoc meal weight:', error);
+    next(error);
+  }
+});
+
+router.post('/:id/auto-sum-weight', authenticate, async (req, res, next) => {
+  try {
+    const foods = req.body?.foods;
+    const result = await mealService.resolveMealIngredientWeights(
+      req.userId,
+      req.params.id,
+      req.user?.role === 'admin',
+      foods
     );
     res.status(200).json(result);
   } catch (error) {

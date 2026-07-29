@@ -10,7 +10,7 @@ import {
   getTopMeals,
   updateMeal,
 } from '@/api/Foods/meals';
-import { MealFilter, MealPayload } from '@/types/meal';
+import { MealFilter, MealFood, MealPayload } from '@/types/meal';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import i18n from '@/i18n';
@@ -159,14 +159,20 @@ export const useUpdateMealMutation = () => {
     },
   });
 };
-// Auto-sums a saved meal template's cooked weight from its ingredient weights.
-// The endpoint persists cooked_weight_g itself; the caller handles the
-// result-specific toasts, so no meta success/error message here. Invalidates
+// Auto-sums a saved or ad-hoc meal template's cooked weight from its ingredient weights.
+// The endpoint persists cooked_weight_g itself for saved meals; the caller handles
+// the result-specific toasts, so no meta success/error message here. Invalidates
 // the meal cache so the refreshed cooked weight/provenance is reflected.
 export const useAutoSumMealWeightMutation = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ mealId }: { mealId: string }) => autoSumMealWeight(mealId),
+    mutationFn: ({
+      mealId,
+      foods,
+    }: {
+      mealId?: string | null;
+      foods?: MealFood[];
+    }) => autoSumMealWeight(mealId, foods),
     onSuccess: () => {
       return queryClient.invalidateQueries({
         queryKey: mealKeys.all,
