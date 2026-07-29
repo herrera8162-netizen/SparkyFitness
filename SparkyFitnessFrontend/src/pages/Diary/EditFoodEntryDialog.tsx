@@ -45,7 +45,7 @@ import {
   toHourMinute,
   userHourMinute,
 } from '@workspace/shared';
-import { formatServingLabel } from '@/utils/foodServing';
+import { formatUnitOptionLabel } from '@/utils/foodServing';
 
 const AI_PICKER_ICON_TONE_CLASSES: Record<ConfidenceTone, string> = {
   success: 'text-emerald-600 dark:text-emerald-400',
@@ -343,7 +343,7 @@ const EditFoodEntryDialog = ({
                             variant.id && (
                               <SelectItem key={variant.id} value={variant.id}>
                                 <span className="flex items-center gap-1.5">
-                                  {formatServingLabel(variant)}
+                                  {formatUnitOptionLabel(variant)}
                                   {variant.source === 'ai_estimate' &&
                                     variant.ai_confidence && (
                                       <Sparkles

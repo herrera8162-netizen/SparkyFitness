@@ -13,6 +13,16 @@ export function formatServingLabel(variant: ServingLike): string {
   return `${variant.serving_size} ${unit}`.trim();
 }
 
+// Label for the unit dropdown option itself, where an adjacent Quantity input
+// already supplies the multiplier. Omitting serving_size here avoids a
+// "Quantity: 5, Unit: 5 piece" display that reads as 25 total pieces.
+export function formatUnitOptionLabel(variant: ServingLike): string {
+  const description = variant.serving_description?.trim();
+  if (description) return description;
+
+  return variant.serving_unit?.trim() || '';
+}
+
 export function formatQuantityServingLabel(
   quantity: number,
   variant: ServingLike
