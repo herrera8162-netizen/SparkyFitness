@@ -55,11 +55,17 @@ vi.mock('../services/mealPlanTemplateService.js', () => ({ default: {} }));
 vi.mock('../models/mealType.js', () => ({
   default: { getAllMealTypes: vi.fn().mockResolvedValue([]) },
 }));
+vi.mock('../services/aiUnitConversionService.js', () => ({
+  default: {
+    estimateUnitConversion: vi.fn(),
+  },
+}));
 
 import mealService from '../services/mealService.js';
 import mealRepository from '../models/mealRepository.js';
 import foodRepository from '../models/foodRepository.js';
 import foodEntryRepository from '../models/foodEntry.js';
+import aiUnitConversionService from '../services/aiUnitConversionService.js';
 
 describe('mealService validation', () => {
   beforeEach(() => {
@@ -666,6 +672,80 @@ describe('mealService validation', () => {
           quantity: 100,
         }),
       ]);
+    });
+  });
+
+  describe('resolveIngredientListWeights', () => {
+    const mockedFoodRepository = vi.mocked(foodRepository);
+    const mockedAiUnitConversionService = vi.mocked(aiUnitConversionService);
+
+    // Regression: a food with a "serving" default variant plus a separate
+    // mass variant (e.g. "1 serving" + "283 g") must resolve deterministically
+    // from the ratio of those two variants, never via an AI guess — even
+    // though "serving" itself has no weight/volume unit category.
+    it("resolves a quantity-unit ingredient against the food's own mass variant instead of calling AI", async () => {
+      mockedFoodRepository.getFoodVariantsByFoodId.mockResolvedValue([
+        { id: 'v-serving', serving_size: 1, serving_unit: 'serving' },
+        { id: 'v-grams', serving_size: 283, serving_unit: 'g' },
+      ] as any);
+
+      const { resolved, unresolved, totalGrams } =
+        await mealService.resolveIngredientListWeights('user-1', [
+          {
+            id: 'meal-food-1',
+            food_id: 'ground-beef',
+            food_name: 'Ground beef',
+            quantity: 1,
+            unit: 'serving',
+          },
+        ]);
+
+      expect(unresolved).toEqual([]);
+      expect(resolved).toEqual([
+        expect.objectContaining({
+          mealFoodId: 'meal-food-1',
+          weightG: 283,
+          source: 'deterministic',
+        }),
+      ]);
+      expect(totalGrams).toBe(283);
+      expect(
+        mockedAiUnitConversionService.estimateUnitConversion
+      ).not.toHaveBeenCalled();
+    });
+
+    it('still falls back to AI estimation when no mass variant exists', async () => {
+      mockedFoodRepository.getFoodVariantsByFoodId.mockResolvedValue([
+        { id: 'v-serving', serving_size: 1, serving_unit: 'serving' },
+      ] as any);
+      mockedAiUnitConversionService.estimateUnitConversion.mockResolvedValue({
+        estimatedAmount: 50,
+        confidence: 'medium',
+      } as any);
+
+      const { resolved, unresolved } =
+        await mealService.resolveIngredientListWeights('user-1', [
+          {
+            id: 'meal-food-2',
+            food_id: 'mystery-food',
+            food_name: 'Mystery food',
+            quantity: 1,
+            unit: 'serving',
+          },
+        ]);
+
+      expect(unresolved).toEqual([]);
+      expect(resolved).toEqual([
+        expect.objectContaining({
+          mealFoodId: 'meal-food-2',
+          weightG: 50,
+          source: 'ai_estimated',
+          confidence: 'medium',
+        }),
+      ]);
+      expect(
+        mockedAiUnitConversionService.estimateUnitConversion
+      ).toHaveBeenCalledTimes(1);
     });
   });
 });

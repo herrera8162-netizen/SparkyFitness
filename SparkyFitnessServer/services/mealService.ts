@@ -777,6 +777,27 @@ async function resolveIngredientListWeights(
           });
           continue;
         }
+
+        // itemVariantMatch is a quantity unit (e.g. "serving", "piece") with
+        // no direct weight conversion factor. It's still the same food's own
+        // variant list, so its serving_size is directly comparable to the
+        // mass variant's serving_size — both describe the same reference
+        // amount, just in different units. Scale by that ratio instead of
+        // falling through to an AI guess.
+        const gramsPerNativeUnit =
+          Number(massVariant.serving_size) /
+          Number(itemVariantMatch.serving_size);
+        if (Number.isFinite(gramsPerNativeUnit) && gramsPerNativeUnit > 0) {
+          resolved.push({
+            mealFoodId: itemId,
+            foodName: displayName,
+            quantity,
+            unit,
+            weightG: quantity * gramsPerNativeUnit,
+            source: 'deterministic',
+          });
+          continue;
+        }
       }
     }
 
