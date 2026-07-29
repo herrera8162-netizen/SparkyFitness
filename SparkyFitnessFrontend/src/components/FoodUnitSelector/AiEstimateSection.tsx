@@ -26,7 +26,7 @@ interface AiEstimateSectionProps {
    * `'confirm'` (default): show the AI result inline with "Use this" / "Edit"
    * buttons so the user explicitly commits the estimate. Used by the diary
    * picker, where the estimate fills a manual factor that the user then
-   * submits via the parent's "Add to Meal" button.
+   * submits via the parent's "Add Food" / "Add to Meal" button.
    *
    * `'auto-apply'`: call `onAccept` as soon as the estimate succeeds - no
    * result panel, no buttons. Used by the food-editor row, where the form

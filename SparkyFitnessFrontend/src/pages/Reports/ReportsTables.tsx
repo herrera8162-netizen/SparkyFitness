@@ -387,7 +387,7 @@ const ReportsTables = ({
               <TableHeader>
                 <TableRow>
                   <TableHead>{t('reportsTables.date', 'Date')}</TableHead>
-                  <TableHead>{t('reportsTables.meal', 'Meal')}</TableHead>
+                  <TableHead>{t('reportsTables.meal', 'Meal Type')}</TableHead>
                   <TableHead className="min-w-[250px]">
                     {t('reportsTables.food', 'Food')}
                   </TableHead>

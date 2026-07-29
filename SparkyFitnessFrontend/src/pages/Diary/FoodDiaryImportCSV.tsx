@@ -661,7 +661,9 @@ const FoodDiaryImportCSV = ({ onSave }: FoodDiaryImportCSVProps) => {
           onValueChange={(value) => handleEditCell(row.id, header, value)}
         >
           <SelectTrigger className="w-full md:w-36">
-            <SelectValue placeholder={t('diaryCsvImport.mealType', 'Meal')} />
+            <SelectValue
+              placeholder={t('diaryCsvImport.mealType', 'Meal Type')}
+            />
           </SelectTrigger>
           <SelectContent>
             {mealTypeOptions.map((m) => (
