@@ -44,7 +44,7 @@ import {
 } from '@workspace/shared';
 import {
   formatQuantityServingLabel,
-  formatServingLabel,
+  formatUnitOptionLabel,
 } from '@/utils/foodServing';
 
 // Confidence tone classes for the saved-AI-variant indicator in the picker dropdown.
@@ -562,7 +562,7 @@ const FoodUnitSelector = ({
                             variant.id && (
                               <SelectItem key={variant.id} value={variant.id}>
                                 <span className="flex items-center gap-1.5">
-                                  {formatServingLabel(variant)}
+                                  {formatUnitOptionLabel(variant)}
                                   {variant.source === 'ai_estimate' &&
                                     variant.ai_confidence && (
                                       <Sparkles
