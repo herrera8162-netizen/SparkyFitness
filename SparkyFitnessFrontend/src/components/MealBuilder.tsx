@@ -179,6 +179,9 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
     'perServing'
   );
   const [mealFoods, setMealFoods] = useState<MealFood[]>(initialFoods || []);
+  // Skips the clear-on-mount run below so autoSumResult loaded/restored on
+  // first render isn't wiped before the user has touched anything.
+  const isFirstMealFoodsRender = useRef(true);
   const [isFoodUnitSelectorOpen, setIsFoodUnitSelectorOpen] = useState(false);
   const [showFoodSearchDialog, setShowFoodSearchDialog] = useState(false);
   const [selectedFoodForUnitSelection, setSelectedFoodForUnitSelection] =
@@ -785,6 +788,18 @@ const MealBuilder: React.FC<MealBuilderProps> = ({
       setIsAutoSumming(false);
     }
   };
+
+  // The auto-sum breakdown reflects a specific mealFoods snapshot; once an
+  // ingredient's quantity/unit/food changes, that breakdown is stale, so
+  // clear it rather than keep showing pre-edit weights until the user
+  // re-runs auto-sum.
+  useEffect(() => {
+    if (isFirstMealFoodsRender.current) {
+      isFirstMealFoodsRender.current = false;
+      return;
+    }
+    setAutoSumResult(null);
+  }, [mealFoods]);
 
   const handleSaveMeal = async () => {
     if (mealFoods.length === 0) {
