@@ -747,5 +747,55 @@ describe('mealService validation', () => {
         mockedAiUnitConversionService.estimateUnitConversion
       ).toHaveBeenCalledTimes(1);
     });
+
+    it('correctly converts non-gram mass variant (e.g., 8 oz) to grams instead of treating serving_size as grams', async () => {
+      mockedFoodRepository.getFoodVariantsByFoodId.mockResolvedValue([
+        { id: 'v-oz', serving_size: 8, serving_unit: 'oz' },
+      ] as any);
+
+      const { resolved, totalGrams } =
+        await mealService.resolveIngredientListWeights('user-1', [
+          {
+            id: 'meal-food-tomato-sauce',
+            food_id: 'tomato-sauce',
+            food_name: 'Tomato Sauce',
+            quantity: 1,
+            unit: 'serving',
+          },
+        ]);
+
+      expect(resolved).toEqual([
+        expect.objectContaining({
+          mealFoodId: 'meal-food-tomato-sauce',
+          source: 'deterministic',
+        }),
+      ]);
+      // 8 oz * 28.349523125 g/oz = 226.796185 g
+      expect(totalGrams).toBeCloseTo(226.8, 1);
+    });
+
+    it('supports auto-summing ad-hoc custom foods list without a saved meal template', async () => {
+      mockedFoodRepository.getFoodVariantsByFoodId.mockResolvedValue([
+        { id: 'v-oz', serving_size: 8, serving_unit: 'oz' },
+      ] as any);
+
+      const result = await mealService.resolveMealIngredientWeights(
+        'user-1',
+        null,
+        false,
+        [
+          {
+            food_id: 'tomato-sauce',
+            food_name: 'Tomato Sauce',
+            quantity: 2,
+            unit: 'oz',
+          },
+        ]
+      );
+
+      expect(result.mealName).toBe('Ad-hoc Meal');
+      expect(result.totalGrams).toBeCloseTo(56.7, 1);
+      expect(result.cookedWeightUpdated).toBe(true);
+    });
   });
 });

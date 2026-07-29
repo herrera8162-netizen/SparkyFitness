@@ -243,7 +243,56 @@ describe('Meal Routes', () => {
       expect(res.body).toEqual(resolution);
       expect(mealService.resolveMealIngredientWeights).toHaveBeenCalledWith(
         'testUserId',
-        mealId
+        mealId,
+        false,
+        undefined
+      );
+    });
+    it('should accept custom foods list in request body for auto-sum', async () => {
+      const resolution = {
+        mealName: 'Picadillo',
+        resolved: [],
+        unresolved: [],
+        totalGrams: 500,
+        cookedWeightUpdated: true,
+      };
+      // @ts-expect-error TS(2339): mock helper not on typed default export
+      mealService.resolveMealIngredientWeights.mockResolvedValue(resolution);
+      const mealId = uuidv4();
+      const foods = [{ food_name: 'Tomato Sauce', quantity: 4, unit: 'oz' }];
+      const res = await request(app)
+        .post(`/meals/${mealId}/auto-sum-weight`)
+        .send({ foods });
+      expect(res.statusCode).toEqual(200);
+      expect(res.body).toEqual(resolution);
+      expect(mealService.resolveMealIngredientWeights).toHaveBeenCalledWith(
+        'testUserId',
+        mealId,
+        false,
+        foods
+      );
+    });
+    it('should auto-sum ad-hoc meal when POST /meals/auto-sum-weight is called', async () => {
+      const resolution = {
+        mealName: 'Ad-hoc Meal',
+        resolved: [],
+        unresolved: [],
+        totalGrams: 200,
+        cookedWeightUpdated: true,
+      };
+      // @ts-expect-error TS(2339): mock helper not on typed default export
+      mealService.resolveMealIngredientWeights.mockResolvedValue(resolution);
+      const foods = [{ food_name: 'Tomato Sauce', quantity: 8, unit: 'oz' }];
+      const res = await request(app)
+        .post('/meals/auto-sum-weight')
+        .send({ foods });
+      expect(res.statusCode).toEqual(200);
+      expect(res.body).toEqual(resolution);
+      expect(mealService.resolveMealIngredientWeights).toHaveBeenCalledWith(
+        'testUserId',
+        null,
+        false,
+        foods
       );
     });
     it('should return 404 when the meal is not found', async () => {
