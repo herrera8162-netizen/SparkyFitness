@@ -374,9 +374,9 @@ const CustomFoodForm = ({
             }
           }}
           onConfirm={() => handleSyncConfirmation(true)}
-          title="Update Past Diary Entries?"
-          description="Diary entries store a snapshot of this food's nutrition at the time you logged it. You've just changed that nutrition data — do you want to recalculate every past diary entry for this food (and your historical daily totals) using the new values? Choosing Cancel keeps your history exactly as originally logged."
-          confirmLabel="Update Past Entries"
+          title="Update All Past Diary Entries?"
+          description="Diary entries store a snapshot of this food's nutrition at the time you logged it. You've just changed that nutrition data — do you want to recalculate every past diary entry for this food in your own diary (across all dates and all serving sizes), and your historical daily totals, using the new values? This only affects entries you logged yourself — it will not change entries other family members logged for this food. Choosing Cancel keeps your history exactly as originally logged."
+          confirmLabel="Update All Past Entries"
         />
       )}
 
