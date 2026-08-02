@@ -11,11 +11,54 @@ const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<'input'>>(
     const handleStep = (direction: 'up' | 'down') => {
       const input = innerRef.current;
       if (!input || input.disabled || input.readOnly) return;
-      if (direction === 'up') {
-        input.stepUp();
-      } else {
-        input.stepDown();
+
+      const stepAttr = input.getAttribute('step');
+      const minAttr = input.getAttribute('min');
+      const maxAttr = input.getAttribute('max');
+
+      const currentVal = input.value === '' ? 0 : parseFloat(input.value);
+      if (isNaN(currentVal)) return;
+
+      let stepAmount = 1;
+      if (stepAttr && stepAttr !== 'any') {
+        const parsedStep = parseFloat(stepAttr);
+        if (!isNaN(parsedStep) && parsedStep > 0) {
+          stepAmount = parsedStep;
+        }
       }
+
+      const stepDecimals = stepAmount.toString().split('.')[1]?.length || 0;
+      const valDecimals = input.value.split('.')[1]?.length || 0;
+      const precision = Math.max(stepDecimals, valDecimals, 2);
+
+      let nextVal =
+        direction === 'up' ? currentVal + stepAmount : currentVal - stepAmount;
+
+      if (minAttr !== null && minAttr !== '') {
+        const minVal = parseFloat(minAttr);
+        if (!isNaN(minVal) && nextVal < minVal) {
+          nextVal = minVal;
+        }
+      }
+      if (maxAttr !== null && maxAttr !== '') {
+        const maxVal = parseFloat(maxAttr);
+        if (!isNaN(maxVal) && nextVal > maxVal) {
+          nextVal = maxVal;
+        }
+      }
+
+      const formattedVal = Number(nextVal.toFixed(precision)).toString();
+
+      const valueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value'
+      )?.set;
+      if (valueSetter) {
+        valueSetter.call(input, formattedVal);
+      } else {
+        input.value = formattedVal;
+      }
+
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
     };
