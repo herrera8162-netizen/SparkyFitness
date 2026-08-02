@@ -3901,7 +3901,9 @@
     "syncConfirmationDescriptionWithPhotos": "Do you want to update all your past diary entries for this food with the new nutrition and photos? Updating photos replaces photos you set on individual diary entries, and can't be undone.",
     "syncConfirmationConfirm": "Update",
     "syncConfirmationConfirmWithPhotos": "Update nutrition & photos",
-    "syncConfirmationNutritionOnly": "Update nutrition only"
+    "syncConfirmationNutritionOnly": "Update nutrition only",
+    "syncPastEntryPhotosLabel": "Also update photos on past entries",
+    "syncPastEntryPhotosHelp": "Replaces any photo you set on individual diary entries with this food's new photo. Can't be undone."
   },
   "customMeasurements": {
     "title": "Custom Measurements - {{date}}",

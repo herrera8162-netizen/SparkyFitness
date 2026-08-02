@@ -36,9 +36,15 @@ jest.mock('@/hooks/use-toast', () => ({
   toast: (...args: unknown[]) => mockToast(...args),
 }));
 
+const mockUpdateFoodEntriesSnapshot = jest.fn();
+
 jest.mock('@/hooks/Foods/useFoods', () => ({
   useUpdateFoodEntriesSnapshotMutation: () => ({
-    mutateAsync: jest.fn(),
+    mutateAsync: mockUpdateFoodEntriesSnapshot,
+  }),
+  foodDeletionImpactOptions: jest.fn().mockReturnValue({
+    queryKey: ['deletion-impact'],
+    queryFn: jest.fn(),
   }),
 }));
 
@@ -50,6 +56,25 @@ jest.mock('@/hooks/Foods/useCustomNutrients', () => ({
 
 jest.mock('@tanstack/react-query', () => ({
   useQueryClient: () => mockQueryClient,
+  useQuery: () => ({
+    data: {
+      foodEntriesCount: 2,
+      foodEntries: [
+        {
+          id: 'entry-1',
+          entry_date: '2026-08-01',
+          meal_type_id: 'm1',
+          isCurrentUser: true,
+        },
+        {
+          id: 'entry-2',
+          entry_date: '2026-08-02',
+          meal_type_id: 'm1',
+          isCurrentUser: true,
+        },
+      ],
+    },
+  }),
 }));
 
 jest.mock('@/hooks/Foods/useFoodVariants', () => ({
@@ -513,6 +538,222 @@ describe('useCustomFoodForm', () => {
 
     expect(result.current.hasTrustedCompatibilityBase[1]).toBe(true);
     expect(result.current.variants[1]?.is_locked).toBe(true);
+  });
+
+  it('handles syncPastEntries toggle and direct updateFoodEntriesSnapshot on save', async () => {
+    const defaultVariant = createVariant({ is_default: true });
+    const food = createFood({
+      id: 'food-123',
+      user_id: 'user-1',
+      variants: [defaultVariant],
+    });
+    const initialVariants = [defaultVariant];
+    mockSaveFood.mockResolvedValueOnce(food);
+    const onSave = jest.fn();
+
+    const { result } = renderHook(() =>
+      useCustomFoodForm({
+        food,
+        initialVariants,
+        onSave,
+      })
+    );
+
+    expect(result.current.isUserOwnedFood).toBe(true);
+    expect(result.current.foodEntriesCount).toBe(2);
+    expect(result.current.syncPastEntries).toBe(true);
+
+    await act(async () => {
+      await result.current.handleSubmit({
+        preventDefault: jest.fn(),
+      } as unknown as React.FormEvent);
+    });
+
+    expect(mockSaveFood).toHaveBeenCalled();
+    expect(mockUpdateFoodEntriesSnapshot).toHaveBeenCalledWith({
+      foodId: 'food-123',
+      syncImages: false,
+    });
+    expect(onSave).toHaveBeenCalledWith(food);
+  });
+
+  it('skips updateFoodEntriesSnapshot on save when syncPastEntries is false', async () => {
+    const defaultVariant = createVariant({ is_default: true });
+    const food = createFood({
+      id: 'food-456',
+      user_id: 'user-1',
+      variants: [defaultVariant],
+    });
+    const initialVariants = [defaultVariant];
+    mockSaveFood.mockResolvedValueOnce(food);
+    mockUpdateFoodEntriesSnapshot.mockClear();
+    const onSave = jest.fn();
+
+    const { result } = renderHook(() =>
+      useCustomFoodForm({
+        food,
+        initialVariants,
+        onSave,
+      })
+    );
+
+    act(() => {
+      result.current.setSyncPastEntries(false);
+    });
+
+    await act(async () => {
+      await result.current.handleSubmit({
+        preventDefault: jest.fn(),
+      } as unknown as React.FormEvent);
+    });
+
+    expect(mockSaveFood).toHaveBeenCalled();
+    expect(mockUpdateFoodEntriesSnapshot).not.toHaveBeenCalled();
+    expect(onSave).toHaveBeenCalledWith(food);
+  });
+
+  it('does not flag syncTouchesPhotos and defaults the photo-sync toggle off when the picker is untouched', async () => {
+    const defaultVariant = createVariant({ is_default: true });
+    const food = createFood({
+      id: 'food-789',
+      user_id: 'user-1',
+      images: ['/uploads/food-789/existing.jpg'],
+      variants: [defaultVariant],
+    });
+    const initialVariants = [defaultVariant];
+
+    const { result } = renderHook(() =>
+      useCustomFoodForm({
+        food,
+        initialVariants,
+        onSave: jest.fn(),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.syncTouchesPhotos).toBe(false);
+    });
+    expect(result.current.syncPastEntryPhotos).toBe(false);
+  });
+
+  it('flags syncTouchesPhotos once the picker diverges from the saved images', async () => {
+    const defaultVariant = createVariant({ is_default: true });
+    const food = createFood({
+      id: 'food-790',
+      user_id: 'user-1',
+      images: ['/uploads/food-790/existing.jpg'],
+      variants: [defaultVariant],
+    });
+    const initialVariants = [defaultVariant];
+
+    const { result } = renderHook(() =>
+      useCustomFoodForm({
+        food,
+        initialVariants,
+        onSave: jest.fn(),
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.syncTouchesPhotos).toBe(false);
+    });
+
+    act(() => {
+      result.current.setImageItems([
+        { kind: 'new', file: new File([], 'new.jpg'), id: 'new-1' },
+      ]);
+    });
+
+    expect(result.current.syncTouchesPhotos).toBe(true);
+    // Toggle stays off until the user opts in, even once photos changed.
+    expect(result.current.syncPastEntryPhotos).toBe(false);
+  });
+
+  it('passes syncImages: true on save only when the photo toggle is explicitly turned on', async () => {
+    const defaultVariant = createVariant({ is_default: true });
+    const food = createFood({
+      id: 'food-791',
+      user_id: 'user-1',
+      images: ['/uploads/food-791/existing.jpg'],
+      variants: [defaultVariant],
+    });
+    const initialVariants = [defaultVariant];
+    mockSaveFood.mockResolvedValueOnce(food);
+    const onSave = jest.fn();
+
+    const { result } = renderHook(() =>
+      useCustomFoodForm({
+        food,
+        initialVariants,
+        onSave,
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.syncTouchesPhotos).toBe(false);
+    });
+
+    act(() => {
+      result.current.setImageItems([
+        { kind: 'new', file: new File([], 'new.jpg'), id: 'new-1' },
+      ]);
+    });
+    act(() => {
+      result.current.setSyncPastEntryPhotos(true);
+    });
+
+    await act(async () => {
+      await result.current.handleSubmit({
+        preventDefault: jest.fn(),
+      } as unknown as React.FormEvent);
+    });
+
+    expect(mockUpdateFoodEntriesSnapshot).toHaveBeenCalledWith({
+      foodId: 'food-791',
+      syncImages: true,
+    });
+    expect(onSave).toHaveBeenCalledWith(food);
+  });
+
+  it('ignores an enabled photo toggle when the picker never actually changed the photo', async () => {
+    const defaultVariant = createVariant({ is_default: true });
+    const food = createFood({
+      id: 'food-792',
+      user_id: 'user-1',
+      images: ['/uploads/food-792/existing.jpg'],
+      variants: [defaultVariant],
+    });
+    const initialVariants = [defaultVariant];
+    mockSaveFood.mockResolvedValueOnce(food);
+    const onSave = jest.fn();
+
+    const { result } = renderHook(() =>
+      useCustomFoodForm({
+        food,
+        initialVariants,
+        onSave,
+      })
+    );
+
+    await waitFor(() => {
+      expect(result.current.syncTouchesPhotos).toBe(false);
+    });
+
+    // Flip the toggle on without ever touching the picker.
+    act(() => {
+      result.current.setSyncPastEntryPhotos(true);
+    });
+
+    await act(async () => {
+      await result.current.handleSubmit({
+        preventDefault: jest.fn(),
+      } as unknown as React.FormEvent);
+    });
+
+    expect(mockUpdateFoodEntriesSnapshot).toHaveBeenCalledWith({
+      foodId: 'food-792',
+      syncImages: false,
+    });
   });
 
   it('skips scaling math when serving sizes are invalid instead of producing destructive values', async () => {

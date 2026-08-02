@@ -3,13 +3,10 @@ import { useAuth } from '@/hooks/useAuth';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { toast } from '@/hooks/use-toast';
-import { useUpdateFoodEntriesSnapshotMutation } from '@/hooks/Foods/useFoods';
-
-/** The three outcomes of the "Sync Past Entries?" prompt. */
-export type SyncPastEntriesChoice =
-  | 'none'
-  | 'nutrition'
-  | 'nutrition-and-photos';
+import {
+  useUpdateFoodEntriesSnapshotMutation,
+  foodDeletionImpactOptions,
+} from '@/hooks/Foods/useFoods';
 import { useCustomNutrients } from '@/hooks/Foods/useCustomNutrients';
 import {
   pickerImagesDiffer,
@@ -17,7 +14,7 @@ import {
   toSavedImages,
   type PickerImage,
 } from '@/utils/imagePickerItems';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import {
   foodVariantsOptions,
   useSaveFoodMutation,
@@ -364,17 +361,30 @@ export function useCustomFoodForm({
     (GroupedFormFoodVariant | null)[]
   >([]);
   const [variantMeta, setVariantMeta] = useState<VariantMeta[]>([]);
-  const [showSyncConfirmation, setShowSyncConfirmation] = useState(false);
-  const [savedFoodResult, setSavedFoodResult] = useState<Food | null>(null);
-  // Whether the save that triggered the sync prompt also replaced the food's
-  // photos. Captured at save time rather than derived at render: `food` is a
-  // prop and the sync dialog outlives the save that opened it.
-  const [syncTouchesPhotos, setSyncTouchesPhotos] = useState(false);
+  const isUserOwnedFood = Boolean(
+    food?.id && user?.id && user.id === food.user_id
+  );
+  const { data: deletionImpact } = useQuery({
+    ...foodDeletionImpactOptions(food?.id || ''),
+    enabled: isUserOwnedFood,
+  });
+  const foodEntriesCount = deletionImpact?.foodEntriesCount ?? 0;
+  const foodEntries = deletionImpact?.foodEntries ?? [];
+
+  const [syncPastEntries, setSyncPastEntries] = useState(true);
+  // Whether the currently staged photo edits differ from what's saved.
+  // Gates the "also update photos" toggle, which only makes sense to offer
+  // when this save would actually change the food's photo.
+  const [syncPastEntryPhotos, setSyncPastEntryPhotos] = useState(false);
   const [showBarcodeConflictConfirmation, setShowBarcodeConflictConfirmation] =
     useState(false);
   // One ordered list of saved images and staged files, so the user can drag a
   // new photo ahead of an existing one before saving.
   const [imageItems, setImageItems] = useState<PickerImage[]>([]);
+  const syncTouchesPhotos = useMemo(
+    () => pickerImagesDiffer(imageItems, food?.images),
+    [imageItems, food?.images]
+  );
   const [barcodeConflictFoodName, setBarcodeConflictFoodName] = useState('');
   const [formData, setFormData] = useState({
     name: '',
@@ -1204,26 +1214,44 @@ export function useCustomFoodForm({
         imageFiles,
       });
 
-      const photosChanged = pickerImagesDiffer(imageItems, food?.images);
-
       // The save consumed the staged files; the server echoes back the final
       // list including their new upload paths.
       setImageItems(toSavedImages(savedFood.images));
 
-      if (food?.id && user?.id === food.user_id) {
-        setSavedFoodResult(savedFood);
-        setSyncTouchesPhotos(photosChanged);
-        setShowSyncConfirmation(true);
-      } else {
-        if (!food?.id) resetForm();
-        onSave(savedFood);
+      if (isUserOwnedFood && syncPastEntries && foodEntriesCount > 0) {
+        try {
+          await updateFoodEntriesSnapshot({
+            foodId: savedFood.id,
+            syncImages: syncTouchesPhotos ? syncPastEntryPhotos : false,
+          });
+        } catch (err) {
+          console.error('Error updating past diary entries snapshot:', err);
+        }
       }
+
+      if (!food?.id) resetForm();
+      onSave(savedFood);
     } catch (err) {
       console.error('Error saving food:', err);
     } finally {
       setLoading(false);
     }
-  }, [food, formData, imageItems, onSave, resetForm, saveFood, user, variants]);
+  }, [
+    food,
+    formData,
+    imageItems,
+    onSave,
+    resetForm,
+    saveFood,
+    user,
+    variants,
+    isUserOwnedFood,
+    syncPastEntries,
+    foodEntriesCount,
+    syncTouchesPhotos,
+    syncPastEntryPhotos,
+    updateFoodEntriesSnapshot,
+  ]);
 
   const handleBarcodeConflictConfirm = async () => {
     setShowBarcodeConflictConfirmation(false);
@@ -1260,30 +1288,6 @@ export function useCustomFoodForm({
     await persistFood();
   };
 
-  /**
-   * 'none' leaves history alone. 'nutrition' rewrites nutrition and leaves
-   * every entry's photo as it is. 'nutrition-and-photos' additionally forces
-   * the food's photos onto every entry, replacing photos the user set on
-   * individual diary entries — the replaced files are unlinked server-side.
-   */
-  const handleSyncConfirmation = async (choice: SyncPastEntriesChoice) => {
-    if (!savedFoodResult) return;
-
-    if (choice !== 'none') {
-      try {
-        await updateFoodEntriesSnapshot({
-          foodId: savedFoodResult.id,
-          syncImages: choice === 'nutrition-and-photos',
-        });
-      } catch {
-        /* toast handled by QueryClient */
-      }
-    }
-    setShowSyncConfirmation(false);
-    onSave(savedFoodResult);
-    setSavedFoodResult(null);
-  };
-
   const variantErrors = useMemo(
     () => variantMeta.map((m) => m.error),
     [variantMeta]
@@ -1306,9 +1310,14 @@ export function useCustomFoodForm({
     variants,
     variantErrors,
     loading,
-    showSyncConfirmation,
-    setShowSyncConfirmation,
+    syncPastEntries,
+    setSyncPastEntries,
+    foodEntriesCount,
+    foodEntries,
+    isUserOwnedFood,
     syncTouchesPhotos,
+    syncPastEntryPhotos,
+    setSyncPastEntryPhotos,
     loadedVariants,
     conversionBaseVariants: originalVariants,
     hasTrustedCompatibilityBase,
@@ -1323,7 +1332,6 @@ export function useCustomFoodForm({
     applyProviderNutrientMatch,
     applyAiEstimate,
     handleSubmit,
-    handleSyncConfirmation,
     imageItems,
     setImageItems,
     showBarcodeConflictConfirmation,
