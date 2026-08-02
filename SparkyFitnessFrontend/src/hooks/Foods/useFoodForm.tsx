@@ -3,9 +3,12 @@ import { useAuth } from '@/hooks/useAuth';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { toast } from '@/hooks/use-toast';
-import { useUpdateFoodEntriesSnapshotMutation } from '@/hooks/Foods/useFoods';
+import {
+  useUpdateFoodEntriesSnapshotMutation,
+  foodDeletionImpactOptions,
+} from '@/hooks/Foods/useFoods';
 import { useCustomNutrients } from '@/hooks/Foods/useCustomNutrients';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import {
   foodVariantsOptions,
   useSaveFoodMutation,
@@ -352,8 +355,17 @@ export function useCustomFoodForm({
     (GroupedFormFoodVariant | null)[]
   >([]);
   const [variantMeta, setVariantMeta] = useState<VariantMeta[]>([]);
-  const [showSyncConfirmation, setShowSyncConfirmation] = useState(false);
-  const [savedFoodResult, setSavedFoodResult] = useState<Food | null>(null);
+  const isUserOwnedFood = Boolean(
+    food?.id && user?.id && user.id === food.user_id
+  );
+  const { data: deletionImpact } = useQuery({
+    ...foodDeletionImpactOptions(food?.id || ''),
+    enabled: isUserOwnedFood,
+  });
+  const foodEntriesCount = deletionImpact?.foodEntriesCount ?? 0;
+  const foodEntries = deletionImpact?.foodEntries ?? [];
+
+  const [syncPastEntries, setSyncPastEntries] = useState(true);
   const [showBarcodeConflictConfirmation, setShowBarcodeConflictConfirmation] =
     useState(false);
   const [barcodeConflictFoodName, setBarcodeConflictFoodName] = useState('');
@@ -1163,19 +1175,34 @@ export function useCustomFoodForm({
         foodId: food?.id,
       });
 
-      if (food?.id && user?.id === food.user_id) {
-        setSavedFoodResult(savedFood);
-        setShowSyncConfirmation(true);
-      } else {
-        if (!food?.id) resetForm();
-        onSave(savedFood);
+      if (isUserOwnedFood && syncPastEntries && foodEntriesCount > 0) {
+        try {
+          await updateFoodEntriesSnapshot(savedFood.id);
+        } catch (err) {
+          console.error('Error updating past diary entries snapshot:', err);
+        }
       }
+
+      if (!food?.id) resetForm();
+      onSave(savedFood);
     } catch (err) {
       console.error('Error saving food:', err);
     } finally {
       setLoading(false);
     }
-  }, [food, formData, onSave, resetForm, saveFood, user, variants]);
+  }, [
+    food,
+    formData,
+    onSave,
+    resetForm,
+    saveFood,
+    user,
+    variants,
+    isUserOwnedFood,
+    syncPastEntries,
+    foodEntriesCount,
+    updateFoodEntriesSnapshot,
+  ]);
 
   const handleBarcodeConflictConfirm = async () => {
     setShowBarcodeConflictConfirmation(false);
@@ -1212,21 +1239,6 @@ export function useCustomFoodForm({
     await persistFood();
   };
 
-  const handleSyncConfirmation = async (sync: boolean) => {
-    if (!savedFoodResult) return;
-
-    if (sync) {
-      try {
-        await updateFoodEntriesSnapshot(savedFoodResult.id);
-      } catch {
-        /* toast handled by QueryClient */
-      }
-    }
-    setShowSyncConfirmation(false);
-    onSave(savedFoodResult);
-    setSavedFoodResult(null);
-  };
-
   const variantErrors = useMemo(
     () => variantMeta.map((m) => m.error),
     [variantMeta]
@@ -1249,8 +1261,11 @@ export function useCustomFoodForm({
     variants,
     variantErrors,
     loading,
-    showSyncConfirmation,
-    setShowSyncConfirmation,
+    syncPastEntries,
+    setSyncPastEntries,
+    foodEntriesCount,
+    foodEntries,
+    isUserOwnedFood,
     loadedVariants,
     conversionBaseVariants: originalVariants,
     hasTrustedCompatibilityBase,
@@ -1265,7 +1280,6 @@ export function useCustomFoodForm({
     applyProviderNutrientMatch,
     applyAiEstimate,
     handleSubmit,
-    handleSyncConfirmation,
     showBarcodeConflictConfirmation,
     setShowBarcodeConflictConfirmation,
     barcodeConflictFoodName,

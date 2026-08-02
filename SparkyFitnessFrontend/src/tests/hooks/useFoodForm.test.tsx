@@ -36,9 +36,15 @@ jest.mock('@/hooks/use-toast', () => ({
   toast: (...args: unknown[]) => mockToast(...args),
 }));
 
+const mockUpdateFoodEntriesSnapshot = jest.fn();
+
 jest.mock('@/hooks/Foods/useFoods', () => ({
   useUpdateFoodEntriesSnapshotMutation: () => ({
-    mutateAsync: jest.fn(),
+    mutateAsync: mockUpdateFoodEntriesSnapshot,
+  }),
+  foodDeletionImpactOptions: jest.fn().mockReturnValue({
+    queryKey: ['deletion-impact'],
+    queryFn: jest.fn(),
   }),
 }));
 
@@ -50,6 +56,25 @@ jest.mock('@/hooks/Foods/useCustomNutrients', () => ({
 
 jest.mock('@tanstack/react-query', () => ({
   useQueryClient: () => mockQueryClient,
+  useQuery: () => ({
+    data: {
+      foodEntriesCount: 2,
+      foodEntries: [
+        {
+          id: 'entry-1',
+          entry_date: '2026-08-01',
+          meal_type_id: 'm1',
+          isCurrentUser: true,
+        },
+        {
+          id: 'entry-2',
+          entry_date: '2026-08-02',
+          meal_type_id: 'm1',
+          isCurrentUser: true,
+        },
+      ],
+    },
+  }),
 }));
 
 jest.mock('@/hooks/Foods/useFoodVariants', () => ({
@@ -454,6 +479,75 @@ describe('useCustomFoodForm', () => {
 
     expect(result.current.hasTrustedCompatibilityBase[1]).toBe(true);
     expect(result.current.variants[1]?.is_locked).toBe(true);
+  });
+
+  it('handles syncPastEntries toggle and direct updateFoodEntriesSnapshot on save', async () => {
+    const defaultVariant = createVariant({ is_default: true });
+    const food = createFood({
+      id: 'food-123',
+      user_id: 'user-1',
+      variants: [defaultVariant],
+    });
+    const initialVariants = [defaultVariant];
+    mockSaveFood.mockResolvedValueOnce(food);
+    const onSave = jest.fn();
+
+    const { result } = renderHook(() =>
+      useCustomFoodForm({
+        food,
+        initialVariants,
+        onSave,
+      })
+    );
+
+    expect(result.current.isUserOwnedFood).toBe(true);
+    expect(result.current.foodEntriesCount).toBe(2);
+    expect(result.current.syncPastEntries).toBe(true);
+
+    await act(async () => {
+      await result.current.handleSubmit({
+        preventDefault: jest.fn(),
+      } as unknown as React.FormEvent);
+    });
+
+    expect(mockSaveFood).toHaveBeenCalled();
+    expect(mockUpdateFoodEntriesSnapshot).toHaveBeenCalledWith('food-123');
+    expect(onSave).toHaveBeenCalledWith(food);
+  });
+
+  it('skips updateFoodEntriesSnapshot on save when syncPastEntries is false', async () => {
+    const defaultVariant = createVariant({ is_default: true });
+    const food = createFood({
+      id: 'food-456',
+      user_id: 'user-1',
+      variants: [defaultVariant],
+    });
+    const initialVariants = [defaultVariant];
+    mockSaveFood.mockResolvedValueOnce(food);
+    mockUpdateFoodEntriesSnapshot.mockClear();
+    const onSave = jest.fn();
+
+    const { result } = renderHook(() =>
+      useCustomFoodForm({
+        food,
+        initialVariants,
+        onSave,
+      })
+    );
+
+    act(() => {
+      result.current.setSyncPastEntries(false);
+    });
+
+    await act(async () => {
+      await result.current.handleSubmit({
+        preventDefault: jest.fn(),
+      } as unknown as React.FormEvent);
+    });
+
+    expect(mockSaveFood).toHaveBeenCalled();
+    expect(mockUpdateFoodEntriesSnapshot).not.toHaveBeenCalled();
+    expect(onSave).toHaveBeenCalledWith(food);
   });
 
   it('skips scaling math when serving sizes are invalid instead of producing destructive values', async () => {

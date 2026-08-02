@@ -1,6 +1,8 @@
 import { useState, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -62,7 +64,11 @@ const CustomFoodForm = ({
     variants,
     variantErrors,
     loading,
-    showSyncConfirmation,
+    syncPastEntries,
+    setSyncPastEntries,
+    foodEntriesCount,
+    foodEntries,
+    isUserOwnedFood,
     loadedVariants,
     conversionBaseVariants,
     hasTrustedCompatibilityBase,
@@ -76,7 +82,6 @@ const CustomFoodForm = ({
     applyProviderNutrientMatch,
     applyAiEstimate,
     handleSubmit,
-    handleSyncConfirmation,
     showBarcodeConflictConfirmation,
     setShowBarcodeConflictConfirmation,
     barcodeConflictFoodName,
@@ -355,6 +360,66 @@ const CustomFoodForm = ({
               </div>
             </div>
 
+            {isUserOwnedFood && foodEntriesCount > 0 && (
+              <div className="rounded-lg border border-border p-4 bg-muted/30 space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="space-y-0.5">
+                    <Label
+                      htmlFor="sync-past-entries"
+                      className="text-sm font-medium cursor-pointer"
+                    >
+                      Update past diary entries ({foodEntriesCount})
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Recalculate historical daily totals and diary snapshots
+                      using the new nutrition values.
+                    </p>
+                  </div>
+                  <Switch
+                    id="sync-past-entries"
+                    checked={syncPastEntries}
+                    onCheckedChange={setSyncPastEntries}
+                  />
+                </div>
+
+                {syncPastEntries && foodEntries.length > 0 && (
+                  <div className="pt-2 border-t border-border/50 text-xs space-y-1">
+                    <p className="text-muted-foreground font-medium mb-1">
+                      Logged in diary:
+                    </p>
+                    <div className="max-h-32 overflow-y-auto space-y-1 pr-1">
+                      {foodEntries.map((entry) => {
+                        const isoDate = entry.entry_date.split('T')[0];
+                        const displayDate = new Date(
+                          entry.entry_date
+                        ).toLocaleDateString(undefined, {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                        });
+                        return (
+                          <div
+                            key={entry.id}
+                            className="flex items-center justify-between text-muted-foreground py-0.5"
+                          >
+                            <span>{displayDate}</span>
+                            <Link
+                              to={`/?date=${isoDate}&highlight=${food?.id || ''}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-primary hover:underline font-medium text-xs"
+                            >
+                              View in Diary
+                            </Link>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <Button type="submit" disabled={loading} className="w-full">
               {loading
                 ? 'Saving...'
@@ -365,20 +430,6 @@ const CustomFoodForm = ({
           </form>
         </CardContent>
       </Card>
-      {showSyncConfirmation && (
-        <ConfirmationDialog
-          open={showSyncConfirmation}
-          onOpenChange={(open) => {
-            if (!open) {
-              handleSyncConfirmation(false);
-            }
-          }}
-          onConfirm={() => handleSyncConfirmation(true)}
-          title="Update All Past Diary Entries?"
-          description="Diary entries store a snapshot of this food's nutrition at the time you logged it. You've just changed that nutrition data — do you want to recalculate every past diary entry for this food in your own diary (across all dates and all serving sizes), and your historical daily totals, using the new values? This only affects entries you logged yourself — it will not change entries other family members logged for this food. Choosing Cancel keeps your history exactly as originally logged."
-          confirmLabel="Update All Past Entries"
-        />
-      )}
 
       {showBarcodeConflictConfirmation && (
         <ConfirmationDialog
