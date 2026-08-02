@@ -111,6 +111,25 @@ describe('preferenceRepository bootstrapUserTimezoneIfUnset', () => {
     expect(params[41]).toBe(false);
   });
 
+  it('round-trips auto_tag_entry_time preference through save and load', async () => {
+    const row = {
+      user_id: 'user-1',
+      auto_tag_entry_time: false,
+    };
+    mockClient.query.mockResolvedValueOnce({ rows: [row] });
+    mockClient.query.mockResolvedValueOnce({ rows: [row] });
+
+    await preferenceRepository.upsertUserPreferences({
+      user_id: 'user-1',
+      auto_tag_entry_time: false,
+    });
+    const result = await preferenceRepository.getUserPreferences('user-1');
+
+    expect(result.auto_tag_entry_time).toBe(false);
+    const params = mockClient.query.mock.calls[0][1];
+    expect(params[params.length - 1]).toBe(false);
+  });
+
   it('round-trips goal_mode preferences through save and load', async () => {
     const row = {
       user_id: 'user-1',

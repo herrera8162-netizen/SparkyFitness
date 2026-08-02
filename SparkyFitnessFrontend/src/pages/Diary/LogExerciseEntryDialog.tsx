@@ -88,8 +88,14 @@ const LogExerciseEntryDialog: React.FC<LogExerciseEntryDialogProps> = ({
   getEnergyUnitString,
 }) => {
   const { t } = useTranslation();
-  const { loggingLevel, weightUnit, distanceUnit, convertDistance, timezone } =
-    usePreferences();
+  const {
+    loggingLevel,
+    weightUnit,
+    distanceUnit,
+    convertDistance,
+    timezone,
+    autoTagEntryTime,
+  } = usePreferences();
 
   const modality = resolveExerciseModality(
     exercise?.modality,
@@ -115,7 +121,9 @@ const LogExerciseEntryDialog: React.FC<LogExerciseEntryDialogProps> = ({
   );
   const [entryTime, setEntryTime] = useState<string>(() => {
     const isToday = selectedDate === todayInZone(timezone);
-    return isToday ? prefillEntryTime({ isToday: true, tz: timezone }) : '';
+    return isToday && autoTagEntryTime
+      ? prefillEntryTime({ isToday: true, tz: timezone })
+      : '';
   });
   const [activityDetails, setActivityDetails] = useState<
     ActivityDetailKeyValuePair[]

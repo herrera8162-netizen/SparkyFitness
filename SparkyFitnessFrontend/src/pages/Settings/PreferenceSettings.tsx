@@ -47,6 +47,8 @@ export const PreferenceSettings = () => {
     setItemDisplayLimit, // Add itemDisplayLimit and setItemDisplayLimit
     autoScaleOpenFoodFactsImports,
     setAutoScaleOpenFoodFactsImports, // Add auto-scale preference
+    autoTagEntryTime,
+    setAutoTagEntryTime,
     autoScaleOnlineImports,
     setAutoScaleOnlineImports,
     setLanguage,
@@ -462,6 +464,27 @@ export const PreferenceSettings = () => {
               id="auto-scale-openfoodfacts"
               checked={autoScaleOpenFoodFactsImports}
               onCheckedChange={setAutoScaleOpenFoodFactsImports}
+            />
+          </div>
+          <div className="flex items-center justify-between col-span-2 py-2">
+            <div className="space-y-0.5">
+              <Label htmlFor="auto-tag-entry-time">
+                {t(
+                  'settings.preferences.autoTagEntryTime',
+                  'Auto-tag Log Entry Time'
+                )}
+              </Label>
+              <p className="text-sm text-muted-foreground">
+                {t(
+                  'settings.preferences.autoTagEntryTimeHint',
+                  'When enabled, new food and exercise diary logs automatically tag the current wall-clock time. When disabled, log entry time remains empty.'
+                )}
+              </p>
+            </div>
+            <Switch
+              id="auto-tag-entry-time"
+              checked={autoTagEntryTime}
+              onCheckedChange={setAutoTagEntryTime}
             />
           </div>
           <div className="flex items-center justify-between col-span-full py-2">
