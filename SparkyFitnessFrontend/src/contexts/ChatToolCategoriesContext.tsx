@@ -15,24 +15,15 @@ import {
   isChatToolCategorySlug,
   type ChatToolCategorySlug,
 } from '@workspace/shared';
-import { ActiveUserContext } from '@/contexts/ActiveUserContext';
 
 // Pure-local (localStorage, no DB) runtime tool-category selection for the
 // chatbot — the client-side equivalent of an MCP client's per-tool toggles.
-// Persisted per (active user id, AI service id) so switching models doesn't
-// carry the wrong surface, AND so switching the acting family profile doesn't
-// leak one profile's tool selection into another's — this matters when two
-// profiles share the same AI service (e.g. an admin-configured shared
-// service), where the service id alone wouldn't distinguish them. Absent
-// entry => derived from the service's chat_tool_profile.
+// Persisted per AI service id so switching models doesn't carry the wrong
+// surface. Absent entry => derived from the service's chat_tool_profile.
 const STORAGE_KEY = 'chat_tool_categories';
 
 type SelectionMap = Record<string, ChatToolCategorySlug[]>;
 type ChatToolProfile = 'full' | 'core';
-
-function scopedKey(userId: string | null, serviceId: string): string {
-  return `${userId ?? 'unknown'}::${serviceId}`;
-}
 
 function prefillForProfile(
   profile?: ChatToolProfile | null
@@ -106,20 +97,10 @@ export const useChatToolCategories = () => {
 export const ChatToolCategoriesProvider: React.FC<{ children: ReactNode }> = ({
   children,
 }) => {
-  // Read via useContext (not the throwing useActiveUser hook) so this still
-  // works if rendered without an ActiveUserProvider ancestor (e.g. in tests) —
-  // it just falls back to an unscoped bucket in that case.
-  const activeUserId = useContext(ActiveUserContext)?.activeUserId ?? null;
   const [selections, setSelections] = useState<SelectionMap>(loadSelections);
   const [activeServiceId, setActiveServiceId] = useState<string | null>(null);
   const [activeProfile, setActiveProfile] = useState<ChatToolProfile | null>(
     null
-  );
-
-  const effectiveKey = useMemo(
-    () =>
-      activeServiceId != null ? scopedKey(activeUserId, activeServiceId) : null,
-    [activeUserId, activeServiceId]
   );
 
   // Mirror every change back to localStorage (follows ChatbotVisibilityContext).
@@ -143,15 +124,15 @@ export const ChatToolCategoriesProvider: React.FC<{ children: ReactNode }> = ({
   );
 
   const hasCustomSelection =
-    effectiveKey != null && selections[effectiveKey] !== undefined;
+    activeServiceId != null && selections[activeServiceId] !== undefined;
 
   // Stored selection when present, otherwise the profile-derived default.
   const selected = useMemo<ChatToolCategorySlug[]>(() => {
-    if (effectiveKey != null && selections[effectiveKey] !== undefined) {
-      return selections[effectiveKey];
+    if (activeServiceId != null && selections[activeServiceId] !== undefined) {
+      return selections[activeServiceId];
     }
     return prefillForProfile(activeProfile);
-  }, [effectiveKey, activeProfile, selections]);
+  }, [activeServiceId, activeProfile, selections]);
 
   // Mirror the derived selection into a ref (in an effect, never during render)
   // so getSelected() can hand the latest value to callbacks created once.
@@ -163,13 +144,13 @@ export const ChatToolCategoriesProvider: React.FC<{ children: ReactNode }> = ({
 
   const setSelected = useCallback(
     (slugs: ChatToolCategorySlug[]) => {
-      if (effectiveKey == null) return;
+      if (activeServiceId == null) return;
       // Dedupe and keep canonical order for a stable request payload.
       const set = new Set(slugs);
       const ordered = CHAT_TOOL_CATEGORY_SLUGS.filter((s) => set.has(s));
-      setSelections((prev) => ({ ...prev, [effectiveKey]: ordered }));
+      setSelections((prev) => ({ ...prev, [activeServiceId]: ordered }));
     },
-    [effectiveKey]
+    [activeServiceId]
   );
 
   const toggle = useCallback(

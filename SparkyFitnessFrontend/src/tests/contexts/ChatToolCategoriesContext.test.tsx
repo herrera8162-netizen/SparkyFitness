@@ -1,24 +1,15 @@
 import '@testing-library/jest-dom';
-import { createContext, useEffect } from 'react';
+import { useEffect } from 'react';
 import { act } from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import {
   ChatToolCategoriesProvider,
   useChatToolCategories,
 } from '@/contexts/ChatToolCategoriesContext';
-import { ActiveUserContext } from '@/contexts/ActiveUserContext';
 import {
   CHAT_TOOL_CATEGORY_SLUGS,
   CORE_CHAT_TOOL_CATEGORY_SLUGS,
 } from '@workspace/shared';
-
-// ActiveUserContext.tsx transitively pulls in the Better Auth React client
-// (an ESM-only package Jest can't transform), so replace the whole module
-// with a plain React context — ChatToolCategoriesContext only needs
-// `useContext(ActiveUserContext)` to resolve, real or not.
-jest.mock('@/contexts/ActiveUserContext', () => ({
-  ActiveUserContext: createContext(undefined),
-}));
 
 const STORAGE_KEY = 'chat_tool_categories';
 
@@ -91,13 +82,13 @@ describe('ChatToolCategoriesContext', () => {
     expect(screen.getByTestId('selected')).toHaveTextContent(sorted(expected));
 
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-    expect([...stored['unknown::svc-1']].sort()).toEqual([...expected].sort());
+    expect([...stored['svc-1']].sort()).toEqual([...expected].sort());
   });
 
   it('restores a stored selection over the profile prefill', () => {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ 'unknown::svc-1': ['exercise'] })
+      JSON.stringify({ 'svc-1': ['exercise'] })
     );
     renderProbe({ serviceId: 'svc-1', profile: 'full' });
     expect(screen.getByTestId('selected')).toHaveTextContent('exercise');
@@ -106,10 +97,7 @@ describe('ChatToolCategoriesContext', () => {
   it('scopes selections per service id', () => {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({
-        'unknown::svc-1': ['food'],
-        'unknown::svc-2': ['reports'],
-      })
+      JSON.stringify({ 'svc-1': ['food'], 'svc-2': ['reports'] })
     );
     const { rerender } = renderProbe({ serviceId: 'svc-1', profile: 'full' });
     expect(screen.getByTestId('selected')).toHaveTextContent('food');
@@ -131,54 +119,6 @@ describe('ChatToolCategoriesContext', () => {
     });
     expect(screen.getByTestId('selected')).toHaveTextContent('');
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-    expect(stored['unknown::svc-1']).toEqual([]);
-  });
-
-  it('scopes selections per active user profile id', () => {
-    const user1Context = {
-      activeUserId: 'user-1',
-      activeUserName: 'User One',
-      isActingOnBehalf: false,
-      accessibleUsers: [],
-      switchToUser: jest.fn(),
-      loadAccessibleUsers: jest.fn(),
-      hasPermission: () => true,
-      hasWritePermission: () => true,
-    };
-    const user2Context = {
-      ...user1Context,
-      activeUserId: 'user-2',
-      activeUserName: 'User Two',
-    };
-
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        'user-1::svc-1': ['food'],
-        'user-2::svc-1': ['exercise', 'reports'],
-      })
-    );
-
-    const { rerender } = render(
-      <ActiveUserContext.Provider value={user1Context}>
-        <ChatToolCategoriesProvider>
-          <Probe serviceId="svc-1" profile="full" />
-        </ChatToolCategoriesProvider>
-      </ActiveUserContext.Provider>
-    );
-
-    expect(screen.getByTestId('selected')).toHaveTextContent('food');
-
-    rerender(
-      <ActiveUserContext.Provider value={user2Context}>
-        <ChatToolCategoriesProvider>
-          <Probe serviceId="svc-1" profile="full" />
-        </ChatToolCategoriesProvider>
-      </ActiveUserContext.Provider>
-    );
-
-    expect(screen.getByTestId('selected')).toHaveTextContent(
-      'exercise,reports'
-    );
+    expect(stored['svc-1']).toEqual([]);
   });
 });
