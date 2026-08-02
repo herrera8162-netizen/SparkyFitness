@@ -18,7 +18,8 @@ const VALID_ACTIONS = [
   'update_preferences',
 ];
 
-export function buildProfileTools(userId: string) {
+export function buildProfileTools(userId: string, actingUserId?: string) {
+  const resolvedActingUserId = actingUserId ?? userId;
   return {
     sparky_manage_profile: tool({
       description: `User settings: update display name, timezone, and measurement units.
@@ -83,7 +84,7 @@ Actions:
             case 'get_preferences': {
               const prefs = await preferenceService.getUserPreferences(
                 userId,
-                userId
+                resolvedActingUserId
               );
               let text = '### User Preferences\n\n';
               text += `- **Timezone:** ${prefs.timezone || 'UTC'}\n`;
@@ -105,7 +106,7 @@ Actions:
               try {
                 await preferenceService.updateUserPreferences(
                   userId,
-                  userId,
+                  resolvedActingUserId,
                   preferenceData
                 );
               } catch (error) {

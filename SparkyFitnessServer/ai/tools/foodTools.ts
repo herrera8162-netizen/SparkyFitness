@@ -763,9 +763,14 @@ async function resolveMealIngredients(
 export async function getNutritionalSummaryRows(
   userId: string,
   startDate: string,
-  endDate: string
+  endDate: string,
+  actingUserId?: string
 ) {
-  const prefs = await preferenceService.getUserPreferences(userId, userId);
+  const resolvedActingUserId = actingUserId ?? userId;
+  const prefs = await preferenceService.getUserPreferences(
+    userId,
+    resolvedActingUserId
+  );
   const energyUnit = (prefs?.energy_unit as string) || 'kcal';
   const rows = await reportRepository.getDailyNutritionTotalsRange(
     userId,
@@ -805,9 +810,14 @@ export async function getNutritionalSummaryRows(
 export async function getWaterHistoryRows(
   userId: string,
   startDate?: string,
-  endDate?: string
+  endDate?: string,
+  actingUserId?: string
 ) {
-  const prefs = await preferenceService.getUserPreferences(userId, userId);
+  const resolvedActingUserId = actingUserId ?? userId;
+  const prefs = await preferenceService.getUserPreferences(
+    userId,
+    resolvedActingUserId
+  );
   const waterUnit = (prefs?.water_display_unit as string) || 'ml';
   const rows = await measurementRepository.getWaterTotalsByDateRange(
     userId,
@@ -967,7 +977,12 @@ const foodUsageSchema = foodDateRangeSchema.merge(foodPaginationSchema).extend({
   food_id: z.string().min(1),
 });
 
-export function buildFoodTools(userId: string, tz: string) {
+export function buildFoodTools(
+  userId: string,
+  tz: string,
+  actingUserId?: string
+) {
+  const resolvedActingUserId = actingUserId ?? userId;
   return {
     sparky_manage_food: tool({
       description: `Nutrition tracking: search food, search/log meals (recipes), create foods, manage diary.
@@ -1456,7 +1471,7 @@ Actions:
               const entryDate = args.entry_date || todayInZone(tz);
               const entry = await foodEntryService.createFoodEntry(
                 userId,
-                userId,
+                resolvedActingUserId,
                 {
                   user_id: userId,
                   food_id: foodId,
@@ -1557,7 +1572,7 @@ Actions:
                 );
                 const entry = await foodEntryService.createFoodEntry(
                   userId,
-                  userId,
+                  resolvedActingUserId,
                   {
                     user_id: userId,
                     food_id: match.id,
@@ -1908,19 +1923,23 @@ Actions:
                 }
               }
 
-              await foodEntryService.createFoodEntryMeal(userId, userId, {
-                user_id: userId,
-                meal_template_id: mealId,
-                meal_type_id: mealType.id,
-                entry_date: args.entry_date,
-                name: mealName,
-                quantity: args.quantity || 1,
-                unit: args.unit || 'serving',
-                cooked_weight_g: cookedWeightG,
-                cooked_weight_source: cookedWeightSource,
-                exclude_food_ids: args.exclude_food_ids,
-                _clientMealModelVersion: 2,
-              });
+              await foodEntryService.createFoodEntryMeal(
+                userId,
+                resolvedActingUserId,
+                {
+                  user_id: userId,
+                  meal_template_id: mealId,
+                  meal_type_id: mealType.id,
+                  entry_date: args.entry_date,
+                  name: mealName,
+                  quantity: args.quantity || 1,
+                  unit: args.unit || 'serving',
+                  cooked_weight_g: cookedWeightG,
+                  cooked_weight_source: cookedWeightSource,
+                  exclude_food_ids: args.exclude_food_ids,
+                  _clientMealModelVersion: 2,
+                }
+              );
               return formatConfirmation(
                 `Meal "${mealName}" logged for ${mealType.name} on ${args.entry_date}.`
               );
@@ -1930,12 +1949,12 @@ Actions:
               const date = args.entry_date || todayInZone(tz);
               const prefs = await preferenceService.getUserPreferences(
                 userId,
-                userId
+                resolvedActingUserId
               );
               const eUnit = (prefs?.energy_unit as string) || 'kcal';
               const foodRows = await foodEntryService.getFoodEntriesByDate(
                 userId,
-                userId,
+                resolvedActingUserId,
                 date
               );
               const mealRows =
@@ -2175,7 +2194,7 @@ Actions:
                 if (args.entry_type === 'food_entry') {
                   await foodEntryService.updateFoodEntry(
                     userId,
-                    userId,
+                    resolvedActingUserId,
                     args.entry_id,
                     {
                       quantity: args.quantity,
@@ -2243,7 +2262,7 @@ Actions:
                   }
                   await foodEntryService.updateFoodEntryMeal(
                     userId,
-                    userId,
+                    resolvedActingUserId,
                     args.entry_id,
                     {
                       meal_template_id: existing.meal_template_id,
@@ -2540,7 +2559,7 @@ Actions:
               const copied = mealType
                 ? await foodEntryService.copyFoodEntries(
                     userId,
-                    userId,
+                    resolvedActingUserId,
                     sourceDate,
                     mealType.id,
                     targetDate,
@@ -2548,7 +2567,7 @@ Actions:
                   )
                 : await foodEntryService.copyAllFoodEntries(
                     userId,
-                    userId,
+                    resolvedActingUserId,
                     sourceDate,
                     targetDate
                   );
@@ -2702,7 +2721,7 @@ Actions:
             case 'log_water': {
               await measurementService.logWaterIntakeAmount(
                 userId,
-                userId,
+                resolvedActingUserId,
                 args.entry_date,
                 args.amount_ml
               );

@@ -1,6 +1,7 @@
 import chatRepository from '../models/chatRepository.js';
 import measurementRepository from '../models/measurementRepository.js';
 import preferenceRepository from '../models/preferenceRepository.js';
+import userRepository from '../models/userRepository.js';
 import { log } from '../config/logging.js';
 import { getDefaultModel, getOpenAiCompatibleBaseUrl } from '../ai/config.js';
 import {
@@ -483,7 +484,7 @@ export function buildEscalationPrepareStep(
 }
 
 async function prepareChatContext(
-  authenticatedUserId: string,
+  userId: string,
   serviceType: string,
   chatToolProfile?: string | null,
   toolCategories?: readonly string[],
@@ -494,13 +495,15 @@ async function prepareChatContext(
   // auto-classified selection stays self-healing (escalation tool + widening
   // prepareStep) since there's no human-set limit to respect.
   categoriesAreManual = false,
-  serviceSystemPrompt?: string | null
+  serviceSystemPrompt?: string | null,
+  actingUserId?: string
 ) {
+  const resolvedActingUserId = actingUserId ?? userId;
   const { chatTz, customCategoriesList } =
-    await chatContextInputsCache.getOrLoad(authenticatedUserId, async () => {
+    await chatContextInputsCache.getOrLoad(userId, async () => {
       const [customCategories, tz] = await Promise.all([
-        measurementRepository.getCustomCategories(authenticatedUserId),
-        loadUserTimezone(authenticatedUserId),
+        measurementRepository.getCustomCategories(userId),
+        loadUserTimezone(userId),
       ]);
       return {
         chatTz: tz,
@@ -550,19 +553,20 @@ async function prepareChatContext(
 
   if (categoriesAreManual) {
     tools = buildChatbotTools(
-      authenticatedUserId,
+      userId,
       chatTz,
       toolProfile,
       true,
       toolCategories,
       // Quick-reply chips: full profile only (the small local models 'core'
       // exists for pick tools unreliably from a wider surface).
-      toolProfile === 'full'
+      toolProfile === 'full',
+      resolvedActingUserId
     );
     activeToolNames = undefined; // every composed tool is sent
     prepareStep = undefined; // no mid-request widening
   } else {
-    const surface = buildChatToolSurface(authenticatedUserId, chatTz);
+    const surface = buildChatToolSurface(userId, chatTz, resolvedActingUserId);
     tools = surface.tools;
     activeToolNames = [
       ...new Set(
@@ -605,17 +609,33 @@ async function prepareChatContext(
     );
   }
 
+  let systemPrompt = getSystemPrompt(
+    chatTz,
+    customCategoriesList,
+    toolProfile,
+    [...selectedCategories],
+    // Auto mode advertises the escalation tool; manual mode advertises the
+    // tool selector as the way to widen.
+    !categoriesAreManual
+  );
+
+  if (resolvedActingUserId !== userId) {
+    try {
+      const targetUser = await userRepository.findUserById(userId);
+      const targetName =
+        targetUser?.full_name ||
+        targetUser?.email ||
+        'the active family member';
+      systemPrompt += `\n\nNote: You are currently assisting family member '${targetName}'. All food, exercise, check-in, and health logging actions performed via tools will be recorded in ${targetName}'s profile and diary.`;
+    } catch {
+      systemPrompt +=
+        '\n\nNote: You are currently acting on behalf of another family member profile. All food, exercise, check-in, and health logging actions performed via tools will be recorded in their profile and diary.';
+    }
+  }
+
   return {
     systemPromptContent: buildFinalSystemPrompt(
-      getSystemPrompt(
-        chatTz,
-        customCategoriesList,
-        toolProfile,
-        [...selectedCategories],
-        // Auto mode advertises the escalation tool; manual mode advertises the
-        // tool selector as the way to widen.
-        !categoriesAreManual
-      ),
+      systemPrompt,
       serviceSystemPrompt
     ),
     tools,
@@ -1388,12 +1408,13 @@ async function processChatMessage(
       prepareStep,
       toolProfile,
     } = await prepareChatContext(
-      authenticatedUserId,
+      userId,
       aiService.service_type,
       aiService.chat_tool_profile,
       activeCategories,
       categoriesAreManual,
-      aiService.system_prompt
+      aiService.system_prompt,
+      authenticatedUserId
     );
 
     const chatProviderOptions = buildChatProviderOptions(
@@ -1918,12 +1939,13 @@ async function processChatMessageStream(
       prepareStep,
       toolProfile,
     } = await prepareChatContext(
-      authenticatedUserId,
+      userId,
       aiService.service_type,
       aiService.chat_tool_profile,
       activeCategories,
       categoriesAreManual,
-      aiService.system_prompt
+      aiService.system_prompt,
+      authenticatedUserId
     );
 
     const chatProviderOptions = buildChatProviderOptions(

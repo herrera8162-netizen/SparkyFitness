@@ -347,7 +347,12 @@ const exerciseProgressSchema = exerciseDateRangeSchema
     exercise_name: z.string().optional(),
   });
 
-export function buildExerciseTools(userId: string, tz: string) {
+export function buildExerciseTools(
+  userId: string,
+  tz: string,
+  actingUserId?: string
+) {
+  const resolvedActingUserId = actingUserId ?? userId;
   return {
     sparky_manage_exercise: tool({
       description: `Fitness tracking: search exercises, log workouts with sets, manage presets.
@@ -511,7 +516,7 @@ Actions:
               // the server's manual same-exercise/same-date upsert.
               await exerciseService.createExerciseEntry(
                 userId,
-                userId,
+                resolvedActingUserId,
                 {
                   exercise_id: exerciseId,
                   entry_date: args.entry_date,
@@ -534,7 +539,7 @@ Actions:
             case 'list_exercise_diary': {
               const grouped = await exerciseService.getExerciseEntriesByDate(
                 userId,
-                userId,
+                resolvedActingUserId,
                 args.entry_date
               );
               // Flatten preset sessions into their member entries and render
@@ -622,7 +627,7 @@ Actions:
               }
               const session = await exerciseService.logWorkoutPresetGrouped(
                 userId,
-                userId,
+                resolvedActingUserId,
                 presetId,
                 args.entry_date
               );
@@ -646,7 +651,7 @@ Actions:
               try {
                 await exerciseService.updateExerciseEntry(
                   userId,
-                  userId,
+                  resolvedActingUserId,
                   args.entry_id,
                   {
                     entry_date: args.entry_date,

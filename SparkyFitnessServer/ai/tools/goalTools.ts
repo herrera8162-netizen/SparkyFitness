@@ -56,7 +56,11 @@ const goalSnapshotSchema = z.object({
   target_date: optionalDateSchema,
 });
 
-export function buildGoalTools(userId: string, tz: string) {
+export function buildGoalTools(
+  userId: string,
+  tz: string,
+  _actingUserId?: string
+) {
   return {
     sparky_manage_goals: tool({
       description: `Target management: set and view calorie, macro, water, and weight goals.

@@ -124,7 +124,11 @@ async function resolveMedicationId(
   return match?.id ?? null;
 }
 
-export function buildMedicationTools(userId: string, tz: string) {
+export function buildMedicationTools(
+  userId: string,
+  tz: string,
+  _actingUserId?: string
+) {
   return {
     sparky_manage_medications: tool({
       description: `Medication tracking: list medications, log doses, and view history.

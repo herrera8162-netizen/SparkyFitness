@@ -43,21 +43,24 @@ type ToolMap = Record<string, Tool>;
 // tests/chatbotToolsIndex.test.ts pins the full/core surfaces against it.
 const CATEGORY_BUILDERS: Record<
   ChatToolCategorySlug,
-  ((userId: string, tz: string) => ToolMap)[]
+  ((userId: string, tz: string, actingUserId?: string) => ToolMap)[]
 > = {
-  exercise: [(u, tz) => buildExerciseTools(u, tz)],
-  food: [(u, tz) => buildFoodTools(u, tz)],
-  checkin: [(u, tz) => buildCheckinTools(u, tz)],
-  goals: [(u, tz) => buildGoalTools(u, tz)],
+  exercise: [(u, tz, act) => buildExerciseTools(u, tz, act)],
+  food: [(u, tz, act) => buildFoodTools(u, tz, act)],
+  checkin: [(u, tz, act) => buildCheckinTools(u, tz, act)],
+  goals: [(u, tz, act) => buildGoalTools(u, tz, act)],
   coaching: [
-    (u, tz) => buildCoachTools(u, tz),
-    (u, tz) => buildEngagementTools(u, tz),
-    (u) => buildWizardTools(u),
+    (u, tz, act) => buildCoachTools(u, tz, act),
+    (u, tz, act) => buildEngagementTools(u, tz, act),
+    (u, _tz, act) => buildWizardTools(u, act),
   ],
-  vision: [(u) => buildVisionTools(u)],
-  profile: [(u) => buildProfileTools(u), (u, tz) => buildHabitTools(u, tz)],
-  reports: [(u, tz) => buildReportTools(u, tz)],
-  medications: [(u, tz) => buildMedicationTools(u, tz)],
+  vision: [(u, _tz, act) => buildVisionTools(u, act)],
+  profile: [
+    (u, _tz, act) => buildProfileTools(u, act),
+    (u, tz, act) => buildHabitTools(u, tz, act),
+  ],
+  reports: [(u, tz, act) => buildReportTools(u, tz, act)],
+  medications: [(u, tz, act) => buildMedicationTools(u, tz, act)],
 };
 
 // Composition order: the core categories first (a strict prefix of the full
@@ -100,14 +103,15 @@ function composeTools(
   userId: string,
   tz: string,
   profile: ChatToolProfile,
-  categories?: readonly string[]
+  categories?: readonly string[],
+  actingUserId?: string
 ): ToolMap {
   const selected = resolveCategories(profile, categories);
   const tools: ToolMap = {};
   for (const slug of CATEGORY_ORDER) {
     if (!selected.has(slug)) continue;
     for (const build of CATEGORY_BUILDERS[slug]) {
-      Object.assign(tools, build(userId, tz));
+      Object.assign(tools, build(userId, tz, actingUserId));
     }
   }
   return tools;
@@ -118,7 +122,8 @@ function composeTools(
 // derive activeTools per request without recomposing anything.
 function composeAllToolsWithIndex(
   userId: string,
-  tz: string
+  tz: string,
+  actingUserId?: string
 ): {
   tools: ToolMap;
   toolNamesByCategory: Record<ChatToolCategorySlug, string[]>;
@@ -128,7 +133,7 @@ function composeAllToolsWithIndex(
   for (const slug of CATEGORY_ORDER) {
     const names: string[] = [];
     for (const build of CATEGORY_BUILDERS[slug]) {
-      const built = build(userId, tz);
+      const built = build(userId, tz, actingUserId);
       Object.assign(tools, built);
       names.push(...Object.keys(built));
     }
@@ -245,21 +250,29 @@ export function buildChatbotTools(
   profile: ChatToolProfile = 'full',
   providerTuning = true,
   categories?: readonly string[],
-  includeAskTool = false
+  includeAskTool = false,
+  actingUserId?: string
 ): ToolMap {
   // Normalize the selection into the cache key so two requests with different
   // category sets don't share a memoized map. Sorted for order-independence.
   const validCategories = (categories ?? []).filter(isChatToolCategorySlug);
   const categoryKey =
     validCategories.length > 0 ? [...validCategories].sort().join(',') : 'all';
-  const key = `${providerTuning ? 'chat' : 'mcp'}|${profile}|${categoryKey}|${includeAskTool ? 'ask' : 'noask'}|${tz}|${userId}`;
+  const resolvedActingUserId = actingUserId ?? userId;
+  const key = `${providerTuning ? 'chat' : 'mcp'}|${profile}|${categoryKey}|${includeAskTool ? 'ask' : 'noask'}|${tz}|${userId}|${resolvedActingUserId}`;
   const now = Date.now();
   const cached = toolCache.get(key);
   if (cached && cached.expiresAt > now) {
     return cached.tools;
   }
 
-  const tools = composeTools(userId, tz, profile, categories);
+  const tools = composeTools(
+    userId,
+    tz,
+    profile,
+    categories,
+    resolvedActingUserId
+  );
   // Composed last so applyChatProviderTuning's Anthropic cache breakpoint lands
   // on it: when present it is always present, so the marker position stays
   // stable no matter which categories were selected.
@@ -301,16 +314,22 @@ const surfaceCache = new Map<
  */
 export function buildChatToolSurface(
   userId: string,
-  tz: string
+  tz: string,
+  actingUserId?: string
 ): ChatToolSurface {
-  const key = `${tz}|${userId}`;
+  const resolvedActingUserId = actingUserId ?? userId;
+  const key = `${tz}|${userId}|${resolvedActingUserId}`;
   const now = Date.now();
   const cached = surfaceCache.get(key);
   if (cached && cached.expiresAt > now) {
     return cached.surface;
   }
 
-  const { tools, toolNamesByCategory } = composeAllToolsWithIndex(userId, tz);
+  const { tools, toolNamesByCategory } = composeAllToolsWithIndex(
+    userId,
+    tz,
+    resolvedActingUserId
+  );
   // The quick-reply tool is composed for every surface but only made active for
   // the 'full' profile (see activeToolNames in chatService.ts); it belongs to no
   // category, so it is not in toolNamesByCategory.

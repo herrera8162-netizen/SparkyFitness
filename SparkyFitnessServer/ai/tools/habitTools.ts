@@ -12,7 +12,11 @@ import { normalizeActionArgs } from './dates.js';
 
 const VALID_ACTIONS = ['list_habits', 'log_habit', 'get_habit_history'];
 
-export function buildHabitTools(userId: string, tz: string) {
+export function buildHabitTools(
+  userId: string,
+  tz: string,
+  _actingUserId?: string
+) {
   return {
     sparky_manage_habits: tool({
       description: `Habit tracking: list habits, log completions, and view history.

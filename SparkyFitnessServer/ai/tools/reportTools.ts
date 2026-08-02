@@ -20,15 +20,35 @@ import {
 async function getWeeklyReport(
   userId: string,
   tz: string,
-  endDate?: string
+  endDate?: string,
+  actingUserId?: string
 ): Promise<string> {
+  const resolvedActingUserId = actingUserId ?? userId;
   const end = endDate || todayInZone(tz);
   const start = addDays(end, -6);
 
-  const nutrition = await getNutritionalSummaryRows(userId, start, end);
-  const water = await getWaterHistoryRows(userId, start, end);
-  const bio = await getBiometricsHistoryRows(userId, start, end);
-  const prefs = await preferenceService.getUserPreferences(userId, userId);
+  const nutrition = await getNutritionalSummaryRows(
+    userId,
+    start,
+    end,
+    resolvedActingUserId
+  );
+  const water = await getWaterHistoryRows(
+    userId,
+    start,
+    end,
+    resolvedActingUserId
+  );
+  const bio = await getBiometricsHistoryRows(
+    userId,
+    start,
+    end,
+    resolvedActingUserId
+  );
+  const prefs = await preferenceService.getUserPreferences(
+    userId,
+    resolvedActingUserId
+  );
   const energyUnit = (prefs?.energy_unit as string) || 'kcal';
 
   let report = `# Weekly Performance Report (${start} to ${end})\n\n`;
@@ -144,7 +164,12 @@ async function getDailyReport(
   };
 }
 
-export function buildReportTools(userId: string, tz: string) {
+export function buildReportTools(
+  userId: string,
+  tz: string,
+  actingUserId?: string
+) {
+  const resolvedActingUserId = actingUserId ?? userId;
   return {
     sparky_get_report: tool({
       description: 'Generates consolidated health and fitness reports.',
@@ -160,7 +185,12 @@ export function buildReportTools(userId: string, tz: string) {
         try {
           switch (args.action) {
             case 'get_weekly_report': {
-              return await getWeeklyReport(userId, tz, args.end_date);
+              return await getWeeklyReport(
+                userId,
+                tz,
+                args.end_date,
+                resolvedActingUserId
+              );
             }
             default:
               return ERRORS.INVALID_ACTION(

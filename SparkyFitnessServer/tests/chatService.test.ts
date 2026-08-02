@@ -498,12 +498,12 @@ describe('chatService', () => {
       expect(result.executedTools).toEqual([
         { name: 'sparky_manage_food', args: logFoodArgs },
       ]);
-      // Tool handlers act as the authenticated user, not the active user.
+      // Tool handlers target the active user profile while preserving actor user ID.
       expect(foodEntryService.createFoodEntry).toHaveBeenCalledWith(
-        actorUserId,
+        activeUserId,
         actorUserId,
         {
-          user_id: actorUserId,
+          user_id: activeUserId,
           food_id: FOOD_ID,
           variant_id: VARIANT_ID,
           entry_date: '2026-06-10',

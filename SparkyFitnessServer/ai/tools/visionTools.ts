@@ -87,7 +87,7 @@ function renderFoodPhotoEstimate(estimate: FoodPhotoEstimateResponse): string {
   return lines.join('\n');
 }
 
-export function buildVisionTools(userId: string) {
+export function buildVisionTools(userId: string, _actingUserId?: string) {
   return {
     sparky_analyze_food_image: tool({
       description:
