@@ -1808,7 +1808,9 @@
     "addFoodToMeal": "Add Food to {{mealName}}",
     "searchFoodsForMeal": "Search for foods to add to your {{mealName}}.",
     "addFoodTo": "Add Food to",
-    "searchFoodsToYour": "Search for foods to add to your"
+    "searchFoodsToYour": "Search for foods to add to your",
+    "percentOfDishEaten": "{{percent}}% of dish",
+    "percentOfDishEatenTitle": "Share of the whole cooked dish this serving represents"
   },
   "checkIn": {
     "howAreYouFeelingToday": "How are you feeling today?",

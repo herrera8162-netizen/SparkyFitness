@@ -377,6 +377,21 @@ const MealCard = ({
                 const servingLabel = [quantity, unit]
                   .filter((value) => value !== undefined && value !== null)
                   .join(' ');
+                // Plate-weight logging (MEAL_WEIGHT_PLAN.md Phase 3): when a
+                // meal entry was logged in grams against the recipe's
+                // cooked_weight_g snapshot, show what fraction of the whole
+                // dish this serving represents.
+                const mealEntryCookedWeight = isFoodEntryMeal
+                  ? (item as FoodEntryMeal).cooked_weight_g
+                  : null;
+                const percentOfDishEaten =
+                  isFoodEntryMeal &&
+                  unit === 'g' &&
+                  mealEntryCookedWeight &&
+                  mealEntryCookedWeight > 0 &&
+                  typeof quantity === 'number'
+                    ? Math.round((quantity / mealEntryCookedWeight) * 100)
+                    : null;
                 const entryIsHighlighted =
                   'food_id' in item &&
                   (item as FoodEntry).food_id === highlightFoodId;
@@ -464,6 +479,21 @@ const MealCard = ({
                               <span aria-hidden="true">&bull;</span>
                             )}
                             {servingLabel && <span>{servingLabel}</span>}
+                            {percentOfDishEaten !== null && (
+                              <Badge
+                                variant="outline"
+                                className="text-[10px]"
+                                title={t(
+                                  'mealCard.percentOfDishEatenTitle',
+                                  'Share of the whole cooked dish this serving represents'
+                                )}
+                              >
+                                {t('mealCard.percentOfDishEaten', {
+                                  percent: percentOfDishEaten,
+                                  defaultValue: `${percentOfDishEaten}% of dish`,
+                                })}
+                              </Badge>
+                            )}
                             {item.entry_time && (
                               <>
                                 <span aria-hidden="true">&bull;</span>
@@ -615,6 +645,21 @@ const MealCard = ({
                         <span className="text-sm text-gray-500">
                           {servingLabel}
                         </span>
+                        {percentOfDishEaten !== null && (
+                          <Badge
+                            variant="outline"
+                            className="text-xs w-fit"
+                            title={t(
+                              'mealCard.percentOfDishEatenTitle',
+                              'Share of the whole cooked dish this serving represents'
+                            )}
+                          >
+                            {t('mealCard.percentOfDishEaten', {
+                              percent: percentOfDishEaten,
+                              defaultValue: `${percentOfDishEaten}% of dish`,
+                            })}
+                          </Badge>
+                        )}
                         {item.entry_time && (
                           <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full dark:bg-blue-900/30 dark:text-blue-300 font-medium">
                             {formatTimeOfDayString(item.entry_time, timeFormat)}
