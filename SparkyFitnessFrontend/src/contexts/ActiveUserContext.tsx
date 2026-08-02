@@ -17,9 +17,13 @@ interface ActiveUserContextType {
   hasWritePermission: (permission: string, targetUserId?: string) => boolean;
 }
 
-const ActiveUserContext = createContext<ActiveUserContextType | undefined>(
-  undefined
-);
+// Exported (in addition to useActiveUser) so contexts that sit above
+// ActiveUserProvider in the tree — or that need to work in tests without it —
+// can read the active user id via useContext directly instead of the
+// throwing hook.
+export const ActiveUserContext = createContext<
+  ActiveUserContextType | undefined
+>(undefined);
 
 export const useActiveUser = () => {
   const context = useContext(ActiveUserContext);
