@@ -44,6 +44,7 @@ export interface UserPreferences {
   auto_clear_history: 'never' | string;
   logging_level: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
   item_display_limit: number;
+  auto_tag_entry_time?: boolean;
   default_food_data_provider_id: string | null;
   default_barcode_provider_id: string | null;
   barcode_fallback_open_food_facts: boolean;

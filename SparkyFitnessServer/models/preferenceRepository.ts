@@ -46,6 +46,7 @@ async function updateUserPreferences(userId: any, preferenceData: any) {
         measurement_decimal_places = COALESCE($40, measurement_decimal_places),
         added_sugar_algorithm = COALESCE($43, added_sugar_algorithm),
         soda_display_unit = COALESCE($45, soda_display_unit),
+        auto_tag_entry_time = COALESCE($46, auto_tag_entry_time),
         updated_at = now()
       WHERE user_id = $28
       RETURNING *`,
@@ -95,6 +96,7 @@ async function updateUserPreferences(userId: any, preferenceData: any) {
         preferenceData.added_sugar_algorithm,
         preferenceData.time_format,
         preferenceData.soda_display_unit,
+        preferenceData.auto_tag_entry_time,
       ]
     );
     return result.rows[0];
@@ -182,6 +184,7 @@ async function upsertUserPreferences(preferenceData: any) {
        active_vision_ai_service_id,
        added_sugar_algorithm,
        soda_display_unit,
+       auto_tag_entry_time,
        created_at, updated_at
      ) VALUES (
        $1, COALESCE($2, 'yyyy-MM-dd'), COALESCE($44, 'HH:mm'), COALESCE($3, 'lbs'), COALESCE($4, 'in'), COALESCE($5, 'km'),
@@ -208,6 +211,7 @@ async function upsertUserPreferences(preferenceData: any) {
        $41,
        COALESCE($43, 'WHO_IDEAL'),
        COALESCE($45, 'ml'),
+       COALESCE($46, true),
        now(), now()
      )
      ON CONFLICT (user_id) DO UPDATE SET
@@ -252,6 +256,7 @@ async function upsertUserPreferences(preferenceData: any) {
        added_sugar_algorithm = COALESCE(EXCLUDED.added_sugar_algorithm, user_preferences.added_sugar_algorithm),
        time_format = COALESCE($44, user_preferences.time_format),
        soda_display_unit = COALESCE(EXCLUDED.soda_display_unit, user_preferences.soda_display_unit),
+       auto_tag_entry_time = COALESCE(EXCLUDED.auto_tag_entry_time, user_preferences.auto_tag_entry_time),
        updated_at = now()
      RETURNING *`,
       [
@@ -300,6 +305,7 @@ async function upsertUserPreferences(preferenceData: any) {
         preferenceData.added_sugar_algorithm,
         preferenceData.time_format,
         preferenceData.soda_display_unit,
+        preferenceData.auto_tag_entry_time,
       ]
     );
     return result.rows[0];

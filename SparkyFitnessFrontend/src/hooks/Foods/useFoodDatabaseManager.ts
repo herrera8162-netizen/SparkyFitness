@@ -30,8 +30,12 @@ export function useFoodDatabaseManager() {
   const { t } = useTranslation();
   const { user } = useAuth();
   const { activeUserId, hasWritePermission } = useActiveUser();
-  const { nutrientDisplayPreferences, loggingLevel, timezone } =
-    usePreferences();
+  const {
+    nutrientDisplayPreferences,
+    loggingLevel,
+    timezone,
+    autoTagEntryTime,
+  } = usePreferences();
   const isMobile = useIsMobile();
   const platform = isMobile ? 'mobile' : 'desktop';
   const queryClient = useQueryClient();
@@ -221,7 +225,9 @@ export function useFoodDatabaseManager() {
       nowTime
     );
     const resolvedMealType = selectedMealType || defaultMeal;
-    const defaultEntryTime = `${String(nowTime.hour).padStart(2, '0')}:${String(nowTime.minute).padStart(2, '0')}`;
+    const defaultEntryTime = autoTagEntryTime
+      ? `${String(nowTime.hour).padStart(2, '0')}:${String(nowTime.minute).padStart(2, '0')}`
+      : null;
     const entryTime =
       selectedEntryTime !== undefined ? selectedEntryTime : defaultEntryTime;
     const today = todayInZone(timezone);

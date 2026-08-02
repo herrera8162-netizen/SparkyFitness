@@ -53,6 +53,7 @@ const FoodSettingsScreen: React.FC<FoodSettingsScreenProps> = () => {
   const barcodeProviderId = preferences?.default_barcode_provider_id ?? '';
   const foodDataProviderId = preferences?.default_food_data_provider_id ?? '';
   const autoScale = preferences?.auto_scale_open_food_facts_imports ?? true;
+  const autoTagEntryTime = preferences?.auto_tag_entry_time ?? true;
   const barcodeFallback = preferences?.barcode_fallback_open_food_facts ?? true;
   const showNetCarbs = preferences?.show_net_carbs ?? false;
 
@@ -110,6 +111,11 @@ const FoodSettingsScreen: React.FC<FoodSettingsScreenProps> = () => {
     [mutation],
   );
 
+  const handleAutoTagEntryTimeToggle = useCallback(
+    (value: boolean) => mutation.mutate({ auto_tag_entry_time: value }),
+    [mutation],
+  );
+
   const header = useScreenHeader({
     title: 'Food Settings',
     left: { kind: 'back' },
@@ -145,6 +151,24 @@ const FoodSettingsScreen: React.FC<FoodSettingsScreenProps> = () => {
           <Text className="text-text-secondary text-sm mt-4">
             When enabled, carbohydrate summaries display net carbs (total carbs
             − fiber), and a Total Carbs row is added in nutrient breakdowns.
+          </Text>
+        </View>
+
+        {/* Auto-tag Log Entry Time */}
+        <View className="bg-surface rounded-xl p-3 mb-4 shadow-sm">
+          <View className="flex-row justify-between items-center">
+            <Text className="text-base font-semibold text-text-primary flex-shrink">
+              Auto-tag Log Entry Time
+            </Text>
+            <Switch
+              onValueChange={handleAutoTagEntryTimeToggle}
+              value={autoTagEntryTime}
+              trackColor={{ false: formDisabled, true: formEnabled }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+          <Text className="text-text-secondary text-sm mt-4">
+            Automatically set current time when logging new food or exercise items. When disabled, log time remains empty.
           </Text>
         </View>
 

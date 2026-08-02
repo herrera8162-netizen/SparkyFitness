@@ -91,12 +91,12 @@ describe('preferenceRepository bootstrapUserTimezoneIfUnset', () => {
       'active_vision_ai_service_id'
     );
     // The 'in'-guard flag ($42) gates the CASE WHEN, and the value ($41)
-    // precedes it; added_sugar_algorithm ($43), time_format ($44), and
-    // soda_display_unit ($45) were appended after both. A partial payload
-    // that includes the field must write it.
+    // precedes it; added_sugar_algorithm ($43), time_format ($44),
+    // soda_display_unit ($45), and auto_tag_entry_time ($46) were appended
+    // after both. A partial payload that includes the field must write it.
     const params = mockClient.query.mock.calls[0][1];
-    expect(params[params.length - 5]).toBe('svc-99');
-    expect(params[params.length - 4]).toBe(true);
+    expect(params[params.length - 6]).toBe('svc-99');
+    expect(params[params.length - 5]).toBe(true);
   });
 
   it('leaves active_vision_ai_service_id untouched when the field is omitted', async () => {
@@ -109,7 +109,26 @@ describe('preferenceRepository bootstrapUserTimezoneIfUnset', () => {
 
     // The guard flag is false, so the CASE WHEN keeps the stored pointer.
     const params = mockClient.query.mock.calls[0][1];
-    expect(params[params.length - 4]).toBe(false);
+    expect(params[params.length - 5]).toBe(false);
+  });
+
+  it('round-trips auto_tag_entry_time preference through save and load', async () => {
+    const row = {
+      user_id: 'user-1',
+      auto_tag_entry_time: false,
+    };
+    mockClient.query.mockResolvedValueOnce({ rows: [row] });
+    mockClient.query.mockResolvedValueOnce({ rows: [row] });
+
+    await preferenceRepository.upsertUserPreferences({
+      user_id: 'user-1',
+      auto_tag_entry_time: false,
+    });
+    const result = await preferenceRepository.getUserPreferences('user-1');
+
+    expect(result.auto_tag_entry_time).toBe(false);
+    const params = mockClient.query.mock.calls[0][1];
+    expect(params[params.length - 1]).toBe(false);
   });
 
   it('round-trips goal_mode preferences through save and load', async () => {

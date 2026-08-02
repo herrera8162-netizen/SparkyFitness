@@ -120,6 +120,7 @@ const FoodUnitSelector = ({
     convertEnergy,
     aiAssistedConversions,
     timezone,
+    autoTagEntryTime,
   } = usePreferences();
   debug(loggingLevel, 'FoodUnitSelector component rendered.', { food, open });
 
@@ -151,11 +152,13 @@ const FoodUnitSelector = ({
     if (open && !wasOpenRef.current) {
       if (initialTime !== undefined) {
         setEntryTime(initialTime || '');
-      } else {
+      } else if (autoTagEntryTime) {
         const { hour, minute } = userHourMinute(timezone);
         setEntryTime(
           `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
         );
+      } else {
+        setEntryTime('');
       }
 
       if (

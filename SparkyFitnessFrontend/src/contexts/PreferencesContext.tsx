@@ -101,6 +101,7 @@ interface PreferencesContextType {
   bodyFatAlgorithm: BodyFatAlgorithm;
   includeBmrInNetCalories: boolean;
   showNetCarbs: boolean;
+  autoTagEntryTime: boolean;
   aiAssistedConversions: boolean;
   fatBreakdownAlgorithm: FatBreakdownAlgorithm;
   mineralCalculationAlgorithm: MineralCalculationAlgorithm;
@@ -147,6 +148,7 @@ interface PreferencesContextType {
   setBodyFatAlgorithm: (algorithm: BodyFatAlgorithm) => void;
   setIncludeBmrInNetCalories: (include: boolean) => void;
   setShowNetCarbs: (show: boolean) => void;
+  setAutoTagEntryTime: (autoTag: boolean) => void;
   setAiAssistedConversions: (enabled: boolean) => void;
   setFatBreakdownAlgorithm: (algorithm: FatBreakdownAlgorithm) => void;
   setMineralCalculationAlgorithm: (
@@ -205,6 +207,7 @@ export interface DefaultPreferences {
   calorie_goal_adjustment_mode: calorieGoalAdjustmentMode;
   energy_unit: EnergyUnit;
   auto_scale_open_food_facts_imports: boolean;
+  auto_tag_entry_time: boolean;
   auto_scale_online_imports: boolean;
   selected_diet: string;
   updated_at?: string;
@@ -307,6 +310,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
   const [includeBmrInNetCalories, setIncludeBmrInNetCaloriesState] =
     useState<boolean>(false);
   const [showNetCarbs, setShowNetCarbsState] = useState<boolean>(false);
+  const [autoTagEntryTime, setAutoTagEntryTimeState] = useState<boolean>(true);
   const [addExerciseWaterToGoal, setAddExerciseWaterToGoalState] =
     useState<boolean>(false);
   // AI-Assisted Unit Conversions: per-user toggle for the diary/food-form AI
@@ -698,6 +702,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
           data.include_bmr_in_net_calories ?? false
         );
         setShowNetCarbsState(data.show_net_carbs ?? false);
+        setAutoTagEntryTimeState(data.auto_tag_entry_time ?? true);
         setAddExerciseWaterToGoalState(
           data.add_exercise_water_to_goal ?? false
         );
@@ -876,6 +881,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
         include_bmr_in_net_calories:
           newPrefs?.includeBmrInNetCalories ?? includeBmrInNetCalories,
         show_net_carbs: newPrefs?.showNetCarbs ?? showNetCarbs,
+        auto_tag_entry_time: newPrefs?.autoTagEntryTime ?? autoTagEntryTime,
         add_exercise_water_to_goal:
           newPrefs?.addExerciseWaterToGoal ?? addExerciseWaterToGoal,
         ai_assisted_conversions:
@@ -945,6 +951,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       bodyFatAlgorithm,
       includeBmrInNetCalories,
       showNetCarbs,
+      autoTagEntryTime,
       aiAssistedConversions,
       fatBreakdownAlgorithm,
       mineralCalculationAlgorithm,
@@ -1059,6 +1066,14 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
     (enabled: boolean) => {
       setAutoScaleOpenFoodFactsImportsState(enabled);
       saveAllPreferences({ autoScaleOpenFoodFactsImports: enabled });
+    },
+    [saveAllPreferences]
+  );
+
+  const setAutoTagEntryTime = useCallback(
+    (autoTag: boolean) => {
+      setAutoTagEntryTimeState(autoTag);
+      saveAllPreferences({ autoTagEntryTime: autoTag });
     },
     [saveAllPreferences]
   );
@@ -1188,6 +1203,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       bodyFatAlgorithm,
       includeBmrInNetCalories,
       showNetCarbs,
+      autoTagEntryTime,
       aiAssistedConversions,
       fatBreakdownAlgorithm,
       mineralCalculationAlgorithm,
@@ -1231,6 +1247,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       setBodyFatAlgorithm: setBodyFatAlgorithmState,
       setIncludeBmrInNetCalories: setIncludeBmrInNetCaloriesState,
       setShowNetCarbs: setShowNetCarbsState,
+      setAutoTagEntryTime,
       setAiAssistedConversions: setAiAssistedConversionsState,
       setFatBreakdownAlgorithm: setFatBreakdownAlgorithmState,
       setMineralCalculationAlgorithm: setMineralCalculationAlgorithmState,
@@ -1281,6 +1298,8 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       bodyFatAlgorithm,
       includeBmrInNetCalories,
       showNetCarbs,
+      autoTagEntryTime,
+      setAutoTagEntryTime,
       aiAssistedConversions,
       fatBreakdownAlgorithm,
       mineralCalculationAlgorithm,

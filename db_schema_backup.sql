@@ -3517,6 +3517,8 @@ CREATE TABLE public.user_preferences (
     active_vision_ai_service_id uuid,
     added_sugar_algorithm text DEFAULT 'WHO_IDEAL'::text NOT NULL,
     time_format text DEFAULT 'h:mm A'::text NOT NULL,
+    soda_display_unit character varying(50) DEFAULT 'ml'::character varying,
+    auto_tag_entry_time boolean DEFAULT true,
     CONSTRAINT check_energy_unit CHECK (((energy_unit)::text = ANY ((ARRAY['kcal'::character varying, 'kJ'::character varying])::text[]))),
     CONSTRAINT logging_level_check CHECK ((logging_level = ANY (ARRAY['DEBUG'::text, 'INFO'::text, 'WARN'::text, 'ERROR'::text, 'SILENT'::text]))),
     CONSTRAINT user_preferences_time_format_check CHECK ((time_format = ANY (ARRAY['HH:mm'::text, 'h:mm A'::text, 'h:mm a'::text]))),

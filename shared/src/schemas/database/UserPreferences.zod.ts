@@ -46,6 +46,7 @@ export const userPreferencesSchema = z.object({
   measurement_decimal_places: z.number().int().min(0),
   // Manually added (file is ts-to-zod generated; precedent: MealFoods.zod.ts). Keep on regen.
   use_external_bmr: z.boolean(),
+  auto_tag_entry_time: z.boolean().optional().nullable(),
   active_ai_service_id: z.string().uuid().nullable().optional(),
   active_vision_ai_service_id: z.string().uuid().nullable().optional(),
 });
@@ -92,6 +93,7 @@ export const userPreferencesInitializerSchema = z.object({
   goal_mode_custom_percentage: z.number().int().min(0).max(40).optional(),
   measurement_decimal_places: z.number().int().min(0).optional(),
   use_external_bmr: z.boolean().optional(),
+  auto_tag_entry_time: z.boolean().optional().nullable(),
   active_ai_service_id: z.string().uuid().nullable().optional(),
   active_vision_ai_service_id: z.string().uuid().nullable().optional(),
 });
@@ -138,6 +140,7 @@ export const userPreferencesMutatorSchema = z.object({
   goal_mode_custom_percentage: z.number().int().min(0).max(40).optional(),
   measurement_decimal_places: z.number().int().min(0).optional(),
   use_external_bmr: z.boolean().optional(),
+  auto_tag_entry_time: z.boolean().optional().nullable(),
   active_ai_service_id: z.string().uuid().nullable().optional(),
   active_vision_ai_service_id: z.string().uuid().nullable().optional(),
 });

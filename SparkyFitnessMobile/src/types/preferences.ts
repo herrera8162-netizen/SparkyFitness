@@ -22,6 +22,7 @@ export interface UserPreferences {
   show_net_carbs?: boolean;
   calorie_goal_adjustment_mode?: string;
   auto_scale_open_food_facts_imports?: boolean;
+  auto_tag_entry_time?: boolean;
   auto_scale_online_imports?: boolean;
   barcode_fallback_open_food_facts?: boolean;
   exercise_calorie_percentage?: number;

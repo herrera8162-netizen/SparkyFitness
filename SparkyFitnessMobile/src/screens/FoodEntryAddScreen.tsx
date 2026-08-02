@@ -247,6 +247,10 @@ const FoodEntryAddScreen: React.FC<FoodEntryAddScreenProps> = ({
   const entryTimeTouched = useRef(false);
   useEffect(() => {
     if (entryTimeTouched.current) return;
+    if (preferences?.auto_tag_entry_time === false) {
+      setEntryTime('');
+      return;
+    }
     setEntryTime(
       prefillEntryTime({
         defaultTime: selectedMealType?.default_time,
@@ -254,7 +258,7 @@ const FoodEntryAddScreen: React.FC<FoodEntryAddScreenProps> = ({
         tz: getDeviceTimezone(),
       }),
     );
-  }, [selectedDate, selectedMealType?.default_time]);
+  }, [selectedDate, selectedMealType?.default_time, preferences?.auto_tag_entry_time]);
   const handleSelectEntryTime = (time: string) => {
     entryTimeTouched.current = true;
     setEntryTime(time);
