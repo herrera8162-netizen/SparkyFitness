@@ -141,7 +141,7 @@ const FoodUnitSelector = ({
   const [selectedVariant, setSelectedVariant] = useState<FoodVariant | null>(
     null
   );
-  const [quantity, setQuantity] = useState(1);
+  const [quantity, setQuantity] = useState<number | string>(1);
   const [entryTime, setEntryTime] = useState('');
   const [mealType, setMealType] = useState('');
   const [loading, setLoading] = useState(false);
@@ -406,9 +406,12 @@ const FoodUnitSelector = ({
           ...convertedVariant,
           ...savedVariant,
         };
+        const numericQuantity =
+          typeof quantity === 'number' ? quantity : parseFloat(quantity) || 0;
+
         onSelect(
           food,
-          quantity,
+          numericQuantity,
           variantWithId.serving_unit,
           variantWithId,
           entryTime || null,
@@ -424,15 +427,18 @@ const FoodUnitSelector = ({
     }
 
     if (selectedVariant) {
+      const numericQuantity =
+        typeof quantity === 'number' ? quantity : parseFloat(quantity) || 0;
+
       info(loggingLevel, 'Submitting food selection:', {
         food,
-        quantity,
+        quantity: numericQuantity,
         unit: selectedVariant.serving_unit,
         variantId: selectedVariant.id || undefined,
       });
       onSelect(
         food,
-        quantity,
+        numericQuantity,
         selectedVariant.serving_unit,
         selectedVariant,
         entryTime || null,
@@ -450,9 +456,12 @@ const FoodUnitSelector = ({
     ? buildConvertedVariant()
     : selectedVariant;
 
+  const numericQuantity =
+    typeof quantity === 'number' ? quantity : parseFloat(quantity) || 0;
+
   const nutrition = (() => {
     if (!activeVariant) return null;
-    const ratio = quantity / (activeVariant.serving_size || 1);
+    const ratio = numericQuantity / (activeVariant.serving_size || 1);
     return {
       calories: (activeVariant.calories || 0) * ratio,
       protein: (activeVariant.protein || 0) * ratio,
@@ -493,7 +502,7 @@ const FoodUnitSelector = ({
   const displayServing = isConverting
     ? `${quantity} ${displayUnit}`.trim()
     : selectedVariant
-      ? formatQuantityServingLabel(quantity, selectedVariant)
+      ? formatQuantityServingLabel(numericQuantity, selectedVariant)
       : `${quantity} ${displayUnit}`.trim();
 
   return (
@@ -543,9 +552,9 @@ const FoodUnitSelector = ({
                     min="0.01"
                     value={quantity}
                     onChange={(e) => {
-                      const newQuantity = Number(e.target.value);
-                      debug(loggingLevel, 'Quantity changed:', newQuantity);
-                      setQuantity(newQuantity);
+                      const val = e.target.value;
+                      debug(loggingLevel, 'Quantity changed:', val);
+                      setQuantity(val);
                     }}
                   />
                 </div>

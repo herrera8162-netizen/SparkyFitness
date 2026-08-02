@@ -54,7 +54,7 @@ const MealUnitSelector = ({
 
   // Default the prefilled quantity to one serving's worth (meal.serving_size),
   // matching MealBuilder. For an 8-serving meal this prefills 1.
-  const [quantity, setQuantity] = useState(
+  const [quantity, setQuantity] = useState<number | string>(
     initialQuantity ?? meal?.serving_size ?? 1.0
   );
   const mealServingUnit = meal?.serving_unit || 'serving';
@@ -82,13 +82,16 @@ const MealUnitSelector = ({
     event.preventDefault();
     debug(loggingLevel, 'Handling meal unit selector submit.');
 
+    const numericQuantity =
+      typeof quantity === 'number' ? quantity : parseFloat(quantity) || 0;
+
     info(loggingLevel, 'Submitting meal selection:', {
       meal,
-      quantity,
+      quantity: numericQuantity,
       unit,
     });
 
-    onSelect(meal, quantity, unit);
+    onSelect(meal, numericQuantity, unit);
     onOpenChange(false);
     setQuantity(1.0);
   };
@@ -99,6 +102,9 @@ const MealUnitSelector = ({
       warn(loggingLevel, 'calculateNutrition called with no meal foods.');
       return null;
     }
+
+    const numericQuantity =
+      typeof quantity === 'number' ? quantity : parseFloat(quantity) || 0;
 
     // Calculate total nutrition for the meal based on its component foods
     let totalCalories = 0;
@@ -120,7 +126,7 @@ const MealUnitSelector = ({
     let multiplier: number;
     if (unit === 'g' && meal.cooked_weight_g) {
       multiplier =
-        meal.cooked_weight_g > 0 ? quantity / meal.cooked_weight_g : 1;
+        meal.cooked_weight_g > 0 ? numericQuantity / meal.cooked_weight_g : 1;
     } else {
       // Uniform multiplier: quantity / (serving_size × total_servings).
       // For pre-migration data where total_servings defaults to 1, this collapses
@@ -128,7 +134,7 @@ const MealUnitSelector = ({
       const mealServingSize = meal.serving_size || 1.0;
       const mealTotalServings = meal.total_servings || 1;
       const denominator = mealServingSize * mealTotalServings;
-      multiplier = denominator > 0 ? quantity / denominator : 1;
+      multiplier = denominator > 0 ? numericQuantity / denominator : 1;
     }
 
     const result = {
@@ -186,9 +192,9 @@ const MealUnitSelector = ({
                   value={quantity}
                   ref={focusAndSelect}
                   onChange={(e) => {
-                    const newQuantity = Number(e.target.value);
-                    debug(loggingLevel, 'Meal quantity changed:', newQuantity);
-                    setQuantity(newQuantity);
+                    const val = e.target.value;
+                    debug(loggingLevel, 'Meal quantity changed:', val);
+                    setQuantity(val);
                   }}
                 />
               </div>

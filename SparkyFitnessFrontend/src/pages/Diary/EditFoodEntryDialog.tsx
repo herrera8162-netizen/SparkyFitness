@@ -76,7 +76,9 @@ const EditFoodEntryDialog = ({
   const isMobile = useIsMobile();
   const platform = isMobile ? 'mobile' : 'desktop';
 
-  const [quantity, setQuantity] = useState<number>(entry?.quantity || 1);
+  const [quantity, setQuantity] = useState<number | string>(
+    entry?.quantity || 1
+  );
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(
     entry?.variant_id || null
   );
@@ -224,8 +226,10 @@ const EditFoodEntryDialog = ({
           ...convertedVariant,
           ...savedVariant,
         };
+        const numericQuantity =
+          typeof quantity === 'number' ? quantity : parseFloat(quantity) || 0;
         const data: FoodEntryUpdateData = {
-          quantity,
+          quantity: numericQuantity,
           unit: variantWithId.serving_unit,
           variant_id: variantWithId.id || null,
           meal_type_id: mealId,
@@ -254,8 +258,10 @@ const EditFoodEntryDialog = ({
     }
 
     try {
+      const numericQuantity =
+        typeof quantity === 'number' ? quantity : parseFloat(quantity) || 0;
       const updateData = {
-        quantity,
+        quantity: numericQuantity,
         unit: selectedVariant.serving_unit,
         meal_type_id: mealId,
         variant_id:
@@ -272,12 +278,15 @@ const EditFoodEntryDialog = ({
     }
   };
 
+  const numericQuantity =
+    typeof quantity === 'number' ? quantity : parseFloat(quantity) || 0;
+
   // Use the converted variant for nutrition when converting, otherwise the selected variant
   const activeVariant = isConverting
     ? buildConvertedVariant()
     : selectedVariant;
   const nutrition = activeVariant
-    ? calculateNutrition(activeVariant, quantity)
+    ? calculateNutrition(activeVariant, numericQuantity)
     : null;
 
   return (
@@ -323,7 +332,7 @@ const EditFoodEntryDialog = ({
                     min="0.01"
                     value={quantity}
                     ref={inputRef}
-                    onChange={(e) => setQuantity(Number(e.target.value))}
+                    onChange={(e) => setQuantity(e.target.value)}
                   />
                 </div>
 
