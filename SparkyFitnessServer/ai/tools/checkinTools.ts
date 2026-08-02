@@ -109,15 +109,20 @@ function formatMoodTags(tags?: string[] | null): string {
 export async function getBiometricsHistoryRows(
   userId: string,
   startDate?: string,
-  endDate?: string
+  endDate?: string,
+  actingUserId?: string
 ): Promise<BiometricsRow[]> {
-  const prefs = await preferenceService.getUserPreferences(userId, userId);
+  const resolvedActingUserId = actingUserId ?? userId;
+  const prefs = await preferenceService.getUserPreferences(
+    userId,
+    resolvedActingUserId
+  );
   const wUnit = prefs.default_weight_unit || 'kg';
   const mUnit = prefs.default_measurement_unit || 'cm';
 
   const rows = await measurementService.getCheckInMeasurementsByDateRange(
     userId,
-    userId,
+    resolvedActingUserId,
     startDate || '1970-01-01',
     endDate || '9999-12-31'
   );
@@ -144,7 +149,12 @@ export async function getBiometricsHistoryRows(
   }));
 }
 
-export function buildCheckinTools(userId: string, tz: string) {
+export function buildCheckinTools(
+  userId: string,
+  tz: string,
+  actingUserId?: string
+) {
+  const resolvedActingUserId = actingUserId ?? userId;
   return {
     sparky_manage_checkin: tool({
       description: `Health tracking: weight, steps, body measurements, mood, sleep, fasting, custom metrics.
@@ -238,7 +248,7 @@ Actions:
             case 'log_biometrics': {
               const prefs = await preferenceService.getUserPreferences(
                 userId,
-                userId
+                resolvedActingUserId
               );
               const defaultWeightUnit = prefs.default_weight_unit || 'kg';
               const defaultMeasurementUnit =
@@ -303,7 +313,7 @@ Actions:
 
               await measurementService.upsertCheckInMeasurements(
                 userId,
-                userId,
+                resolvedActingUserId,
                 args.entry_date,
                 measurements
               );
@@ -335,7 +345,7 @@ Actions:
             case 'log_custom_metric': {
               const categories = await measurementService.getCustomCategories(
                 userId,
-                userId
+                resolvedActingUserId
               );
               const category = categories.find(
                 (cat: CustomCategoryRow) =>
@@ -349,7 +359,7 @@ Actions:
               }
               await measurementService.upsertCustomMeasurementEntry(
                 userId,
-                userId,
+                resolvedActingUserId,
                 {
                   category_id: category.id,
                   value: String(args.value),
@@ -365,7 +375,7 @@ Actions:
             case 'list_categories': {
               const rows = await measurementService.getCustomCategories(
                 userId,
-                userId
+                resolvedActingUserId
               );
               interface MappedCategoryRow {
                 id: string;
@@ -392,12 +402,16 @@ Actions:
             }
 
             case 'create_category': {
-              await measurementService.createCustomCategory(userId, userId, {
-                name: args.category_name,
-                measurement_type: args.unit || 'unit',
-                data_type: args.data_type || 'numeric',
-                frequency: 'Daily',
-              });
+              await measurementService.createCustomCategory(
+                userId,
+                resolvedActingUserId,
+                {
+                  name: args.category_name,
+                  measurement_type: args.unit || 'unit',
+                  data_type: args.data_type || 'numeric',
+                  frequency: 'Daily',
+                }
+              );
               return formatConfirmation(
                 `Category "${args.category_name}" created${args.unit ? ` with measurement type "${args.unit}"` : ''}.`
               );
@@ -469,14 +483,19 @@ Actions:
                 wakeTime = wake.toISOString();
               }
 
-              await measurementService.processSleepEntry(userId, userId, {
-                entry_date: args.entry_date,
-                bedtime,
-                wake_time: wakeTime,
-                duration_in_seconds: duration,
-                source: args.source || 'manual',
-                record_utc_offset_minutes: recordUtcOffsetMinutes ?? undefined,
-              });
+              await measurementService.processSleepEntry(
+                userId,
+                resolvedActingUserId,
+                {
+                  entry_date: args.entry_date,
+                  bedtime,
+                  wake_time: wakeTime,
+                  duration_in_seconds: duration,
+                  source: args.source || 'manual',
+                  record_utc_offset_minutes:
+                    recordUtcOffsetMinutes ?? undefined,
+                }
+              );
 
               const parts: string[] = [];
               if (isSet(args.duration_seconds)) {
@@ -500,7 +519,7 @@ Actions:
 
               const bioRow = await measurementService.getCheckInMeasurements(
                 userId,
-                userId,
+                resolvedActingUserId,
                 date
               );
               const moodEntry = await moodRepository.getMoodEntryByDate(
@@ -522,12 +541,12 @@ Actions:
               const customRows =
                 await measurementService.getCustomMeasurementEntriesByDate(
                   userId,
-                  userId,
+                  resolvedActingUserId,
                   date
                 );
               const prefs = await preferenceService.getUserPreferences(
                 userId,
-                userId
+                resolvedActingUserId
               );
               const wUnit = prefs.default_weight_unit || 'kg';
               const mUnit = prefs.default_measurement_unit || 'cm';

@@ -378,7 +378,11 @@ async function generateCoachingPlan(
   };
 }
 
-export function buildCoachTools(userId: string, tz: string) {
+export function buildCoachTools(
+  userId: string,
+  tz: string,
+  _actingUserId?: string
+) {
   return {
     sparky_get_health_summary: tool({
       description:
