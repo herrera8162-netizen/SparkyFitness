@@ -163,8 +163,6 @@ const FoodSettingsScreen: React.FC<FoodSettingsScreenProps> = () => {
             <Switch
               onValueChange={handleAutoTagEntryTimeToggle}
               value={autoTagEntryTime}
-              trackColor={{ false: formDisabled, true: formEnabled }}
-              thumbColor="#FFFFFF"
             />
           </View>
           <Text className="text-text-secondary text-sm mt-4">
