@@ -371,7 +371,7 @@ export function useCustomFoodForm({
   const foodEntriesCount = deletionImpact?.foodEntriesCount ?? 0;
   const foodEntries = deletionImpact?.foodEntries ?? [];
 
-  const [syncPastEntries, setSyncPastEntries] = useState(true);
+  const [syncPastEntries, setSyncPastEntries] = useState(false);
   // Whether the currently staged photo edits differ from what's saved.
   // Gates the "also update photos" toggle, which only makes sense to offer
   // when this save would actually change the food's photo.

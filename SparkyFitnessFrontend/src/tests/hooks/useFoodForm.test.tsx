@@ -561,7 +561,11 @@ describe('useCustomFoodForm', () => {
 
     expect(result.current.isUserOwnedFood).toBe(true);
     expect(result.current.foodEntriesCount).toBe(2);
-    expect(result.current.syncPastEntries).toBe(true);
+    expect(result.current.syncPastEntries).toBe(false);
+
+    act(() => {
+      result.current.setSyncPastEntries(true);
+    });
 
     await act(async () => {
       await result.current.handleSubmit({
@@ -597,9 +601,7 @@ describe('useCustomFoodForm', () => {
       })
     );
 
-    act(() => {
-      result.current.setSyncPastEntries(false);
-    });
+    expect(result.current.syncPastEntries).toBe(false);
 
     await act(async () => {
       await result.current.handleSubmit({
@@ -699,6 +701,9 @@ describe('useCustomFoodForm', () => {
       ]);
     });
     act(() => {
+      result.current.setSyncPastEntries(true);
+    });
+    act(() => {
       result.current.setSyncPastEntryPhotos(true);
     });
 
@@ -740,6 +745,9 @@ describe('useCustomFoodForm', () => {
     });
 
     // Flip the toggle on without ever touching the picker.
+    act(() => {
+      result.current.setSyncPastEntries(true);
+    });
     act(() => {
       result.current.setSyncPastEntryPhotos(true);
     });
