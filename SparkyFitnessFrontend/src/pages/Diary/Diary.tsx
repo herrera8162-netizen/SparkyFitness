@@ -63,8 +63,13 @@ const Diary = () => {
   const { activeUserId } = useActiveUser();
   const location = useLocation();
   const navigate = useNavigate();
-  const { timezone, loggingLevel, energyUnit, convertEnergy } =
-    usePreferences();
+  const {
+    timezone,
+    loggingLevel,
+    energyUnit,
+    convertEnergy,
+    autoTagEntryTime,
+  } = usePreferences();
   const [editingEntry, setEditingEntry] = useState<FoodEntry | null>(null);
   const [editingFoodEntryMeal, setEditingFoodEntryMeal] =
     useState<FoodEntryMeal | null>(null); // State for editing logged meal entry
@@ -539,7 +544,7 @@ const Diary = () => {
           defaultMealTime={selectedMealTypeObj?.default_time}
           initialTime={prefillEntryTime({
             defaultTime: selectedMealTypeObj?.default_time,
-            isToday: selectedDate === todayInZone(timezone),
+            isToday: autoTagEntryTime && selectedDate === todayInZone(timezone),
             tz: timezone,
           })}
         />
@@ -583,7 +588,7 @@ const Diary = () => {
         mealType={selectedMealType}
         initialEntryTime={prefillEntryTime({
           defaultTime: selectedMealTypeObj?.default_time,
-          isToday: selectedDate === todayInZone(timezone),
+          isToday: autoTagEntryTime && selectedDate === todayInZone(timezone),
           tz: timezone,
         })}
       />
