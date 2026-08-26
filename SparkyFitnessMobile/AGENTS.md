@@ -25,6 +25,14 @@ This is the package guide for `SparkyFitnessMobile/`. Work from this directory f
 - Global `fetch` is Expo's WinterCG `expo/fetch`, so React Native's `{uri, name, type}` FormData file parts throw "Unsupported FormDataPart implementation". Append an `expo-file-system` `File` (it implements Blob) for multipart uploads; see `pregnancyPhotosApi.ts`.
 - Server-stored distance/weight units are metric. UI conversion belongs in mobile helpers such as `unitConversions.ts`.
 
+## Localization contract
+
+English (`en`) is the canonical source locale and the deterministic fallback. Feature developers must add/update the English catalog, use semantic static keys, provide explicit English fallback/defaultValue text, use count-based i18next pluralization, use app-locale date/number/unit formatters, and avoid user-facing hardcoded text. Custom, user, and server content stays literal.
+
+Feature developers do not need to know or translate Polish or any future language, and do not need to wait for Weblate. Translators/Weblate own Polish and future translations and linguistic QA. Missing translation content is non-blocking and falls back to English; existing translated content remains structurally validated.
+
+The shipped locale registry is `src/localization/localeRegistry.ts`. Adding a catalog to Weblate does not ship it. Shipping requires explicit registry enablement plus native/platform support verification. RN catalogs and native resources are separate surfaces (Expo metadata, Android widget resources, and iOS widget/Live Activity `.lproj` resources).
+
 ## Commands
 
 ```bash
@@ -40,7 +48,7 @@ pnpm run test:coverage -- --watchman=false --runInBand
 npx expo prebuild --clean
 ```
 
-- `pnpm run validate` runs typecheck and Expo lint.
+- `pnpm run validate` runs TypeScript typecheck, Expo lint, and the blocking mobile i18n audit.
 - Use Watchman-disabled Jest commands in agent/sandbox runs; bare Jest often fails on macOS.
 - `collectCoverage` is enabled in Jest config, so expect coverage output from normal test runs.
 - Run `npx expo prebuild --clean` after native dependency changes, permissions, app group or widget target changes, Expo plugin changes, native config edits, or patching native modules.
@@ -121,7 +129,7 @@ npx expo prebuild --clean
 - On iOS, cumulative metrics should use HealthKit statistics queries, not raw sample summation.
 - On Android, cumulative metrics (`Steps`, `Distance`, `ActiveCaloriesBurned`, `TotalCaloriesBurned`, `FloorsClimbed`) use Health Connect `aggregateGroupByPeriod` once per range. Native source-priority dedup should match Health Connect UI; do not reintroduce JS `Math.max` or source allowlist dedup.
 - Android read helpers return `{ records, error }` via `readHealthRecordsDetailed` and `aggregateCumulativeMetricByDayDetailed`; legacy wrappers unwrap only records.
-- Android exercise sessions are enriched with `aggregateRecord` for active/total calories and distance over the session window, scoped to `dataOrigin` and filtered for plausibility.
+- Android exercise sessions are enriched with `aggregateRecord` for active/total calories and distance over the session window. Calories start scoped to `dataOrigin`; incomplete or implausible pairs retry without the origin filter so Health Connect can apply source priority. Distance always stays origin-scoped. Both are filtered for plausibility.
 - iOS HealthKit locked-device failures surface as database-inaccessible warnings. Do not treat these as successful empty reads.
 - `app.config.ts` grants `android.permission.health.READ_HEALTH_DATA_HISTORY` so Android can read data older than 30 days.
 - Health Connect permission migrations belong in `services/shared/healthPermissionMigration.ts`, not UI-only state.
