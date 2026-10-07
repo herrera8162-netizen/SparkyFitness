@@ -47,8 +47,7 @@ async function updateUserPreferences(userId: any, preferenceData: any) {
         added_sugar_algorithm = COALESCE($43, added_sugar_algorithm),
         calorie_safety_floor_mode = COALESCE($45, calorie_safety_floor_mode),
         calorie_safety_floor_value = COALESCE($46, calorie_safety_floor_value),
-        soda_display_unit = COALESCE($47, soda_display_unit),
-        auto_tag_entry_time = COALESCE($48, auto_tag_entry_time),
+        auto_tag_entry_time = COALESCE($47, auto_tag_entry_time),
         updated_at = now()
       WHERE user_id = $28
       RETURNING *`,
@@ -99,7 +98,6 @@ async function updateUserPreferences(userId: any, preferenceData: any) {
         preferenceData.time_format,
         preferenceData.calorie_safety_floor_mode,
         preferenceData.calorie_safety_floor_value,
-        preferenceData.soda_display_unit,
         preferenceData.auto_tag_entry_time,
       ]
     );
@@ -189,7 +187,6 @@ async function upsertUserPreferences(preferenceData: any) {
        added_sugar_algorithm,
        calorie_safety_floor_mode,
        calorie_safety_floor_value,
-       soda_display_unit,
        auto_tag_entry_time,
        created_at, updated_at
      ) VALUES (
@@ -218,8 +215,7 @@ async function upsertUserPreferences(preferenceData: any) {
        COALESCE($43, 'WHO_IDEAL'),
        COALESCE($45, 'standard'),
        COALESCE($46, 1200),
-       COALESCE($47, 'ml'),
-       COALESCE($48, true),
+       COALESCE($47, true),
        now(), now()
      )
      ON CONFLICT (user_id) DO UPDATE SET
@@ -265,7 +261,6 @@ async function upsertUserPreferences(preferenceData: any) {
        calorie_safety_floor_mode = COALESCE($45, user_preferences.calorie_safety_floor_mode),
        calorie_safety_floor_value = COALESCE($46, user_preferences.calorie_safety_floor_value),
        time_format = COALESCE($44, user_preferences.time_format),
-       soda_display_unit = COALESCE(EXCLUDED.soda_display_unit, user_preferences.soda_display_unit),
        auto_tag_entry_time = COALESCE(EXCLUDED.auto_tag_entry_time, user_preferences.auto_tag_entry_time),
        updated_at = now()
      RETURNING *`,
@@ -316,7 +311,6 @@ async function upsertUserPreferences(preferenceData: any) {
         preferenceData.time_format,
         preferenceData.calorie_safety_floor_mode,
         preferenceData.calorie_safety_floor_value,
-        preferenceData.soda_display_unit,
         preferenceData.auto_tag_entry_time,
       ]
     );
