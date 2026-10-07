@@ -36,15 +36,25 @@ describe('Garmin exercise cleanup', () => {
       'Active Calories'
     );
 
-    const [selectSql, params] = mockClient.query.mock.calls[1];
+    const lockCall = mockClient.query.mock.calls.find(([sql]) =>
+      String(sql).includes('pg_advisory_xact_lock')
+    );
+    expect(lockCall?.[1]).toEqual(['exercise-entry-sync:user-1:garmin']);
+
+    const [selectSql, params] = mockClient.query.mock.calls.find(([sql]) =>
+      String(sql).includes('SELECT id FROM exercise_entries')
+    )!;
     expect(selectSql).toContain('NOT EXISTS');
     expect(selectSql).toContain('exercises');
+    // $6 is the keep-list of source_ids the caller is about to re-insert; null
+    // here, so this delete is unchanged — Garmin passes no payload ids.
     expect(params).toEqual([
       'user-1',
       '2026-08-02',
       '2026-08-02',
       'garmin',
       'Active Calories',
+      null,
     ]);
   });
 });

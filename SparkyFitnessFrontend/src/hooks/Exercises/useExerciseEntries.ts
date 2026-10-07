@@ -1,21 +1,17 @@
-import {
-  useQuery,
-  useMutation,
-  useQueryClient,
-  useInfiniteQuery,
-} from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import {
   fetchExerciseEntries,
   createExerciseEntry,
   updateExerciseEntry,
+  fetchExerciseProgressionStats,
   deleteExerciseEntry,
   createPresetSession,
   logWorkoutPreset,
   deleteExercisePresetEntry,
   fetchExerciseDetails,
-  fetchExerciseEntryHistoryV2,
   getExerciseHistory,
+  fetchWorkoutLocations,
 } from '@/api/Exercises/exerciseEntryService';
 import { exerciseEntryKeys, exerciseKeys } from '@/api/keys/exercises';
 import i18n from '@/i18n';
@@ -35,25 +31,20 @@ export const useExerciseEntries = (date: string, userId?: string) => {
   });
 };
 
+/** Previously logged gym / location names, most recent first. */
+export const useWorkoutLocations = () => {
+  return useQuery({
+    queryKey: exerciseEntryKeys.locations(),
+    queryFn: fetchWorkoutLocations,
+    staleTime: 60_000,
+  });
+};
+
 export const useExerciseHistory = (exerciseId: string, limit: number = 5) => {
   return useQuery({
     queryKey: exerciseEntryKeys.history(exerciseId, limit),
     queryFn: () => getExerciseHistory(exerciseId, limit),
     enabled: !!exerciseId,
-  });
-};
-
-export const useInfiniteExerciseHistoryV2 = (
-  userId?: string,
-  pageSize: number = 20
-) => {
-  return useInfiniteQuery({
-    queryKey: exerciseEntryKeys.historyV2(userId, pageSize),
-    queryFn: ({ pageParam = 1 }) =>
-      fetchExerciseEntryHistoryV2(pageParam as number, pageSize, userId),
-    getNextPageParam: (lastPage) =>
-      lastPage.pagination.hasMore ? lastPage.pagination.page + 1 : undefined,
-    initialPageParam: 1,
   });
 };
 
@@ -131,16 +122,21 @@ export const useLogWorkoutPresetMutation = () => {
     mutationFn: ({
       presetId,
       date,
+      workoutPlanAssignmentId,
     }: {
       presetId: string | number;
       date: string;
-    }) => logWorkoutPreset(presetId, date),
+      workoutPlanAssignmentId?: number | string | null;
+    }) => logWorkoutPreset(presetId, date, workoutPlanAssignmentId),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({
         queryKey: exerciseEntryKeys.byDate(variables.date),
       });
       queryClient.invalidateQueries({
         queryKey: dailyProgressKeys.all,
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['workoutPlanTemplates'],
       });
     },
     meta: {
@@ -165,6 +161,7 @@ export const useCreatePresetSessionMutation = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: exerciseEntryKeys.all });
       queryClient.invalidateQueries({ queryKey: dailyProgressKeys.all });
+      queryClient.invalidateQueries({ queryKey: ['workoutPlanTemplates'] });
     },
     meta: {
       successMessage: t(
@@ -190,6 +187,7 @@ export const useDeleteExercisePresetEntryMutation = () => {
       queryClient.invalidateQueries({
         queryKey: dailyProgressKeys.all,
       });
+      queryClient.invalidateQueries({ queryKey: ['workoutPlanTemplates'] });
     },
     meta: {
       successMessage: t(
@@ -216,3 +214,4 @@ export const exerciseDetailsOptions = (exerciseId: string) => ({
     ),
   },
 });
+export { fetchExerciseProgressionStats };

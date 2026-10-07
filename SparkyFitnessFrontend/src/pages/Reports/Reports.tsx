@@ -2,11 +2,14 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FastingReport } from '@/pages/Reports/FastingReport';
 import MedicationReports from '@/pages/Reports/MedicationReports';
+import SymptomsReport from '@/pages/Symptoms/SymptomsReport';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import { useActiveUser } from '@/contexts/ActiveUserContext';
 import ZoomableChart from '@/components/ZoomableChart';
 import ReportsControls from '@/pages/Reports/ReportsControls';
 import NutritionPeriodSummary from '@/pages/Reports/NutritionPeriodSummary';
+import { WeeklyAlcoholCard } from '@/pages/Reports/WeeklyAlcoholCard';
+import HydrationTrendChart from '@/pages/Reports/HydrationTrendChart';
 import NutritionChartsGrid from '@/pages/Reports/NutritionChartsGrid';
 import WidgetGrid from '@/components/widgets/WidgetGrid';
 import {
@@ -202,6 +205,16 @@ const Reports = () => {
         return (
           <div className="space-y-12">
             <ChartErrorBoundary>
+              <WeeklyAlcoholCard date={endDate} userId={activeUserId} />
+            </ChartErrorBoundary>
+            <ChartErrorBoundary>
+              <HydrationTrendChart
+                startDate={startDate}
+                endDate={endDate}
+                userId={activeUserId}
+              />
+            </ChartErrorBoundary>
+            <ChartErrorBoundary>
               <NutritionPeriodSummary
                 nutritionData={nutritionData}
                 customNutrients={customNutrients}
@@ -391,6 +404,12 @@ const Reports = () => {
               injections={injections}
               titrationSteps={titrationSteps}
             />
+          </ChartErrorBoundary>
+        );
+      case 'symptoms-reports':
+        return (
+          <ChartErrorBoundary>
+            <SymptomsReport startDate={startDate} endDate={endDate} />
           </ChartErrorBoundary>
         );
       default:

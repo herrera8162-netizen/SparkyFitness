@@ -15,6 +15,10 @@ export const workoutPresetsSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   is_public: z.boolean().nullable(),
+  // Manually added (file is ts-to-zod generated; precedent: UserWaterContainers.zod.ts).
+  // Keep on regen. #1936: interval / WOD workout formats.
+  workout_format: z.string().default("standard"),
+  time_cap_seconds: z.number().int().nullable().optional(),
   created_at: z.date().nullable(),
   updated_at: z.date().nullable(),
 });
@@ -25,6 +29,9 @@ export const workoutPresetsInitializerSchema = z.object({
   name: z.string(),
   description: z.string().optional().nullable(),
   is_public: z.boolean().optional().nullable(),
+  // Manually added. #1936: interval / WOD workout formats.
+  workout_format: z.string().optional().default("standard"),
+  time_cap_seconds: z.number().int().optional().nullable(),
   created_at: z.date().optional().nullable(),
   updated_at: z.date().optional().nullable(),
 });
@@ -35,10 +42,15 @@ export const workoutPresetsMutatorSchema = z.object({
   name: z.string().optional(),
   description: z.string().optional().nullable(),
   is_public: z.boolean().optional().nullable(),
+  // Manually added. #1936: interval / WOD workout formats.
+  workout_format: z.string().optional(),
+  time_cap_seconds: z.number().int().optional().nullable(),
   created_at: z.date().optional().nullable(),
   updated_at: z.date().optional().nullable(),
 });
 
 export type WorkoutPresets = z.infer<typeof workoutPresetsSchema>;
-export type WorkoutPresetsInitializer = z.infer<typeof workoutPresetsInitializerSchema>;
+export type WorkoutPresetsInitializer = z.infer<
+  typeof workoutPresetsInitializerSchema
+>;
 export type WorkoutPresetsMutator = z.infer<typeof workoutPresetsMutatorSchema>;

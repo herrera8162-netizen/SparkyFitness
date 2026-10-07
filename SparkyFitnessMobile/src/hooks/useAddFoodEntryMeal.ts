@@ -6,7 +6,7 @@ import type {
   FoodEntryMeal,
   FoodEntryMealCreateData,
 } from '../types/foodEntryMeals';
-import { dailySummaryQueryKey, foodsQueryKey } from './queryKeys';
+import { invalidateFoodCache } from './invalidateFoodCache';
 import { invalidateMealUsageCaches } from './useMeals';
 
 interface UseAddFoodEntryMealOptions {
@@ -18,19 +18,26 @@ export function useAddFoodEntryMeal(options?: UseAddFoodEntryMealOptions) {
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
-    mutationFn: (payload: FoodEntryMealCreateData) => createFoodEntryMeal(payload),
+    mutationFn: (payload: FoodEntryMealCreateData) =>
+      createFoodEntryMeal(payload),
     onSuccess: (meal) => {
+      invalidateCache(meal.entry_date);
       invalidateMealUsageCaches(queryClient);
       options?.onSuccess?.(meal);
     },
     onError: () => {
-      Toast.show({ type: 'error', text1: t('foodEntryMeal.failed', { defaultValue: 'Failed to add meal' }), text2: t('common.tryAgain', { defaultValue: 'Please try again.' }) });
+      Toast.show({
+        type: 'error',
+        text1: t('foodEntryMeal.failed', {
+          defaultValue: 'Failed to add meal',
+        }),
+        text2: t('common.tryAgain', { defaultValue: 'Please try again.' }),
+      });
     },
   });
 
   const invalidateCache = (date: string) => {
-    queryClient.invalidateQueries({ queryKey: dailySummaryQueryKey(date) });
-    queryClient.invalidateQueries({ queryKey: [...foodsQueryKey] });
+    invalidateFoodCache(queryClient, date);
   };
 
   return {

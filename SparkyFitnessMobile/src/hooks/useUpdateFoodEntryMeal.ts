@@ -7,11 +7,8 @@ import type {
   FoodEntryMealUpdateData,
 } from '../types/foodEntryMeals';
 import { normalizeDate } from '../utils/dateUtils';
-import {
-  dailySummaryQueryKey,
-  foodEntryMealDetailQueryKey,
-  foodsQueryKey,
-} from './queryKeys';
+import { foodEntryMealDetailQueryKey } from './queryKeys';
+import { invalidateFoodCache } from './invalidateFoodCache';
 import { invalidateMealUsageCaches } from './useMeals';
 
 interface UseUpdateFoodEntryMealOptions {
@@ -29,26 +26,37 @@ export function useUpdateFoodEntryMeal({
   const normalizedDate = normalizeDate(entryDate);
 
   const mutation = useMutation({
-    mutationFn: (payload: FoodEntryMealUpdateData) => updateFoodEntryMeal(mealId, payload),
+    mutationFn: (payload: FoodEntryMealUpdateData) =>
+      updateFoodEntryMeal(mealId, payload),
     onSuccess: (meal) => {
       onSuccess?.(meal);
     },
     onError: (error) => {
-      const message = error instanceof Error && error.message.includes('403')
-        ? i18n.t('editLoggedMeal.errors.permission', { defaultValue: "You don't have permission to edit this meal." })
-        : i18n.t('common.tryAgain', { defaultValue: 'Please try again.' });
-      Toast.show({ type: 'error', text1: i18n.t('editLoggedMeal.errors.saveFailed', { defaultValue: 'Failed to save meal' }), text2: message });
+      const message =
+        error instanceof Error && error.message.includes('403')
+          ? i18n.t('editLoggedMeal.errors.permission', {
+              defaultValue: "You don't have permission to edit this meal.",
+            })
+          : i18n.t('common.tryAgain', { defaultValue: 'Please try again.' });
+      Toast.show({
+        type: 'error',
+        text1: i18n.t('editLoggedMeal.errors.saveFailed', {
+          defaultValue: 'Failed to save meal',
+        }),
+        text2: message,
+      });
     },
   });
 
   const invalidateCache = (newDate?: string) => {
-    queryClient.invalidateQueries({ queryKey: dailySummaryQueryKey(normalizedDate), refetchType: 'all' });
+    invalidateFoodCache(queryClient, normalizedDate);
     if (newDate && newDate !== normalizedDate) {
-      queryClient.invalidateQueries({ queryKey: dailySummaryQueryKey(newDate), refetchType: 'all' });
+      invalidateFoodCache(queryClient, newDate);
     }
-    queryClient.invalidateQueries({ queryKey: foodEntryMealDetailQueryKey(mealId) });
+    queryClient.invalidateQueries({
+      queryKey: foodEntryMealDetailQueryKey(mealId),
+    });
     invalidateMealUsageCaches(queryClient);
-    queryClient.invalidateQueries({ queryKey: [...foodsQueryKey] });
   };
 
   return {

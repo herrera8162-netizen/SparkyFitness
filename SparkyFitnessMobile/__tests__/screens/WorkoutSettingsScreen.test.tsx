@@ -1,6 +1,7 @@
 import React from 'react';
 import { Platform } from 'react-native';
 import { act, fireEvent, render } from '@testing-library/react-native';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import WorkoutSettingsScreen from '../../src/screens/WorkoutSettingsScreen';
 import {
   useAppPreferencesStore,
@@ -14,11 +15,16 @@ jest.mock('../../src/components/RestPeriodSheet', () => {
   const ReactModule = require('react');
   return {
     __esModule: true,
-    default: ReactModule.forwardRef((props: { onChange: (seconds: number) => void }, ref: unknown) => {
-      ReactModule.useImperativeHandle(ref, () => ({ present: mockPresent, dismiss: jest.fn() }));
-      sheetOnChange = props.onChange;
-      return null;
-    }),
+    default: ReactModule.forwardRef(
+      (props: { onChange: (seconds: number) => void }, ref: unknown) => {
+        ReactModule.useImperativeHandle(ref, () => ({
+          present: mockPresent,
+          dismiss: jest.fn(),
+        }));
+        sheetOnChange = props.onChange;
+        return null;
+      }
+    ),
   };
 });
 
@@ -28,6 +34,13 @@ jest.mock('../../src/components/ActiveWorkoutBar', () => ({
 
 jest.mock('react-native-safe-area-context', () => ({
   useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+}));
+
+jest.mock('../../src/services/api/workoutCoachingApi', () => ({
+  fetchWorkoutCoachingSettings: jest.fn(async () => ({
+    adaptive_suggestions: true,
+  })),
+  saveWorkoutCoachingSettings: jest.fn(async (settings) => settings),
 }));
 
 const mockNavigation = { goBack: jest.fn(), setOptions: jest.fn() } as any;
@@ -40,7 +53,16 @@ const navigation = mockNavigation;
 const route = { params: {} } as any;
 
 function renderScreen() {
-  return render(<WorkoutSettingsScreen navigation={navigation} route={route} />);
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <WorkoutSettingsScreen navigation={navigation} route={route} />
+    </QueryClientProvider>
+  );
 }
 
 describe('WorkoutSettingsScreen', () => {
@@ -84,8 +106,8 @@ describe('WorkoutSettingsScreen', () => {
   });
 
   it('toggles the rest timer sound preference from the switch', () => {
-    const { getAllByRole } = renderScreen();
-    const [soundToggle] = getAllByRole('switch');
+    const { getByLabelText } = renderScreen();
+    const soundToggle = getByLabelText('Rest timer sound');
     expect(soundToggle.props.value).toBe(true);
 
     fireEvent(soundToggle, 'valueChange', false);
@@ -93,25 +115,90 @@ describe('WorkoutSettingsScreen', () => {
   });
 
   it('toggles the keep screen awake preference from the switch', () => {
-    const { getAllByRole } = renderScreen();
-    const [, keepAwakeToggle] = getAllByRole('switch');
+    const { getByLabelText } = renderScreen();
+    const keepAwakeToggle = getByLabelText('Keep screen awake');
     expect(keepAwakeToggle.props.value).toBe(false);
 
     fireEvent(keepAwakeToggle, 'valueChange', true);
-    expect(useAppPreferencesStore.getState().workoutKeepAwakeEnabled).toBe(true);
+    expect(useAppPreferencesStore.getState().workoutKeepAwakeEnabled).toBe(
+      true
+    );
+  });
+
+  it('saves the adaptive suggestions account setting from the switch', async () => {
+    const {
+      saveWorkoutCoachingSettings,
+    } = require('../../src/services/api/workoutCoachingApi');
+    const { getByLabelText } = renderScreen();
+    const adaptiveToggle = getByLabelText('Adaptive suggestions');
+    expect(adaptiveToggle.props.value).toBe(true);
+
+    await act(async () => {
+      fireEvent(adaptiveToggle, 'valueChange', false);
+    });
+    expect(saveWorkoutCoachingSettings).toHaveBeenCalledWith(
+      { adaptive_suggestions: false },
+      expect.anything()
+    );
+  });
+
+  it('toggles lowering music during cues (off by default)', () => {
+    const { getByLabelText } = renderScreen();
+    const duckToggle = getByLabelText('Lower music during cues');
+    expect(duckToggle.props.value).toBe(false);
+    fireEvent(duckToggle, 'valueChange', true);
+    expect(useAppPreferencesStore.getState().duckMusicDuringCues).toBe(true);
+  });
+
+  it('shows guided workout options only once guided mode is on', async () => {
+    const Speech = require('expo-speech');
+    const { AppState } = require('react-native');
+    Object.defineProperty(AppState, 'currentState', {
+      get: () => 'active',
+      configurable: true,
+    });
+    const { getByLabelText, getAllByText, getByText, queryByText } =
+      renderScreen();
+    expect(queryByText('Speech rate')).toBeNull();
+
+    const guidedToggle = getByLabelText('Guided mode');
+    expect(guidedToggle.props.value).toBe(false);
+    await act(async () => {
+      fireEvent(guidedToggle, 'valueChange', true);
+    });
+    expect(useAppPreferencesStore.getState().guidedWorkoutEnabled).toBe(true);
+
+    // Each row title also heads its picker sheet.
+    expect(getAllByText('Voice').length).toBeGreaterThan(0);
+    expect(getAllByText('Speech rate').length).toBeGreaterThan(0);
+    expect(getAllByText('Get-ready countdown').length).toBeGreaterThan(0);
+    expect(Speech.getAvailableVoicesAsync).toHaveBeenCalled();
+
+    fireEvent.press(getByText('Test voice'));
+    expect(Speech.speak).toHaveBeenCalledWith(
+      'This is how your guided workouts will sound.',
+      expect.objectContaining({ rate: 1 })
+    );
   });
 
   it('localizes the Polish labels and rest accessibility fallback', async () => {
-    const { default: i18n, initializeI18n } = require('../../src/localization/i18n');
+    const {
+      default: i18n,
+      initializeI18n,
+    } = require('../../src/localization/i18n');
     await initializeI18n('pl');
     const { getByText, getAllByRole } = renderScreen();
 
     expect(getByText('Domyślny okres odpoczynku')).toBeTruthy();
     expect(getByText('Dźwięk timera odpoczynku')).toBeTruthy();
-    expect(getAllByRole('switch')[0].props.accessibilityLabel).toBe('Dźwięk timera odpoczynku');
-    expect(i18n.t('workoutSettings.defaultRestAccessibility', {
-      defaultValue: 'Default rest period, {{duration}}',
-      duration: '1:30',
-    })).toBe('Domyślny odpoczynek: 1:30');
+    expect(getAllByRole('switch')[0].props.accessibilityLabel).toBe(
+      'Dźwięk timera odpoczynku'
+    );
+    expect(
+      i18n.t('workoutSettings.defaultRestAccessibility', {
+        defaultValue: 'Default rest period, {{duration}}',
+        duration: '1:30',
+      })
+    ).toBe('Domyślny odpoczynek: 1:30');
   });
 });

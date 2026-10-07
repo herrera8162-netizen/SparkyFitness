@@ -31,7 +31,7 @@ jest.mock('@/contexts/ActiveUserContext', () => ({
 jest.mock('@/contexts/PreferencesContext', () => ({
   usePreferences: () => ({
     loggingLevel: 'debug',
-    foodDisplayLimit: 100,
+    itemDisplayLimit: 100,
     nutrientDisplayPreferences: [
       {
         view_group: 'quick_info',
@@ -46,6 +46,15 @@ jest.mock('@/contexts/PreferencesContext', () => ({
 
 // Mock toast
 const mockToast = jest.fn();
+jest.mock('@/hooks/Diary/useMealTypes', () => ({
+  useMealTypes: () => ({
+    data: [
+      { id: 'mt-breakfast', name: 'breakfast' },
+      { id: 'mt-lunch', name: 'lunch' },
+      { id: 'mt-dinner', name: 'dinner' },
+    ],
+  }),
+}));
 jest.mock('@/hooks/use-toast', () => ({
   toast: (...args: unknown[]) => mockToast(...args),
 }));
@@ -110,6 +119,98 @@ const sampleFoods = [
 describe('MealBuilder', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  it('gives a photo-built diary meal the full serving model', async () => {
+    // A new custom meal in the diary (no mealId, no foodEntryId) is the photo
+    // path: the ingredients are a whole dish, so it gets the same unit +
+    // amount + serving size controls a saved meal has, plus how much was eaten.
+    renderWithClient(
+      <MealBuilder
+        initialFoods={sampleFoods}
+        source="food-diary"
+        foodEntryDate="2026-08-28"
+        foodEntryMealType="dinner"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Total Servings')).toBeInTheDocument();
+    });
+    expect(
+      screen.getByLabelText('Quantity Consumed (serving)')
+    ).toBeInTheDocument();
+    // The unit is a real choice here, unlike the template-backed diary flows.
+    expect(screen.getAllByRole('combobox')[1]).toBeEnabled();
+  });
+
+  it('toggles diary nutrition between the consumed portion and the whole dish', async () => {
+    // The diary dialog shows the portion by default, but the whole-dish totals
+    // have to stay reachable so the ingredient list above (which is always at
+    // dish scale) can be reconciled against a number.
+    renderWithClient(
+      <MealBuilder
+        initialFoods={sampleFoods}
+        source="food-diary"
+        foodEntryDate="2026-08-28"
+        foodEntryMealType="dinner"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Total Servings')).toBeInTheDocument();
+    });
+
+    // The label and value are separate text nodes, so read the row's textContent.
+    const caloriesRow = () =>
+      screen
+        .getAllByText((_content, element) =>
+          /^Calories:/.test(element?.textContent ?? '')
+        )
+        .at(-1)?.textContent;
+
+    // Default: one serving of a dish that yields one, so the portion is all of it.
+    expect(screen.getByRole('tab', { name: 'Consumed' })).toBeInTheDocument();
+    expect(caloriesRow()).toMatch(/95/);
+
+    // Yield 4, still one serving consumed: the portion is a quarter (95/4,
+    // shown rounded)...
+    fireEvent.change(screen.getByLabelText('Total Servings'), {
+      target: { value: '4' },
+    });
+    await waitFor(() => {
+      expect(caloriesRow()).toMatch(/24/);
+    });
+
+    // ...while Total keeps showing the whole dish.
+    // Radix tabs activate on mousedown, not click.
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Total' }));
+    await waitFor(() => {
+      expect(caloriesRow()).toMatch(/95/);
+    });
+  });
+
+  it('keeps the unit locked and shows whole dish yield when logging or editing a template-backed meal', async () => {
+    // Risk guard: these two dialogs share this component. In diary mode the unit
+    // is locked to preserve ingredient math, while the whole-dish yield and
+    // consumed quantity are both visible and editable.
+    renderWithClient(
+      <MealBuilder
+        initialFoods={sampleFoods}
+        source="food-diary"
+        foodEntryId="entry-1"
+        foodEntryDate="2026-08-28"
+        foodEntryMealType="dinner"
+      />
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByLabelText('Quantity Consumed (serving)')
+      ).toBeInTheDocument();
+    });
+    expect(screen.getAllByRole('combobox')[1]).toBeDisabled();
+    expect(screen.getByLabelText('Total Servings')).toBeInTheDocument();
   });
 
   it('renders in create mode with correct labels', () => {
@@ -354,7 +455,8 @@ describe('MealBuilder', () => {
           serving_unit: 'ml',
           serving_size: 333,
           total_servings: 3.003003,
-        })
+        }),
+        []
       );
     });
   });
@@ -537,7 +639,7 @@ describe('MealBuilder', () => {
         expect(screen.getByDisplayValue('Chili')).toBeInTheDocument();
       });
 
-      const unitTrigger = screen.getByLabelText('Unit');
+      const unitTrigger = screen.getByLabelText('Portion unit');
       expect(unitTrigger).not.toBeDisabled();
       fireEvent.click(unitTrigger);
 
@@ -568,9 +670,7 @@ describe('MealBuilder', () => {
         expect(screen.getByDisplayValue('Chili')).toBeInTheDocument();
       });
 
-      const unitInput = screen.getByLabelText('Unit');
-      expect(unitInput).toBeDisabled();
-      expect(unitInput).toHaveValue('serving');
+      expect(screen.queryByLabelText('Portion unit')).not.toBeInTheDocument();
     });
 
     it('logs a partial plate by weight, scaling nutrition by quantity/cooked_weight_g', async () => {
@@ -592,16 +692,16 @@ describe('MealBuilder', () => {
 
       // Switch the unit to plate weight (g); this should default Quantity
       // Consumed to the full cooked_weight_g (800).
-      fireEvent.click(screen.getByLabelText('Unit'));
+      fireEvent.click(screen.getByLabelText('Portion unit'));
       fireEvent.click(
         await screen.findByRole('option', { name: 'Plate weight (g)' })
       );
       await waitFor(() => {
-        expect(screen.getByLabelText('Quantity Consumed')).toHaveValue(800);
+        expect(screen.getByLabelText('Quantity Consumed (g)')).toHaveValue(800);
       });
 
       // Log a 250g plate instead of the whole pot.
-      fireEvent.change(screen.getByLabelText('Quantity Consumed'), {
+      fireEvent.change(screen.getByLabelText('Quantity Consumed (g)'), {
         target: { value: '250' },
       });
       fireEvent.click(screen.getByText('Add to Meal'));

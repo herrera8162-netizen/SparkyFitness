@@ -49,7 +49,10 @@ BEGIN
     'mood_entries',
     'onboarding_data',
     'onboarding_status',
+    'openfoodfacts_product_read_rate_limit',
+    'openfoodfacts_sync_queue',
     'profiles',
+    'rate_limit',
     'sparky_chat_history',
     'admin_activity_logs',
     'api_key',
@@ -88,7 +91,10 @@ BEGIN
     'user_custom_symptoms',
     'symptom_entries',
     'user_medication_display_preferences',
-    'user_custom_symptom_locations',
+    'user_symptom_options',
+    'symptom_entry_treatments',
+    'symptom_entry_photos',
+    'symptom_free_days',
     'cycle_settings',
     'cycle_daily_entries',
     'cycles',
@@ -106,9 +112,11 @@ BEGIN
     'exercise_entry_laps',
     'exercise_entry_gps_points',
     'exercise_entry_hr_zones',
+    'workout_feedback',
     'health_metric_samples',
     'vitals_entries',
-    'daily_health_metrics'
+    'daily_health_metrics',
+    'user_fasting_preferences'
   ]::text[])
   LOOP
     EXECUTE 'ALTER TABLE public.' || quote_ident(table_name) || ' ENABLE ROW LEVEL SECURITY;';
@@ -221,7 +229,8 @@ AS $function$
     (perms->>'can_manage_diary')::boolean = true OR
     (perms->>'can_manage_checkin')::boolean = true OR
     (perms->>'can_view_reports')::boolean = true OR
-    (perms->>'can_manage_medications')::boolean = true
+    (perms->>'can_manage_medications')::boolean = true OR
+    (perms->>'can_manage_symptoms')::boolean = true
   );
 $function$;
 
@@ -297,6 +306,35 @@ AS $$
     AND (fa.access_end_date IS NULL OR fa.access_end_date > now())
     AND (
       (fa.access_permissions->>'can_manage_medications')::boolean = true OR
+      (fa.access_permissions->>'can_view_reports')::boolean = true
+    )
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.has_symptom_access(owner_uuid uuid) RETURNS boolean
+LANGUAGE sql STABLE
+AS $$
+  SELECT authenticated_user_id() = owner_uuid OR EXISTS (
+    SELECT 1 FROM public.family_access fa
+    WHERE fa.owner_user_id = owner_uuid
+    AND fa.family_user_id = authenticated_user_id()
+    AND fa.is_active = true
+    AND (fa.access_end_date IS NULL OR fa.access_end_date > now())
+    AND (fa.access_permissions->>'can_manage_symptoms')::boolean = true
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.has_symptom_read_access(owner_uuid uuid) RETURNS boolean
+LANGUAGE sql STABLE
+AS $$
+  SELECT authenticated_user_id() = owner_uuid OR EXISTS (
+    SELECT 1 FROM public.family_access fa
+    WHERE fa.owner_user_id = owner_uuid
+    AND fa.family_user_id = authenticated_user_id()
+    AND fa.is_active = true
+    AND (fa.access_end_date IS NULL OR fa.access_end_date > now())
+    AND (
+      (fa.access_permissions->>'can_manage_symptoms')::boolean = true OR
       (fa.access_permissions->>'can_view_reports')::boolean = true
     )
   );
@@ -547,6 +585,23 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION public.create_symptom_policy(table_name text) RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  EXECUTE format('DROP POLICY IF EXISTS select_policy ON public.%I;', table_name);
+  EXECUTE format('DROP POLICY IF EXISTS modify_policy ON public.%I;', table_name);
+
+  EXECUTE format('
+    CREATE POLICY select_policy ON public.%I FOR SELECT TO PUBLIC
+    USING (has_symptom_read_access(user_id));
+    CREATE POLICY modify_policy ON public.%I FOR ALL TO PUBLIC
+    USING (has_symptom_access(user_id))
+    WITH CHECK (has_symptom_access(user_id));
+  ', table_name, table_name);
+END;
+$$;
+
 -- Step 5: Apply policies to all tables.
 -- Custom policy for ai_service_settings to support admin-global + user-owned settings
 -- Drop ALL possible old policy names before recreating
@@ -604,6 +659,12 @@ WITH CHECK (authenticated_user_id() = user_id);
 
 SELECT create_diary_policy('user_goals');
 SELECT create_diary_policy('weekly_goal_plans');
+-- user_water_containers now references foods / food_variants / meal_types
+-- (linked_food_id, linked_variant_id, linked_meal_type_id -- #2115). No
+-- policy change needed: both sides are diary-scoped -- this table is
+-- create_diary_policy, and foods below is create_library_policy with
+-- can_manage_diary in its permission array, so a delegate with can_manage_diary
+-- already has full access to both.
 SELECT create_diary_policy('user_water_containers');
 SELECT create_diary_policy('user_custom_nutrients');
 SELECT create_diary_policy('user_nutrient_goal_preferences');
@@ -658,6 +719,31 @@ USING (
 -- The modify policy for exercise_entries is already handled by create_diary_policy('exercise_entries')
 
 SELECT create_diary_policy('exercise_preset_entries');
+
+-- Workout feedback (#1560) follows the diary rows it describes: readable by
+-- the owner and diary/report delegates, writable by the owner and
+-- can_manage_diary delegates. WITH CHECK also pins the referenced
+-- session/exercise to the same owner, so a row can never attach feedback to
+-- someone else's workout.
+CREATE POLICY select_policy ON public.workout_feedback FOR SELECT TO PUBLIC
+USING (has_diary_read_access(user_id));
+CREATE POLICY modify_policy ON public.workout_feedback FOR ALL TO PUBLIC
+USING (has_diary_access(user_id))
+WITH CHECK (
+  has_diary_access(user_id) AND (
+    (exercise_preset_entry_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM public.exercise_preset_entries epe
+      WHERE epe.id = workout_feedback.exercise_preset_entry_id
+        AND epe.user_id = workout_feedback.user_id
+    ))
+    OR
+    (exercise_entry_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM public.exercise_entries ee
+      WHERE ee.id = workout_feedback.exercise_entry_id
+        AND ee.user_id = workout_feedback.user_id
+    ))
+  )
+);
 SELECT create_diary_policy('food_entry_meals');
 SELECT create_checkin_policy('sleep_entries');
 SELECT create_checkin_policy('sleep_entry_stages');
@@ -676,6 +762,7 @@ SELECT create_library_policy('workout_presets', 'is_public', ARRAY['can_view_exe
 -- These tables are managed by create_medication_policy at the bottom of this file (Tier 3).
 -- Do NOT apply create_library_policy or create_diary_policy to medication tables.
 SELECT create_owner_policy('user_medication_display_preferences');
+SELECT create_owner_policy('openfoodfacts_sync_queue');
 
 -- Cycle & Pregnancy hub (see migration 20260702180000_add_cycle_tracking_schema.sql).
 -- Tier 1 — owner-only. Deliberately stricter than medications: this reproductive
@@ -703,6 +790,9 @@ SELECT create_checkin_policy('user_custom_moods');
 
 -- Mood display preferences: personal picker config, owner-only.
 SELECT create_owner_policy('user_mood_display_preferences');
+
+-- Fasting preferences: personal targets and auto-calculation config, owner-only.
+SELECT create_owner_policy('user_fasting_preferences');
 
 
 -- Custom policies for special cases
@@ -935,16 +1025,31 @@ CREATE POLICY modify_policy ON public.onboarding_status FOR ALL TO PUBLIC
 USING (authenticated_user_id() = user_id)
 WITH CHECK (authenticated_user_id() = user_id);
 
--- Medications & Symptoms (Tier 3 - Delegate Writable with medications permission)
+-- Medications (Tier 3 - Delegate Writable with medications permission)
 SELECT create_medication_policy('medications');
 SELECT create_medication_policy('medication_schedules');
 SELECT create_medication_policy('medication_entries');
 SELECT create_medication_policy('medication_pens');
 SELECT create_medication_policy('injection_entries');
 SELECT create_medication_policy('medication_titration_steps');
-SELECT create_medication_policy('user_custom_symptoms');
-SELECT create_medication_policy('symptom_entries');
-SELECT create_medication_policy('user_custom_symptom_locations');
+
+-- Symptoms (Tier 3 - Delegate Writable with symptoms permission)
+SELECT create_symptom_policy('user_custom_symptoms');
+SELECT create_symptom_policy('user_symptom_options');
+SELECT create_symptom_policy('symptom_entry_treatments');
+SELECT create_symptom_policy('symptom_entry_photos');
+SELECT create_symptom_policy('symptom_free_days');
+
+-- symptom_entries also stores cycle-hub symptoms (source = 'cycle'). Cycle data
+-- is owner-only (Tier 1), so those rows are hidden from every delegate even
+-- when the delegate holds the symptoms permission.
+DROP POLICY IF EXISTS select_policy ON public.symptom_entries;
+DROP POLICY IF EXISTS modify_policy ON public.symptom_entries;
+CREATE POLICY select_policy ON public.symptom_entries FOR SELECT TO PUBLIC
+USING (has_symptom_read_access(user_id) AND (source <> 'cycle' OR authenticated_user_id() = user_id));
+CREATE POLICY modify_policy ON public.symptom_entries FOR ALL TO PUBLIC
+USING (has_symptom_access(user_id) AND (source <> 'cycle' OR authenticated_user_id() = user_id))
+WITH CHECK (has_symptom_access(user_id) AND (source <> 'cycle' OR authenticated_user_id() = user_id));
 
 -- Medications Display Preferences (Tier 2 - Owner-Only Write, Delegate Read)
 CREATE POLICY select_policy ON public.user_medication_display_preferences FOR SELECT TO PUBLIC USING (has_medication_read_access(user_id));
@@ -955,3 +1060,13 @@ CREATE POLICY modify_policy ON public.user_medication_display_preferences FOR AL
 -- RLS). Deny the app role entirely as defense-in-depth so a stray GRANT can
 -- never expose session material to user-scoped queries.
 CREATE POLICY deny_all_policy ON public.passkey_registration_tickets FOR ALL TO PUBLIC USING (false) WITH CHECK (false);
+
+-- Open Food Facts product-read rate limit (Tier 1 - system/internal). The
+-- singleton contains only cross-instance lease/cooldown state and is accessed
+-- via getSystemClient. User-scoped and delegated queries must never mutate it.
+CREATE POLICY deny_all_policy ON public.openfoodfacts_product_read_rate_limit FOR ALL TO PUBLIC USING (false) WITH CHECK (false);
+
+-- Sign-in rate limit counters (Tier 1 - system/internal). Better Auth uses its
+-- own owner pool, which bypasses RLS; the rows hold client addresses, so the
+-- app role is denied entirely.
+CREATE POLICY deny_all_policy ON public.rate_limit FOR ALL TO PUBLIC USING (false) WITH CHECK (false);

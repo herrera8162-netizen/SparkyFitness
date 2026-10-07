@@ -1,4 +1,8 @@
-import { DECIMAL_INPUT_REGEX, parseDecimalInput } from '../../src/utils/numericInput';
+import {
+  DECIMAL_INPUT_REGEX,
+  parseDecimalInput,
+  parseSignedDecimalInput,
+} from '../../src/utils/numericInput';
 
 describe('parseDecimalInput', () => {
   describe('empty / nullish', () => {
@@ -140,16 +144,16 @@ describe('parseDecimalInput', () => {
     });
 
     it('rejects invalid thousand groupings', () => {
-      expect(parseDecimalInput('1,2,3')).toBeNaN();       // groups too short
-      expect(parseDecimalInput('12,34,567')).toBeNaN();   // 2-digit middle group
-      expect(parseDecimalInput('1,23,456')).toBeNaN();    // 2-digit middle group
+      expect(parseDecimalInput('1,2,3')).toBeNaN(); // groups too short
+      expect(parseDecimalInput('12,34,567')).toBeNaN(); // 2-digit middle group
+      expect(parseDecimalInput('1,23,456')).toBeNaN(); // 2-digit middle group
       expect(parseDecimalInput('1.2.3')).toBeNaN();
     });
 
     it('rejects mixed-separator garbage', () => {
       expect(parseDecimalInput('1.234,56,7')).toBeNaN();
       expect(parseDecimalInput('1,234.56.78')).toBeNaN();
-      expect(parseDecimalInput('1,234,56')).toBeNaN();    // mis-grouped thousands
+      expect(parseDecimalInput('1,234,56')).toBeNaN(); // mis-grouped thousands
     });
 
     it('rejects lone separators', () => {
@@ -163,9 +167,9 @@ describe('parseDecimalInput', () => {
       expect(parseDecimalInput('1 23,4')).toBeNaN();
       expect(parseDecimalInput('12 34')).toBeNaN();
       expect(parseDecimalInput('1 2 3')).toBeNaN();
-      expect(parseDecimalInput('1 234 56')).toBeNaN();      // trailing 2-digit group
-      expect(parseDecimalInput('1234 567')).toBeNaN();      // 4-digit leading group
-      expect(parseDecimalInput('1  234')).toBeNaN();        // double space
+      expect(parseDecimalInput('1 234 56')).toBeNaN(); // trailing 2-digit group
+      expect(parseDecimalInput('1234 567')).toBeNaN(); // 4-digit leading group
+      expect(parseDecimalInput('1  234')).toBeNaN(); // double space
     });
 
     it('accepts outer whitespace around otherwise-valid values', () => {
@@ -203,5 +207,25 @@ describe('DECIMAL_INPUT_REGEX', () => {
     expect(DECIMAL_INPUT_REGEX.test('abc')).toBe(false);
     expect(DECIMAL_INPUT_REGEX.test('1a')).toBe(false);
     expect(DECIMAL_INPUT_REGEX.test('1-5')).toBe(false);
+  });
+});
+
+describe('parseSignedDecimalInput', () => {
+  it('takes a leading minus, typographic minus or plus', () => {
+    expect(parseSignedDecimalInput('-30')).toBe(-30);
+    expect(parseSignedDecimalInput('\u221212,5')).toBe(-12.5);
+    expect(parseSignedDecimalInput('+20')).toBe(20);
+    expect(parseSignedDecimalInput(' - 7.5 ')).toBe(-7.5);
+  });
+
+  it('parses unsigned input like parseDecimalInput', () => {
+    expect(parseSignedDecimalInput('22,5')).toBe(22.5);
+    expect(parseSignedDecimalInput('')).toBeNaN();
+    expect(parseSignedDecimalInput(null)).toBeNaN();
+  });
+
+  it('rejects a bare or doubled sign', () => {
+    expect(parseSignedDecimalInput('-')).toBeNaN();
+    expect(parseSignedDecimalInput('--5')).toBeNaN();
   });
 });

@@ -1,16 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import {
-  ColumnDef,
   flexRender,
-  getCoreRowModel,
-  useReactTable,
-  getPaginationRowModel,
-  SortingState,
-  getSortedRowModel,
-  ColumnFiltersState,
-  getFilteredRowModel,
-  RowSelectionState,
+  useTable,
+  type ColumnDef,
+  type ColumnFiltersState,
+  type RowData,
+  type RowSelectionState,
+  type SortingState,
 } from '@tanstack/react-table';
+import {
+  dataTableFeatures,
+  type DataTableFeatures,
+} from '@/components/ui/dataTableFeatures';
 
 import {
   Table,
@@ -25,15 +26,17 @@ import { Loader2, ArrowDown, ArrowUp, ArrowUpDown, Search } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { DataTablePagination } from './DataTablePagination';
+import { useTranslation } from 'react-i18next';
 
-interface DataTableProps<TData, TValue> {
-  columns: ColumnDef<TData, TValue>[];
+interface DataTableProps<TData extends RowData> {
+  columns: ColumnDef<DataTableFeatures, TData>[];
   data: TData[];
   pageCount?: number;
   onPaginationChange?: (pageIndex: number, pageSize: number) => void;
   onSortingChange?: (sorting: SortingState) => void;
   onRowSelectionChange?: (selection: RowSelectionState) => void;
   onRowDoubleClick?: (row: TData) => void;
+  onRowClick?: (row: TData) => void;
   getRowId?: (row: TData) => string;
   manualPagination?: boolean;
   manualSorting?: boolean;
@@ -62,7 +65,7 @@ interface DataTableProps<TData, TValue> {
   titleColumnId?: string;
 }
 
-export function DataTable<TData, TValue>({
+export function DataTable<TData extends RowData>({
   columns,
   data,
   pageCount,
@@ -70,6 +73,7 @@ export function DataTable<TData, TValue>({
   onSortingChange,
   onRowSelectionChange,
   onRowDoubleClick,
+  onRowClick,
   getRowId,
   manualPagination = false,
   manualSorting = false,
@@ -81,7 +85,8 @@ export function DataTable<TData, TValue>({
   searchPlaceholder,
   onSearchChange,
   titleColumnId,
-}: DataTableProps<TData, TValue>) {
+}: DataTableProps<TData>) {
+  const { t } = useTranslation();
   const [internalSorting, setInternalSorting] = useState<SortingState>(
     initialState?.sorting || []
   );
@@ -99,21 +104,17 @@ export function DataTable<TData, TValue>({
   const sorting = externalSorting ?? internalSorting;
   const pagination = externalPagination ?? internalPagination;
 
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const table = useReactTable({
+  const table = useTable({
+    features: dataTableFeatures,
     data,
     columns,
     getRowId,
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
     onSortingChange: (updater) => {
       const next = typeof updater === 'function' ? updater(sorting) : updater;
       if (externalSorting === undefined) setInternalSorting(next);
       onSortingChange?.(next);
     },
-    getSortedRowModel: getSortedRowModel(),
     onColumnFiltersChange: setColumnFilters,
-    getFilteredRowModel: getFilteredRowModel(),
     onRowSelectionChange: (updater) => {
       const next =
         typeof updater === 'function' ? updater(rowSelection) : updater;
@@ -136,6 +137,34 @@ export function DataTable<TData, TValue>({
       pagination,
     },
   });
+
+  // Single-click handler that ignores clicks originating on interactive
+  // elements (checkboxes, buttons, links, inputs) so row actions keep working.
+  // Radix menus render through a Portal, but React synthetic events still
+  // bubble to the row's onClick, so menu items (divs with role="menuitem")
+  // must be excluded explicitly or a menu click also triggers the row action
+  // (e.g. the foods row opened the edit dialog before the chosen action ran).
+  // On the mobile card view, a single tap falls back to onRowDoubleClick when
+  // no onRowClick is given, because dblclick is unreliable on touch devices.
+  // The desktop table keeps double-click for those consumers.
+  const handleRowClick = (
+    event: ReactMouseEvent,
+    row: TData,
+    fallbackToDoubleClick: boolean
+  ) => {
+    const handler =
+      onRowClick ?? (fallbackToDoubleClick ? onRowDoubleClick : undefined);
+    if (!handler) return;
+    if (
+      event.target instanceof Element &&
+      event.target.closest(
+        'button, a, input, [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="menu"], [data-radix-popper-content-wrapper]'
+      )
+    ) {
+      return;
+    }
+    handler(row);
+  };
 
   const resolvedTitleColumnId = useMemo(() => {
     const visibleColumns = table.getVisibleFlatColumns();
@@ -219,7 +248,7 @@ export function DataTable<TData, TValue>({
                 >
                   <div className="flex items-center justify-center gap-2 text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>Loading...</span>
+                    <span>{t('dataTable.loading', 'Loading...')}</span>
                   </div>
                 </TableCell>
               </TableRow>
@@ -241,8 +270,11 @@ export function DataTable<TData, TValue>({
                     key={row.id}
                     data-state={row.getIsSelected() && 'selected'}
                     onDoubleClick={() => onRowDoubleClick?.(row.original)}
+                    onClick={(event) =>
+                      handleRowClick(event, row.original, false)
+                    }
                     className={cn(
-                      onRowDoubleClick &&
+                      (onRowClick || onRowDoubleClick) &&
                         'cursor-pointer select-none transition-colors hover:bg-muted/50',
                       isLoading && 'opacity-70 grayscale-[0.3]'
                     )}
@@ -270,7 +302,7 @@ export function DataTable<TData, TValue>({
                   colSpan={columns.length}
                   className="h-24 text-center"
                 >
-                  No results.
+                  {t('dataTable.noResults', 'No results found.')}
                 </TableCell>
               </TableRow>
             )}
@@ -283,7 +315,7 @@ export function DataTable<TData, TValue>({
         {isLoading && !table.getRowModel().rows?.length ? (
           <div className="p-12 text-center text-muted-foreground italic border-2 border-dashed rounded-2xl bg-gray-50/50 dark:bg-gray-900/20">
             <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2 opacity-50" />
-            Loading...
+            {t('dataTable.loading', 'Loading...')}
           </div>
         ) : table.getRowModel().rows?.length ? (
           <>
@@ -296,11 +328,12 @@ export function DataTable<TData, TValue>({
               <Card
                 key={row.id}
                 onDoubleClick={() => onRowDoubleClick?.(row.original)}
+                onClick={(event) => handleRowClick(event, row.original, true)}
                 className={`transition-all duration-200 border-2 overflow-hidden shadow-sm ${
                   row.getIsSelected()
                     ? 'border-blue-500 bg-blue-50/30 dark:bg-blue-900/10'
                     : 'border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900'
-                } ${onRowDoubleClick ? 'active:scale-[0.98]' : ''} ${
+                } ${onRowClick || onRowDoubleClick ? 'active:scale-[0.98]' : ''} ${
                   isLoading ? 'opacity-70 grayscale-[0.3]' : ''
                 }`}
               >
@@ -319,10 +352,7 @@ export function DataTable<TData, TValue>({
                           : null;
                       })()}
 
-                      <div
-                        className="truncate font-bold text-gray-900 dark:text-gray-100 text-sm flex-1"
-                        onClick={() => onRowDoubleClick?.(row.original)}
-                      >
+                      <div className="truncate font-bold text-gray-900 dark:text-gray-100 text-sm flex-1">
                         {(() => {
                           const titleCell = row
                             .getVisibleCells()
@@ -369,7 +399,10 @@ export function DataTable<TData, TValue>({
                   <div className="px-4 pb-2 grid grid-cols-4 gap-2">
                     {row.getVisibleCells().map((cell) => {
                       const isHiddenOnMobile = (
-                        cell.column.columnDef as ColumnDef<TData, TValue> & {
+                        cell.column.columnDef as ColumnDef<
+                          DataTableFeatures,
+                          TData
+                        > & {
                           meta?: { hideOnMobile?: boolean };
                         }
                       ).meta?.hideOnMobile;
@@ -395,24 +428,24 @@ export function DataTable<TData, TValue>({
                             'flex flex-col gap-0.5',
                             (
                               cell.column.columnDef as ColumnDef<
-                                TData,
-                                TValue
+                                DataTableFeatures,
+                                TData
                               > & {
                                 meta?: { colSpan?: number };
                               }
                             ).meta?.colSpan === 2 && 'col-span-2',
                             (
                               cell.column.columnDef as ColumnDef<
-                                TData,
-                                TValue
+                                DataTableFeatures,
+                                TData
                               > & {
                                 meta?: { colSpan?: number };
                               }
                             ).meta?.colSpan === 3 && 'col-span-3',
                             (
                               cell.column.columnDef as ColumnDef<
-                                TData,
-                                TValue
+                                DataTableFeatures,
+                                TData
                               > & {
                                 meta?: { colSpan?: number };
                               }
@@ -442,7 +475,7 @@ export function DataTable<TData, TValue>({
           </>
         ) : (
           <div className="p-12 text-center text-muted-foreground italic border-2 border-dashed rounded-2xl bg-gray-50/50 dark:bg-gray-900/20">
-            No results found.
+            {t('dataTable.noResults', 'No results found.')}
           </div>
         )}
       </div>

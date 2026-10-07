@@ -32,6 +32,8 @@ export const foodEntryMealsSchema = z.object({
   images: z.array(z.string()),
   cooked_weight_g: z.number().nullable().optional(),
   cooked_weight_source: z.enum(["manual", "auto_sum"]).nullable().optional(),
+  notes: z.string().nullable(),
+  entry_total_servings: z.number().nullable(),
 });
 
 export const foodEntryMealsInitializerSchema = z.object({
@@ -53,6 +55,8 @@ export const foodEntryMealsInitializerSchema = z.object({
   images: z.array(z.string()).optional(),
   cooked_weight_g: z.number().optional().nullable(),
   cooked_weight_source: z.enum(["manual", "auto_sum"]).optional().nullable(),
+  notes: z.string().optional().nullable(),
+  entry_total_servings: z.number().optional().nullable(),
 });
 
 export const foodEntryMealsMutatorSchema = z.object({
@@ -74,8 +78,12 @@ export const foodEntryMealsMutatorSchema = z.object({
   images: z.array(z.string()).optional(),
   cooked_weight_g: z.number().optional().nullable(),
   cooked_weight_source: z.enum(["manual", "auto_sum"]).optional().nullable(),
+  notes: z.string().optional().nullable(),
+  entry_total_servings: z.number().optional().nullable(),
 });
 
 export type FoodEntryMeals = z.infer<typeof foodEntryMealsSchema>;
-export type FoodEntryMealsInitializer = z.infer<typeof foodEntryMealsInitializerSchema>;
+export type FoodEntryMealsInitializer = z.infer<
+  typeof foodEntryMealsInitializerSchema
+>;
 export type FoodEntryMealsMutator = z.infer<typeof foodEntryMealsMutatorSchema>;

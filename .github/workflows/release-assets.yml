@@ -38,7 +38,7 @@ jobs:
 
       # ---------- BACKEND ----------
       - name: Build backend
-        run: pnpm --filter sparkyfitnessserver deploy --prod --legacy ./deploy
+        run: pnpm --filter sparkyfitnessserver deploy --prod ./deploy
 
       # ---------- PACKAGE ----------
       - name: Prepare release folder
@@ -60,4 +60,5 @@ jobs:
           files: |
             docker/docker-compose.prod.yml
             docker/.env.example
+            docker/.env.simple.example
             SparkyFitness.tar.gz

@@ -17,6 +17,19 @@ import {
   compareDays,
   FOOD_VARIANT_NUTRIENT_FIELDS,
   todayInZone,
+  isUsableMeasuredBmr,
+  calculateExerciseVariety,
+  calculateMuscleGroupRecovery,
+  calculateMuscleGroupSets,
+  primaryMusclesOf,
+  bodyWeightOnDay,
+  effectiveLoadKg,
+  epleyOneRepMaxKg,
+  resolveExerciseModality,
+  buildTrainingConsistency,
+  weekStartOf,
+  TRAINING_CONSISTENCY_WEEKS,
+  type TrainingConsistency,
 } from '@workspace/shared';
 import { userAge } from '../utils/dateHelpers.js';
 import { loadUserTimezone } from '../utils/timezoneLoader.js';
@@ -52,6 +65,9 @@ interface TabularFoodRow {
   vitamin_c?: number;
   calcium?: number;
   iron?: number;
+  caffeine_mg?: number;
+  water_ml?: number;
+  alcohol_g?: number;
   serving_size: number;
   [key: string]: unknown;
 }
@@ -61,12 +77,14 @@ interface MeasurementEntry {
   weight?: number | string | null;
   height?: number | string | null;
   body_fat_percentage?: number | string | null;
+  bmr?: number | string | null;
   [key: string]: unknown;
 }
 
 interface WorkoutEntry {
   entry_date: string | Date;
   exercise_name: string;
+  workout_format?: string;
   exercise_id?: string;
   exercise_category?: string;
   exercise_calories_per_hour?: number;
@@ -82,6 +100,7 @@ interface WorkoutEntry {
   exercise_level?: string;
   exercise_force?: string;
   exercise_mechanic?: string;
+  exercise_modality?: string | null;
   sets?: Array<{
     weight?: string | number;
     reps?: string | number;
@@ -152,7 +171,6 @@ async function getReportsData(
         endDate,
         customNutrients
       ),
-      // @ts-expect-error TS(2554): Expected 6 arguments, but got 3.
       reportRepository.getExerciseEntries(targetUserId, startDate, endDate),
       reportRepository.getMeasurementData(targetUserId, startDate, endDate),
       measurementRepository.getCustomCategories(targetUserId),
@@ -223,6 +241,9 @@ async function getReportsData(
           vitamin_c: row.vitamin_c,
           calcium: row.calcium,
           iron: row.iron,
+          caffeine_mg: row.caffeine_mg,
+          water_ml: row.water_ml,
+          alcohol_g: row.alcohol_g,
           serving_size: row.serving_size,
         },
       };
@@ -250,6 +271,8 @@ async function getReportsData(
           vitamin_c: parseFloat(String(item.vitamin_c)) || 0,
           calcium: parseFloat(String(item.calcium)) || 0,
           iron: parseFloat(String(item.iron)) || 0,
+          caffeine_mg: parseFloat(String(item.caffeine_mg)) || 0,
+          alcohol_g: parseFloat(String(item.alcohol_g)) || 0,
           water: waterByDate.get(String(item.date)) || 0,
         };
         FOOD_VARIANT_NUTRIENT_FIELDS.forEach((nutrient) => {
@@ -305,9 +328,19 @@ async function getReportsData(
           latestMeasurement?.body_fat_percentage !== undefined
             ? Number(latestMeasurement.body_fat_percentage)
             : undefined;
+        // Exact date, unlike the body metrics above: a measured BMR describes the
+        // day it was taken, so it is never carried forward onto later days.
+        const measuredBmr = (measurementData as MeasurementEntry[]).find(
+          (m: MeasurementEntry) =>
+            String(m.entry_date).slice(0, 10) ===
+              String(day.date).slice(0, 10) &&
+            m.bmr !== null &&
+            m.bmr !== undefined
+        )?.bmr;
+        let formulaBmr: number | null = null;
         if (weight && height && age && gender && bmrAlgorithm) {
           try {
-            day.bmr = bmrService.calculateBmr(
+            formulaBmr = bmrService.calculateBmr(
               bmrAlgorithm,
               weight,
               height,
@@ -321,11 +354,17 @@ async function getReportsData(
               // @ts-expect-error TS(2571): Object is of type 'unknown'.
               `Could not calculate BMR for user ${targetUserId} on date ${day.date}: ${error.message}`
             );
-            day.bmr = null;
+            formulaBmr = null;
           }
-        } else {
-          day.bmr = null;
         }
+        // The measured reading wins only if it is plausible against this person's
+        // own formula estimate; with no estimate to compare, the absolute bounds
+        // decide on their own.
+        day.bmr =
+          userPreferences?.use_external_bmr &&
+          isUsableMeasuredBmr(measuredBmr, formulaBmr)
+            ? Number(measuredBmr)
+            : formulaBmr;
         day.include_bmr_in_net_calories =
           userPreferences.include_bmr_in_net_calories;
       });
@@ -352,6 +391,10 @@ async function getReportsData(
         level: entry.exercise_level,
         force: entry.exercise_force,
         mechanic: entry.exercise_mechanic,
+        modality: resolveExerciseModality(
+          entry.exercise_modality,
+          entry.exercise_category
+        ),
       },
     }));
 
@@ -434,6 +477,8 @@ async function getMiniNutritionTrends(
         vitamin_c: parseFloat(row.total_vitamin_c) || 0,
         calcium: parseFloat(row.total_calcium) || 0,
         iron: parseFloat(row.total_iron) || 0,
+        caffeine_mg: parseFloat(row.total_caffeine_mg) || 0,
+        alcohol_g: parseFloat(row.total_alcohol_g) || 0,
       };
       // Map custom nutrients dynamically
       customNutrients.forEach((cn: CustomNutrientDefinition) => {
@@ -519,11 +564,32 @@ async function getNutritionTrendsWithGoals(
     throw error;
   }
 }
-// Helper function to calculate 1RM using the Epley formula
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function calculate1RM(weight: any, reps: any) {
-  if (reps === 0) return 0;
-  return weight * (1 + reps / 30);
+type SetLoad = (
+  entry: Pick<
+    WorkoutEntry,
+    'entry_date' | 'exercise_modality' | 'exercise_category'
+  >,
+  set: { weight?: string | number | null }
+) => number;
+
+/**
+ * The load a set moved (`effectiveLoadKg`): its weight, or for a bodyweight
+ * exercise the lifter's body weight that day plus it. Body weight is looked
+ * up once per day from `readings`.
+ */
+function makeSetLoad(
+  readings: readonly { date: string; weightKg: number }[]
+): SetLoad {
+  const byDay = new Map<string, number | null>();
+  return (entry, set) => {
+    const day = String(entry.entry_date).slice(0, 10);
+    if (!byDay.has(day)) byDay.set(day, bodyWeightOnDay(readings, day));
+    return effectiveLoadKg(
+      parseFloat(String(set.weight)) || 0,
+      resolveExerciseModality(entry.exercise_modality, entry.exercise_category),
+      byDay.get(day)
+    );
+  };
 }
 // Helper function to categorize rep ranges
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -604,57 +670,11 @@ function calculateWorkoutConsistency(
     monthlyFrequency: isNaN(monthlyFrequency) ? 0 : monthlyFrequency,
   };
 }
-// Helper function to calculate muscle group recovery
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function calculateMuscleGroupRecovery(exerciseEntries: any) {
-  const recoveryData = {};
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  exerciseEntries.forEach((entry: any) => {
-    const muscles = entry.exercises
-      ? JSON.parse(entry.exercises.primary_muscles || '[]')
-      : [];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    muscles.forEach((muscle: any) => {
-      // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-      if (!recoveryData[muscle] || entry.entry_date > recoveryData[muscle]) {
-        // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-        recoveryData[muscle] = entry.entry_date;
-      }
-    });
-  });
-  return recoveryData;
-}
-// Helper function to calculate exercise variety
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function calculateExerciseVariety(exerciseEntries: any) {
-  const varietyData = {};
-  const muscleExerciseMap = {};
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  exerciseEntries.forEach((entry: any) => {
-    if (entry.exercises && entry.exercises.primary_muscles) {
-      const primaryMuscles = JSON.parse(
-        entry.exercises.primary_muscles || '[]'
-      );
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      primaryMuscles.forEach((muscle: any) => {
-        // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-        if (!muscleExerciseMap[muscle]) {
-          // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-          muscleExerciseMap[muscle] = new Set();
-        }
-        // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-        muscleExerciseMap[muscle].add(entry.exercise_name);
-      });
-    }
-  });
-  for (const muscle in muscleExerciseMap) {
-    // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-    varietyData[muscle] = muscleExerciseMap[muscle].size;
-  }
-  return varietyData;
-}
 // Helper function to calculate PR progression
-function calculatePrProgression(exerciseEntries: WorkoutEntry[]) {
+function calculatePrProgression(
+  exerciseEntries: WorkoutEntry[],
+  setLoad: SetLoad
+) {
   const progression: Record<string, PrRecord[]> = {};
   // Sort entries by date ascending to process in chronological order
   const sortedEntries = [...exerciseEntries].sort(
@@ -662,11 +682,15 @@ function calculatePrProgression(exerciseEntries: WorkoutEntry[]) {
       new Date(a.entry_date).getTime() - new Date(b.entry_date).getTime()
   );
   sortedEntries.forEach((entry) => {
+    // Only standard strength sessions feed PR records; exclude interval / WOD formats (Tabata, EMOM, AMRAP, For Time).
+    const format = entry.workout_format ?? 'standard';
+    if (format !== 'standard') return;
+
     if (entry.sets && entry.sets.length > 0) {
       entry.sets.forEach((set) => {
-        const weight = parseFloat(String(set.weight)) || 0;
+        const weight = setLoad(entry, set);
         const reps = parseInt(String(set.reps)) || 0;
-        const oneRM = calculate1RM(weight, reps);
+        const oneRM = epleyOneRepMaxKg(weight, reps);
         if (!progression[entry.exercise_name]) {
           progression[entry.exercise_name] = [];
         }
@@ -776,73 +800,81 @@ async function getExerciseDashboardData(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (entry: any) => entry.exercise_name !== 'Active Calories'
     );
+    // Volume, 1RM and PRs are measured on the load each set moved, which for
+    // a bodyweight exercise includes the lifter's body weight that day.
+    const setLoad = makeSetLoad(
+      await reportRepository.getBodyWeightReadings(
+        targetUserId,
+        startDate,
+        endDate
+      )
+    );
     let totalVolume = 0;
     let totalReps = 0;
     const totalWorkouts = new Set(); // To count unique workout days
-    const prData = {}; // Stores max 1RM for each exercise
-    const bestSetRepRange = {}; // Stores max weight for each exercise and rep range
-    const muscleGroupVolume = {}; // Stores total volume per muscle group
+    const prData: Record<
+      string,
+      { oneRM: number; date: string | Date; weight: number; reps: number }
+    > = {};
+    const bestSetRepRange: Record<
+      string,
+      Record<string, { weight: number; reps: number; date: string | Date }>
+    > = {};
+    const muscleGroupVolume: Record<string, number> = {};
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     exerciseEntries.forEach((entry: any) => {
       totalWorkouts.add(entry.entry_date); // Add unique dates
+      // Interval / WOD formats (Tabata, EMOM, AMRAP, For Time) are high-fatigue conditioning
+      // sessions and must not feed 1RM PR calculations or best-set-per-rep-range records.
+      // They still count toward totalVolume, totalReps, and muscleGroupVolume.
+      const format = entry.workout_format ?? 'standard';
+      const isStrengthFormat = format === 'standard';
+
       if (entry.sets && entry.sets.length > 0) {
+        const primaryMuscles = primaryMusclesOf(entry);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         entry.sets.forEach((set: any) => {
-          const weight = parseFloat(set.weight) || 0;
+          const weight = setLoad(entry, set);
           const reps = parseInt(set.reps) || 0;
           // Calculate total volume and reps
           totalVolume += weight * reps;
           totalReps += reps;
-          // Calculate 1RM and track PRs
-          const oneRM = calculate1RM(weight, reps);
-          if (
-            // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-            !prData[entry.exercise_name] ||
-            // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-            oneRM > prData[entry.exercise_name].oneRM
-          ) {
-            // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-            prData[entry.exercise_name] = {
-              oneRM,
-              date: entry.entry_date,
-              weight,
-              reps,
-            };
-          }
-          // Best set per rep range
-          const repRange = getRepRangeCategory(reps);
-          if (repRange !== 'N/A') {
-            // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-            if (!bestSetRepRange[entry.exercise_name]) {
-              // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-              bestSetRepRange[entry.exercise_name] = {};
-            }
+
+          if (isStrengthFormat) {
+            // Calculate 1RM and track PRs
+            const oneRM = epleyOneRepMaxKg(weight, reps);
             if (
-              // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-              !bestSetRepRange[entry.exercise_name][repRange] ||
-              // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-              weight > bestSetRepRange[entry.exercise_name][repRange].weight
+              !prData[entry.exercise_name] ||
+              oneRM > prData[entry.exercise_name].oneRM
             ) {
-              // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-              bestSetRepRange[entry.exercise_name][repRange] = {
+              prData[entry.exercise_name] = {
+                oneRM,
+                date: entry.entry_date,
                 weight,
                 reps,
-                date: entry.entry_date,
               };
             }
-          }
-          // Muscle group volume
-          if (entry.exercises && entry.exercises.primary_muscles) {
-            // It's already parsed in getReportsData, so no need to parse again
-            const primaryMuscles = entry.exercises.primary_muscles;
-            if (Array.isArray(primaryMuscles)) {
-              primaryMuscles.forEach((muscle) => {
-                // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-                muscleGroupVolume[muscle] =
-                  // @ts-expect-error TS(7053): Element implicitly has an 'any' type because expre... Remove this comment to see the full error message
-                  (muscleGroupVolume[muscle] || 0) + weight * reps;
-              });
+            // Best set per rep range
+            const repRange = getRepRangeCategory(reps);
+            if (repRange !== 'N/A') {
+              if (!bestSetRepRange[entry.exercise_name]) {
+                bestSetRepRange[entry.exercise_name] = {};
+              }
+              if (
+                !bestSetRepRange[entry.exercise_name][repRange] ||
+                weight > bestSetRepRange[entry.exercise_name][repRange].weight
+              ) {
+                bestSetRepRange[entry.exercise_name][repRange] = {
+                  weight,
+                  reps,
+                  date: entry.entry_date,
+                };
+              }
             }
+          }
+          for (const muscle of primaryMuscles) {
+            muscleGroupVolume[muscle] =
+              (muscleGroupVolume[muscle] || 0) + weight * reps;
           }
         });
       }
@@ -855,7 +887,8 @@ async function getExerciseDashboardData(
       timezone
     );
     const recoveryData = calculateMuscleGroupRecovery(exerciseEntries);
-    const prProgressionData = calculatePrProgression(exerciseEntries);
+    const muscleGroupSets = calculateMuscleGroupSets(exerciseEntries);
+    const prProgressionData = calculatePrProgression(exerciseEntries, setLoad);
     const exerciseVarietyData = calculateExerciseVariety(exerciseEntries);
     const setPerformanceData = calculateSetPerformance(exerciseEntries);
     return {
@@ -867,6 +900,7 @@ async function getExerciseDashboardData(
       prData,
       bestSetRepRange,
       muscleGroupVolume,
+      muscleGroupSets,
       consistencyData, // Add consistency data to the response
       recoveryData, // Add recovery data to the response
       prProgressionData, // Add PR progression data to the response
@@ -883,13 +917,64 @@ async function getExerciseDashboardData(
     throw error;
   }
 }
+/**
+ * Training days, weekly streak and this-vs-last-week sets per muscle, for the
+ * consistency view. Looks back a fixed `TRAINING_CONSISTENCY_WEEKS` weeks from
+ * today in the user's timezone, independent of the dashboard's chosen range.
+ */
+async function getTrainingConsistency(
+  authenticatedUserId: string,
+  targetUserId: string
+): Promise<TrainingConsistency> {
+  try {
+    const timezone = await loadUserTimezone(targetUserId);
+    const today = todayInZone(timezone);
+    // The account's first day of the week (0 = Sunday), like the calendars.
+    const preferences =
+      await preferenceRepository.getUserPreferences(targetUserId);
+    const rawFirstDay = preferences?.first_day_of_week;
+    const firstDayOfWeek =
+      rawFirstDay !== null && rawFirstDay !== undefined
+        ? Number(rawFirstDay)
+        : 0;
+    const startDate = addDays(
+      weekStartOf(today, firstDayOfWeek),
+      -7 * (TRAINING_CONSISTENCY_WEEKS - 1)
+    );
+    const entries = await reportRepository.getExerciseEntries(
+      targetUserId,
+      startDate,
+      today
+    );
+    // Synced calorie summaries are logged as exercise entries but are not
+    // workouts, the same exclusion the exercise dashboard makes.
+    return buildTrainingConsistency(
+      entries.filter(
+        (entry: { exercise_name?: string }) =>
+          entry.exercise_name !== 'Active Calories'
+      ),
+      today,
+      TRAINING_CONSISTENCY_WEEKS,
+      firstDayOfWeek
+    );
+  } catch (error) {
+    log(
+      'error',
+      `Error building training consistency for user ${targetUserId} by ${authenticatedUserId}:`,
+      error
+    );
+    throw error;
+  }
+}
 export { getReportsData };
 export { getMiniNutritionTrends };
 export { getNutritionTrendsWithGoals };
 export { getExerciseDashboardData };
+export { getTrainingConsistency };
 export default {
   getReportsData,
   getMiniNutritionTrends,
   getNutritionTrendsWithGoals,
   getExerciseDashboardData,
+  getTrainingConsistency,
 };

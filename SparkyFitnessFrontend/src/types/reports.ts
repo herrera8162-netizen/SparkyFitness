@@ -1,5 +1,6 @@
 import { Exercise } from './exercises';
 import { Food, FoodVariant } from './food';
+import type { ExerciseDashboardSummary } from '@workspace/shared';
 
 interface PersonalRecord {
   date: string;
@@ -27,6 +28,9 @@ export interface NutritionData {
   vitamin_c: number;
   calcium: number;
   iron: number;
+  caffeine_mg: number;
+  water_ml: number;
+  alcohol_g: number;
   [key: string]: number | string; // Add index signature for custom nutrients
 }
 
@@ -56,6 +60,9 @@ export interface DailyFoodEntry {
   vitamin_c?: number;
   calcium?: number;
   iron?: number;
+  caffeine_mg?: number;
+  water_ml?: number;
+  alcohol_g?: number;
   food_name?: string;
   brand_name?: string;
   glycemic_index?: string | number;
@@ -93,12 +100,7 @@ export interface DailyExerciseEntry {
   [key: string]: string | number | boolean | object | undefined;
 }
 
-export interface ExerciseDashboardData {
-  keyStats: {
-    totalWorkouts: number;
-    totalVolume: number;
-    totalReps: number;
-  };
+export interface ExerciseDashboardData extends ExerciseDashboardSummary {
   prData: PersonalRecordsMap;
   bestSetRepRange: {
     [exerciseName: string]: {
@@ -109,19 +111,7 @@ export interface ExerciseDashboardData {
       };
     };
   };
-  muscleGroupVolume: {
-    [muscleGroup: string]: number;
-  };
   exerciseEntries: DailyExerciseEntry[];
-  consistencyData: {
-    currentStreak: number;
-    longestStreak: number;
-    weeklyFrequency: number;
-    monthlyFrequency: number;
-  };
-  recoveryData: {
-    [muscleGroup: string]: string;
-  };
   prProgressionData: {
     [exerciseName: string]: {
       date: string;
@@ -129,9 +119,6 @@ export interface ExerciseDashboardData {
       maxWeight: number;
       maxReps: number;
     }[];
-  };
-  exerciseVarietyData: {
-    [muscleGroup: string]: number;
   };
   setPerformanceData: {
     [exerciseName: string]: {

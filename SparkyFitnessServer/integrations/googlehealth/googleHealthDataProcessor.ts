@@ -1,7 +1,6 @@
 import measurementRepository from '../../models/measurementRepository.js';
 import exerciseEntryRepository from '../../models/exerciseEntry.js';
 import exerciseRepository from '../../models/exercise.js';
-import activityDetailsRepository from '../../models/activityDetailsRepository.js';
 import sleepRepository from '../../models/sleepRepository.js';
 import { log } from '../../config/logging.js';
 import {
@@ -159,8 +158,7 @@ function extractDate(
     const csd =
       civilStart && typeof civilStart === 'object'
         ? ((civilStart as Record<string, unknown>).date as
-            | Record<string, unknown>
-            | undefined)
+            Record<string, unknown> | undefined)
         : undefined;
     if (csd?.year) {
       return `${csd.year}-${String(csd.month).padStart(2, '0')}-${String(csd.day).padStart(2, '0')}`;
@@ -193,8 +191,7 @@ async function processGoogleHeartRate(
     const entryDate = extractDate(point as Record<string, unknown>, tz);
     if (!entryDate) continue;
     const hr = point.dailyRestingHeartRate as
-      | { beatsPerMinute?: unknown }
-      | undefined;
+      { beatsPerMinute?: unknown } | undefined;
     const bpm = hr?.beatsPerMinute;
     if (bpm === null || bpm === undefined) continue;
     await upsertCustomMeasurementLogic(userId, createdByUserId, {
@@ -453,8 +450,7 @@ async function processGoogleHRV(
     if (!entryDate) continue;
     const rmssd = (
       point.dailyHeartRateVariability as
-        | { averageHeartRateVariabilityMilliseconds?: unknown }
-        | undefined
+        { averageHeartRateVariabilityMilliseconds?: unknown } | undefined
     )?.averageHeartRateVariabilityMilliseconds;
     if (rmssd === null || rmssd === undefined) continue;
     await upsertCustomMeasurementLogic(userId, createdByUserId, {
@@ -621,15 +617,11 @@ async function processGoogleSleep(
     const stages = sleepPayload.stages || [];
 
     const rawStartTime = (interval.startTime ?? point.startTime) as
-      | string
-      | Record<string, unknown>
-      | undefined;
+      string | Record<string, unknown> | undefined;
     const startIso = googleTimeToIso(rawStartTime);
     const endIso = googleTimeToIso(
       (interval.endTime ?? point.endTime) as
-        | string
-        | Record<string, unknown>
-        | undefined
+        string | Record<string, unknown> | undefined
     );
     if (!startIso) continue;
 
@@ -863,21 +855,24 @@ async function processGoogleActivities(
       ],
     };
 
-    const newEntry = await exerciseEntryRepository.createExerciseEntry(
+    // Written with the entry so a re-sync replaces the detail instead of
+    // adding another copy.
+    await exerciseEntryRepository.createExerciseEntry(
       userId,
       entryData,
       createdByUserId,
-      'Google Health'
+      'Google Health',
+      null,
+      {
+        activityDetail: {
+          provider_name: 'Google Health',
+          detail_type: 'full_activity_data',
+          detail_data: point,
+          created_by_user_id: String(createdByUserId),
+          updated_by_user_id: String(createdByUserId),
+        },
+      }
     );
-    if (newEntry?.id) {
-      await activityDetailsRepository.createActivityDetail(userId, {
-        exercise_entry_id: newEntry.id,
-        provider_name: 'Google Health',
-        detail_type: 'full_activity_data',
-        detail_data: point,
-        created_by_user_id: createdByUserId,
-      });
-    }
   }
 }
 
@@ -1170,8 +1165,7 @@ async function processGoogleDistance(
   }
   for (const point of points) {
     const payload = point.distance as
-      | { millimetersSum?: unknown; distanceMillimeters?: unknown }
-      | undefined;
+      { millimetersSum?: unknown; distanceMillimeters?: unknown } | undefined;
     if (!payload) continue;
     // Confirmed field name from Fitbit_Fetch.py: millimetersSum (mm → km = /1,000,000)
     const mm = payload.millimetersSum ?? payload.distanceMillimeters ?? null;

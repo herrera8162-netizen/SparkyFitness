@@ -15,23 +15,50 @@ export const AUTOSAVE_DEBOUNCE_MS = 1500;
 
 export type ActiveWorkoutSaveOutcome = 'clean' | 'saved' | 'failed';
 
+/** The latest save; each save waits for it so two never overlap. */
+let saveQueue: Promise<unknown> = Promise.resolve();
+
 /**
  * One-shot save of the live session's unsaved edits. Shared by the autosave
  * hook and by callers that must flush without the hook mounted (the HUD's
- * workout-complete dismiss paths after a cold start).
+ * workout-complete dismiss paths after a cold start, the watch bridge's
+ * per-set flush).
+ *
+ * Saves run one at a time across all callers. Two in flight would each send
+ * the same new sets without ids; the later request replaces the rows the
+ * earlier one inserted, and if the earlier response lands last it hands the
+ * store set ids that no longer exist, so every later save is rejected with
+ * "Set does not belong to this exercise entry". A queued save re-reads the
+ * store when its turn comes, so it sends the ids the previous response
+ * assigned (or finds nothing left to save).
  */
-export async function saveActiveWorkoutSession(
-  queryClient: QueryClient,
+export function saveActiveWorkoutSession(
+  queryClient: QueryClient
+): Promise<ActiveWorkoutSaveOutcome> {
+  const run = saveQueue.then(() => saveNow(queryClient));
+  saveQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function saveNow(
+  queryClient: QueryClient
 ): Promise<ActiveWorkoutSaveOutcome> {
   const state = useActiveWorkoutStore.getState();
-  if (!state.hasUnsavedChanges || state.sessionId == null || state.session == null) {
+  if (
+    !state.hasUnsavedChanges ||
+    state.sessionId == null ||
+    state.session == null
+  ) {
     return 'clean';
   }
   if (state.session.exercises.length === 0) {
     // The update schema rejects an empty exercises array. Nothing sensible to
     // autosave — the user emptied the session; leave the server copy as is
     // rather than destructively deleting it from a background save.
-    addLog('Active workout autosave skipped: session has no exercises', 'WARNING');
+    addLog(
+      'Active workout autosave skipped: session has no exercises',
+      'WARNING'
+    );
     return 'clean';
   }
 
@@ -46,29 +73,53 @@ export async function saveActiveWorkoutSession(
   const sessionSource = state.session.source ?? 'unknown';
   try {
     const trimmedName = state.session.name.trim();
+    const activityDetails =
+      state.workoutFormat !== 'standard'
+        ? [
+            {
+              detail_type: 'wod_score' as const,
+              detail_data: {
+                // Shared-schema key (read by web and the AI), plus the legacy
+                // `format` key older mobile builds read.
+                workout_format: state.workoutFormat,
+                format: state.workoutFormat,
+                rounds_completed: state.intervalRoundsCompleted,
+                reps_completed: state.intervalRepsCompleted,
+                time_cap_seconds: state.timeCapSeconds ?? undefined,
+                elapsed_seconds: state.startedAt
+                  ? Math.floor((Date.now() - state.startedAt) / 1000)
+                  : undefined,
+                status: state.intervalStatus,
+                scaling_notes: state.intervalScalingNotes || undefined,
+              },
+            },
+          ]
+        : undefined;
+
     const result = await updateWorkout(sessionId, {
       // Persist the (possibly renamed) session name; skip an empty string so
       // the server's min(1) name validation isn't tripped.
       ...(trimmedName.length > 0 ? { name: trimmedName } : {}),
+      location: state.session.location ?? null,
       exercises: buildSessionExercisesPayload(
         state.session,
         state.completedSetIds,
         state.prSetIds,
-        state.startedAt,
+        state.startedAt
       ),
+      activity_details: activityDetails,
     });
-    useActiveWorkoutStore.getState().applyServerSession(result, sentRevision, sentEntryIds);
+    useActiveWorkoutStore
+      .getState()
+      .applyServerSession(result, sentRevision, sentEntryIds);
     syncExerciseSessionInCache(queryClient, result);
     return 'saved';
   } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : String(error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
 
-    const statusCode =
-      error instanceof ApiError ? error.statusCode : undefined;
+    const statusCode = error instanceof ApiError ? error.statusCode : undefined;
 
-    const responseBody =
-      error instanceof ApiError ? error.body : undefined;
+    const responseBody = error instanceof ApiError ? error.body : undefined;
 
     addLog('Active workout autosave failed', 'ERROR', [
       `sessionId: ${sessionId}`,
@@ -87,9 +138,10 @@ export async function saveActiveWorkoutSession(
  * success — clearing the workout is a flush point.
  */
 export async function flushActiveWorkoutBeforeClear(
-  queryClient: QueryClient,
+  queryClient: QueryClient
 ): Promise<boolean> {
-  const entryDate = useActiveWorkoutStore.getState().session?.entry_date ?? null;
+  const entryDate =
+    useActiveWorkoutStore.getState().session?.entry_date ?? null;
   const outcome = await saveActiveWorkoutSession(queryClient);
   if (outcome === 'saved' && entryDate) {
     invalidateExerciseCache(queryClient, normalizeDate(entryDate));
@@ -190,8 +242,12 @@ export function useActiveWorkoutAutosave(): {
       failureToastShownRef.current = true;
       Toast.show({
         type: 'error',
-        text1: t('activeWorkoutAutosave.failedTitle', { defaultValue: 'Workout not saved' }),
-        text2: t('activeWorkoutAutosave.failedMessage', { defaultValue: 'Changes are kept on this device and will retry.' }),
+        text1: t('activeWorkoutAutosave.failedTitle', {
+          defaultValue: 'Workout not saved',
+        }),
+        text2: t('activeWorkoutAutosave.failedMessage', {
+          defaultValue: 'Changes are kept on this device and will retry.',
+        }),
       });
     }
     return ok;

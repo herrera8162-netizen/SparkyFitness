@@ -1,10 +1,13 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Route, Repeat } from 'lucide-react';
+import { Route, Repeat, ChevronDown } from 'lucide-react';
+import { useState } from 'react';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import type {
   MatchedCoursesResponse,
   MatchedCourseGroup,
 } from '@workspace/shared';
+import { useTranslation } from 'react-i18next';
+import { exerciseDisplayLabel } from '@/utils/exerciseDisplayLabels';
 
 interface MatchedCoursesListProps {
   matchedData?: MatchedCoursesResponse;
@@ -14,8 +17,10 @@ export const MatchedCoursesList = ({
   matchedData,
 }: MatchedCoursesListProps) => {
   const { distanceUnit } = usePreferences();
+  const { t } = useTranslation();
   const isMiles = distanceUnit === 'miles';
   const courses = matchedData?.courses || [];
+  const [openCourseId, setOpenCourseId] = useState<string | null>(null);
 
   if (courses.length === 0) {
     return null;
@@ -27,12 +32,17 @@ export const MatchedCoursesList = ({
         <CardTitle className="text-lg font-semibold flex items-center justify-between">
           <span className="flex items-center gap-2">
             <Route className="w-5 h-5 text-indigo-600" />
-            Matched Courses & Route History ("Matched Runs")
+            {t(
+              'exerciseAnalytics.matchedCourses.title',
+              'Matched Courses & Route History ("Matched Runs")'
+            )}
           </span>
         </CardTitle>
         <p className="text-xs text-muted-foreground">
-          Activities on recurring route loops grouped together to compare pace
-          over time.
+          {t(
+            'exerciseAnalytics.matchedCourses.description',
+            'Activities on recurring route loops grouped together to compare pace over time.'
+          )}
         </p>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -41,52 +51,74 @@ export const MatchedCoursesList = ({
             key={course.courseId}
             className="p-3 rounded-lg border bg-muted/20 space-y-2"
           >
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+            <button
+              type="button"
+              className="flex w-full flex-col gap-1 text-left sm:flex-row sm:items-center sm:justify-between"
+              aria-expanded={openCourseId === course.courseId}
+              onClick={() =>
+                setOpenCourseId((current) =>
+                  current === course.courseId ? null : course.courseId
+                )
+              }
+            >
               <div className="flex items-center gap-2">
                 <Repeat className="w-4 h-4 text-indigo-500" />
                 <span className="font-semibold text-sm">
-                  {course.courseName}
+                  {exerciseDisplayLabel(course.courseName, t, false)}
                 </span>
                 <span className="bg-indigo-100 text-indigo-800 text-[10px] px-2 py-0.5 rounded-full font-medium">
-                  {course.activityCount} runs
+                  {t('exerciseAnalytics.matchedCourses.runs', {
+                    defaultValue_one: '{{count}} run',
+                    defaultValue_other: '{{count}} runs',
+                    count: course.activityCount,
+                  })}
                 </span>
+                <ChevronDown
+                  className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${
+                    openCourseId === course.courseId ? 'rotate-180' : ''
+                  }`}
+                />
               </div>
               <div className="text-xs text-muted-foreground flex items-center gap-3">
                 <span>
-                  Avg: {course.avgDistanceFormatted} {isMiles ? 'mi' : 'km'}
+                  {t('exerciseAnalytics.matchedCourses.average', 'Avg:')}{' '}
+                  {course.avgDistanceFormatted} {isMiles ? 'mi' : 'km'}
                 </span>
                 <span className="font-medium text-foreground">
-                  Best Pace: {course.bestPaceFormatted}
+                  {t('exerciseAnalytics.matchedCourses.bestPace', 'Best Pace:')}{' '}
+                  {course.bestPaceFormatted}
                 </span>
               </div>
-            </div>
+            </button>
 
-            {/* Recent activities on this course */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
-              {course.recentActivities.map((act) => (
-                <div
-                  key={act.activityId}
-                  className="p-2 rounded bg-background border text-[11px] flex items-center justify-between"
-                >
-                  <div>
-                    <div className="font-medium text-xs">{act.entryDate}</div>
-                    <div className="text-muted-foreground">
-                      {act.durationMinutes} mins
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="font-semibold text-indigo-600">
-                      {act.avgPaceFormatted}
-                    </div>
-                    {act.avgHeartRate && (
-                      <div className="text-[10px] text-red-500">
-                        {act.avgHeartRate} bpm
+            {openCourseId === course.courseId && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                {course.recentActivities.map((act) => (
+                  <div
+                    key={act.activityId}
+                    className="p-2 rounded bg-background border text-[11px] flex items-center justify-between"
+                  >
+                    <div>
+                      <div className="font-medium text-xs">{act.entryDate}</div>
+                      <div className="text-muted-foreground">
+                        {Math.round(act.durationMinutes)}{' '}
+                        {t('common.min', 'min')}
                       </div>
-                    )}
+                    </div>
+                    <div className="text-right">
+                      <div className="font-semibold text-indigo-600">
+                        {act.avgPaceFormatted}
+                      </div>
+                      {act.avgHeartRate && (
+                        <div className="text-[10px] text-red-500">
+                          {act.avgHeartRate} bpm
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </CardContent>

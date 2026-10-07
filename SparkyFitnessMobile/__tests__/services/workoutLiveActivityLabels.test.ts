@@ -4,6 +4,7 @@ import {
   resolveWorkoutLiveActivityLocale,
 } from '../../src/services/workoutLiveActivityLabels';
 import i18n, { initializeI18n } from '../../src/localization/i18n';
+import registry from '../../src/localization/localeRegistry.json';
 
 const EN_EXPECTED = {
   rest: 'Rest',
@@ -35,6 +36,21 @@ const PL_EXPECTED = {
   setOf: 'z',
 };
 
+const ES_EXPECTED = {
+  rest: 'Descanso',
+  paused: 'En pausa',
+  elapsed: 'Transcurrido',
+  workoutComplete: 'Entrenamiento completado',
+  complete: 'Completar',
+  addFifteenSeconds: 'Añadir 15 segundos',
+  addFifteenSecondsShort: '+15 s',
+  skipRest: 'Saltar descanso',
+  workout: 'Entrenamiento',
+  exercise: 'Ejercicio',
+  set: 'Serie',
+  setOf: 'de',
+};
+
 describe('workoutLiveActivityLabels', () => {
   beforeAll(async () => {
     await initializeI18n('en');
@@ -58,9 +74,20 @@ describe('workoutLiveActivityLabels', () => {
       expect(labels.set).toContain('Seria');
     });
 
+    it('returns the full Spanish label set with correct characters', () => {
+      const labels = buildWorkoutLiveActivityLabels('es');
+      expect(labels).toEqual(ES_EXPECTED);
+      expect(labels.rest).toContain('Descanso');
+      expect(labels.workoutComplete).toContain('completado');
+      expect(labels.exercise).toContain('Ejercicio');
+      expect(labels.set).toContain('Serie');
+    });
+
     it('contains no i18next placeholder syntax', () => {
-      for (const locale of ['en', 'pl']) {
-        const labels = buildWorkoutLiveActivityLabels(locale as 'en' | 'pl');
+      for (const locale of ['en', 'pl', 'es']) {
+        const labels = buildWorkoutLiveActivityLabels(
+          locale as 'en' | 'pl' | 'es'
+        );
         for (const value of Object.values(labels)) {
           expect(value).not.toMatch(/\{\{/);
           expect(value).not.toMatch(/\}\}/);
@@ -69,8 +96,10 @@ describe('workoutLiveActivityLabels', () => {
     });
 
     it('serializes to plain strings (no functions or objects)', () => {
-      for (const locale of ['en', 'pl']) {
-        const labels = buildWorkoutLiveActivityLabels(locale as 'en' | 'pl');
+      for (const locale of ['en', 'pl', 'es']) {
+        const labels = buildWorkoutLiveActivityLabels(
+          locale as 'en' | 'pl' | 'es'
+        );
         for (const value of Object.values(labels)) {
           expect(typeof value).toBe('string');
         }
@@ -81,8 +110,10 @@ describe('workoutLiveActivityLabels', () => {
     });
 
     it('never leaks raw i18next key paths into the label object', () => {
-      for (const locale of ['en', 'pl']) {
-        const labels = buildWorkoutLiveActivityLabels(locale as 'en' | 'pl');
+      for (const locale of ['en', 'pl', 'es']) {
+        const labels = buildWorkoutLiveActivityLabels(
+          locale as 'en' | 'pl' | 'es'
+        );
         for (const value of Object.values(labels)) {
           expect(value).not.toContain('activeWorkout.liveActivity.');
         }
@@ -122,30 +153,36 @@ describe('workoutLiveActivityLabels', () => {
   });
 
   describe('locale helpers', () => {
-    it('resolves only en and pl to themselves', () => {
+    it('resolves en, pl and es to themselves', () => {
       expect(resolveWorkoutLiveActivityLocale('en')).toBe('en');
       expect(resolveWorkoutLiveActivityLocale('pl')).toBe('pl');
       expect(resolveWorkoutLiveActivityLocale('PL')).toBe('pl');
+      expect(resolveWorkoutLiveActivityLocale('es')).toBe('es');
+      expect(resolveWorkoutLiveActivityLocale('es-ES')).toBe('es');
     });
 
     it('falls back to English for unsupported languages and missing values', () => {
-      expect(resolveWorkoutLiveActivityLocale('de')).toBe('en');
-      expect(resolveWorkoutLiveActivityLocale('fr-FR')).toBe('en');
+      // `sv` and `ta` have Weblate directories but are not in the registry.
+      expect(resolveWorkoutLiveActivityLocale('sv')).toBe('en');
+      expect(resolveWorkoutLiveActivityLocale('ta-IN')).toBe('en');
       expect(resolveWorkoutLiveActivityLocale(null)).toBe('en');
       expect(resolveWorkoutLiveActivityLocale(undefined)).toBe('en');
       expect(resolveWorkoutLiveActivityLocale('')).toBe('en');
     });
 
-    it('isWorkoutLiveActivityLocale narrows en and pl only', () => {
-      expect(isWorkoutLiveActivityLocale('en')).toBe(true);
-      expect(isWorkoutLiveActivityLocale('pl')).toBe(true);
-      expect(isWorkoutLiveActivityLocale('de')).toBe(false);
+    it('isWorkoutLiveActivityLocale narrows to the shipped registry only', () => {
+      for (const locale of Object.keys(registry.locales)) {
+        expect(isWorkoutLiveActivityLocale(locale)).toBe(true);
+      }
+      expect(isWorkoutLiveActivityLocale('sv')).toBe(false);
       expect(isWorkoutLiveActivityLocale(null)).toBe(false);
       expect(isWorkoutLiveActivityLocale(undefined)).toBe(false);
     });
 
     it('isWorkoutLiveActivityLocale returns false for the raw key path', () => {
-      expect(isWorkoutLiveActivityLocale('activeWorkout.liveActivity.rest')).toBe(false);
+      expect(
+        isWorkoutLiveActivityLocale('activeWorkout.liveActivity.rest')
+      ).toBe(false);
     });
   });
 });

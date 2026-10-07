@@ -81,6 +81,9 @@ describe('mealRepository', () => {
           undefined,
           // images: absent from the payload serializes to an empty array
           '[]',
+          // notes: absent from the payload stores NULL
+          null,
+          // cooked_weight_g / cooked_weight_source: absent stores NULL
           null,
           null,
         ]
@@ -382,6 +385,10 @@ describe('mealRepository', () => {
           undefined,
           // images: omitted from the payload leaves the column untouched
           null,
+          // notes: key absent, so the CASE flag is false and the value unused
+          false,
+          null,
+          // cooked_weight_g / cooked_weight_source: keys absent
           false,
           null,
           false,
@@ -448,6 +455,10 @@ describe('mealRepository', () => {
           undefined,
           // images: omitted from the payload leaves the column untouched
           null,
+          // notes: key absent, so the CASE flag is false and the value unused
+          false,
+          null,
+          // cooked_weight_g / cooked_weight_source: keys absent
           false,
           null,
           false,

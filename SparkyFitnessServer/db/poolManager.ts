@@ -32,7 +32,6 @@ function createOwnerPoolInstance() {
   });
   newPool.on('error', (err) => {
     log('error', 'Unexpected error on idle owner client', err);
-    process.exit(-1);
   });
   return newPool;
 }
@@ -43,14 +42,13 @@ function createAppPoolInstance() {
     database: process.env.SPARKY_FITNESS_DB_NAME,
     password: process.env.SPARKY_FITNESS_APP_DB_PASSWORD,
     // @ts-expect-error TS(2322): Type 'string | undefined' is not assignable to typ... Remove this comment to see the full error message
-    port: process.env.SPARKY_FITNESS_DB_PORT,
+    port: process.env.SPARKY_FITNESS_DB_PORT || 5432,
     max: 10,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
   });
   newPool.on('error', (err) => {
     log('error', 'Unexpected error on idle app client', err);
-    process.exit(-1);
   });
   return newPool;
 }
@@ -66,6 +64,10 @@ function _getRawAppPool() {
   }
   return appPoolInstance;
 }
+/**
+ * Borrows a client with RLS context set for the target user and authenticated actor.
+ * The caller must release it in a finally block; failed context setup discards it.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getClient(
   userId: any,
@@ -80,11 +82,16 @@ async function getClient(
   const store = dbContextStorage.getStore();
   const actualAuthUserId =
     authenticatedUserId || store?.authenticatedUserId || userId;
-  await client.query('SELECT public.set_app_context($1, $2)', [
-    userId,
-    actualAuthUserId,
-  ]);
-  return client;
+  try {
+    await client.query('SELECT public.set_app_context($1, $2)', [
+      userId,
+      actualAuthUserId,
+    ]);
+    return client;
+  } catch (error) {
+    client.release(true);
+    throw error;
+  }
 }
 async function getSystemClient() {
   const client = await _getRawOwnerPool().connect();

@@ -1,9 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { View, Text } from 'react-native';
-import Animated, { useSharedValue, useDerivedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
+import { View, Text, Pressable } from 'react-native';
+import Animated, {
+  useSharedValue,
+  useDerivedValue,
+  useAnimatedStyle,
+  withTiming,
+  Easing,
+} from 'react-native-reanimated';
 import { useIsFocused } from '@react-navigation/native';
 import { useCSSVariable } from 'uniwind';
+import Icon from './Icon';
 
 interface ProgressBarProps {
   label: string;
@@ -15,7 +22,15 @@ interface ProgressBarProps {
   opacity?: number;
 }
 
-const ProgressBar: React.FC<ProgressBarProps> = ({ label, current, goal, unit, color, trackColor, opacity = 1 }) => {
+const ProgressBar: React.FC<ProgressBarProps> = ({
+  label,
+  current,
+  goal,
+  unit,
+  color,
+  trackColor,
+  opacity = 1,
+}) => {
   const [barWidth, setBarWidth] = useState(0);
   const barHeight = 8;
   const borderRadius = 4;
@@ -71,39 +86,55 @@ const ProgressBar: React.FC<ProgressBarProps> = ({ label, current, goal, unit, c
       <View className="flex-row justify-between items-center mb-2">
         <Text className="text-sm font-semibold text-text-primary">{label}</Text>
         <Text className="text-sm text-text-primary">
-          {goal > 0 ? `${Math.round(current)} / ${Math.round(goal)} ${unit}` : `${Math.round(current)} ${unit}`}
+          {goal > 0
+            ? `${Math.round(current)} / ${Math.round(goal)} ${unit}`
+            : `${Math.round(current)} ${unit}`}
         </Text>
       </View>
-      {showBar && <View
-        className="h-3"
-        onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}
-      >
-        {barWidth > 0 && (
-          <View
-            style={{
-              width: barWidth,
-              height: barHeight,
-              borderRadius,
-              overflow: 'hidden',
-              backgroundColor: trackColor,
-              opacity,
-            }}
-          >
-            <Animated.View
-              style={[
-                { position: 'absolute', left: 0, top: 0, height: barHeight, backgroundColor: color },
-                fillStyle,
-              ]}
-            />
-            <Animated.View
-              style={[
-                { position: 'absolute', top: 0, height: barHeight, backgroundColor: color, opacity: 0.65 },
-                overflowStyle,
-              ]}
-            />
-          </View>
-        )}
-      </View>}
+      {showBar && (
+        <View
+          className="h-3"
+          onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}
+        >
+          {barWidth > 0 && (
+            <View
+              style={{
+                width: barWidth,
+                height: barHeight,
+                borderRadius,
+                overflow: 'hidden',
+                backgroundColor: trackColor,
+                opacity,
+              }}
+            >
+              <Animated.View
+                style={[
+                  {
+                    position: 'absolute',
+                    left: 0,
+                    top: 0,
+                    height: barHeight,
+                    backgroundColor: color,
+                  },
+                  fillStyle,
+                ]}
+              />
+              <Animated.View
+                style={[
+                  {
+                    position: 'absolute',
+                    top: 0,
+                    height: barHeight,
+                    backgroundColor: color,
+                    opacity: 0.65,
+                  },
+                  overflowStyle,
+                ]}
+              />
+            </View>
+          )}
+        </View>
+      )}
     </View>
   );
 };
@@ -113,6 +144,8 @@ interface ExerciseProgressCardProps {
   exerciseMinutesGoal: number;
   exerciseCalories: number;
   exerciseCaloriesGoal: number;
+  /** Opens exercise statistics from the card's header. */
+  onPressDetails?: () => void;
 }
 
 const ExerciseProgressCard: React.FC<ExerciseProgressCardProps> = ({
@@ -120,18 +153,39 @@ const ExerciseProgressCard: React.FC<ExerciseProgressCardProps> = ({
   exerciseMinutesGoal,
   exerciseCalories,
   exerciseCaloriesGoal,
+  onPressDetails,
 }) => {
   const { t } = useTranslation();
-  const [exerciseColor, trackColor] = useCSSVariable([
+  const [exerciseColor, trackColor, accentColor] = useCSSVariable([
     '--color-calories',
     '--color-progress-track',
-  ]) as [string, string];
+    '--color-accent-primary',
+  ]) as [string, string, string];
 
   const hasEntries = exerciseMinutes > 0 || exerciseCalories > 0;
 
   return (
     <View className="bg-surface rounded-xl p-4 mb-3 shadow-sm">
-      <Text className="text-md font-bold text-text-secondary mb-4">{t('dashboard.exercise', { defaultValue: 'Exercise' })}</Text>
+      <Pressable
+        onPress={onPressDetails}
+        disabled={!onPressDetails}
+        accessibilityRole={onPressDetails ? 'button' : undefined}
+        className="flex-row justify-between items-center mb-4"
+      >
+        <Text className="text-md font-bold text-text-secondary">
+          {t('dashboard.exercise', { defaultValue: 'Exercise' })}
+        </Text>
+        {onPressDetails ? (
+          <View className="flex-row items-center">
+            <Text className="text-xs font-semibold text-accent-primary mr-1">
+              {t('dashboard.exerciseStatistics', {
+                defaultValue: 'Statistics',
+              })}
+            </Text>
+            <Icon name="chevron-forward" size={14} color={accentColor} />
+          </View>
+        ) : null}
+      </Pressable>
       {hasEntries ? (
         <>
           <ProgressBar
@@ -148,14 +202,18 @@ const ExerciseProgressCard: React.FC<ExerciseProgressCardProps> = ({
             label={t('dashboard.calories', { defaultValue: 'Calories' })}
             current={exerciseCalories}
             goal={exerciseCaloriesGoal}
-            unit={t('nutrition.caloriesUnit', { defaultValue: "Cal" })}
+            unit={t('nutrition.caloriesUnit', { defaultValue: 'Cal' })}
             color={exerciseColor}
             trackColor={trackColor}
             opacity={0.5}
           />
         </>
       ) : (
-        <Text className="text-sm text-text-secondary text-center py-2">{t('dashboard.noExerciseEntries', { defaultValue: 'No exercise entries yet' })}</Text>
+        <Text className="text-sm text-text-secondary text-center py-2">
+          {t('dashboard.noExerciseEntries', {
+            defaultValue: 'No exercise entries yet',
+          })}
+        </Text>
       )}
     </View>
   );

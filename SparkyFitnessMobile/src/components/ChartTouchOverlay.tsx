@@ -23,6 +23,13 @@ type ChartTouchOverlayProps = {
   layout: ChartTouchLayout;
   onSelect: (index: number) => void;
   onClear?: () => void;
+  /**
+   * Fires with the raw touch point on every update once the long press has activated,
+   * independent of whether the selected zone (index) changed. Callers that need
+   * finer-grained position than the zone index -- e.g. which stacked segment a point
+   * falls in -- read this instead of `onSelect`.
+   */
+  onPointMove?: (point: TouchPoint) => void;
   testIDPrefix?: string;
 };
 
@@ -32,7 +39,7 @@ type ChartTouchZone = {
   width: number;
 };
 
-type TouchPoint = {
+export type TouchPoint = {
   x: number;
   y: number;
 };
@@ -46,7 +53,7 @@ export const CHART_TOUCH_LONG_PRESS_DELAY_MS = 100;
 const MOVE_CANCEL_THRESHOLD_PX = 8;
 
 export const createChartTouchLayoutSignature = (
-  layout: ChartTouchLayout,
+  layout: ChartTouchLayout
 ): string => {
   if (!layout.chartBounds || layout.points.length === 0) {
     return 'empty';
@@ -54,7 +61,9 @@ export const createChartTouchLayoutSignature = (
 
   const { chartBounds, points } = layout;
   const pointSignature = points
-    .map(point => `${point.x}:${String(point.xValue)}:${String(point.yValue)}`)
+    .map(
+      (point) => `${point.x}:${String(point.xValue)}:${String(point.yValue)}`
+    )
     .join('|');
 
   return [
@@ -68,7 +77,7 @@ export const createChartTouchLayoutSignature = (
 
 export const buildChartTouchZones = (
   points: PointsArray,
-  chartBounds: ChartBounds | null,
+  chartBounds: ChartBounds | null
 ): ChartTouchZone[] => {
   if (!chartBounds || points.length === 0) {
     return [];
@@ -91,7 +100,7 @@ export const buildChartTouchZones = (
       width: Math.max(
         1,
         Math.min(chartBounds.right, rightEdge) -
-          Math.max(chartBounds.left, leftEdge),
+          Math.max(chartBounds.left, leftEdge)
       ),
     };
   });
@@ -99,9 +108,7 @@ export const buildChartTouchZones = (
 
 const getTouchPoint = (
   event:
-    | NativeSyntheticEvent<NativeTouchEvent>
-    | GestureResponderEvent
-    | undefined,
+    NativeSyntheticEvent<NativeTouchEvent> | GestureResponderEvent | undefined
 ): TouchPoint | null => {
   const nativeEvent = event?.nativeEvent;
 
@@ -127,7 +134,7 @@ const getTouchPoint = (
 
 const isPointInsideChartBounds = (
   point: TouchPoint,
-  chartBounds: ChartBounds,
+  chartBounds: ChartBounds
 ): boolean =>
   point.x >= chartBounds.left &&
   point.x <= chartBounds.right &&
@@ -141,7 +148,7 @@ const findZoneIndexForPoint = (
   point: TouchPoint,
   zones: ChartTouchZone[],
   chartBounds: ChartBounds,
-  requireInBounds: boolean,
+  requireInBounds: boolean
 ): number | null => {
   if (requireInBounds && !isPointInsideChartBounds(point, chartBounds)) {
     return null;
@@ -149,7 +156,7 @@ const findZoneIndexForPoint = (
 
   const clampedX = Math.min(
     chartBounds.right,
-    Math.max(chartBounds.left, point.x),
+    Math.max(chartBounds.left, point.x)
   );
 
   for (let index = 0; index < zones.length; index += 1) {
@@ -183,11 +190,12 @@ const ChartTouchOverlay: React.FC<ChartTouchOverlayProps> = ({
   layout,
   onSelect,
   onClear,
+  onPointMove,
   testIDPrefix,
 }) => {
   const zones = useMemo(
     () => buildChartTouchZones(layout.points, layout.chartBounds),
-    [layout.chartBounds, layout.points],
+    [layout.chartBounds, layout.points]
   );
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startPointRef = useRef<TouchPoint | null>(null);
@@ -206,17 +214,19 @@ const ChartTouchOverlay: React.FC<ChartTouchOverlayProps> = ({
 
   const updateSelection = (
     point: TouchPoint | null,
-    requireInBounds: boolean,
+    requireInBounds: boolean
   ) => {
     if (!point || !layout.chartBounds || !zones.length) {
       return;
     }
 
+    onPointMove?.(point);
+
     const nextIndex = findZoneIndexForPoint(
       point,
       zones,
       layout.chartBounds,
-      requireInBounds,
+      requireInBounds
     );
 
     if (nextIndex == null || nextIndex === selectedIndexRef.current) {
@@ -258,7 +268,7 @@ const ChartTouchOverlay: React.FC<ChartTouchOverlayProps> = ({
   const chartBounds = layout.chartBounds;
 
   const beginTrackingTouch = (
-    event: NativeSyntheticEvent<NativeTouchEvent>,
+    event: NativeSyntheticEvent<NativeTouchEvent>
   ) => {
     const point = getTouchPoint(event);
 
@@ -279,7 +289,7 @@ const ChartTouchOverlay: React.FC<ChartTouchOverlayProps> = ({
   };
 
   const handleTouchMove = (
-    event: NativeSyntheticEvent<NativeTouchEvent> | GestureResponderEvent,
+    event: NativeSyntheticEvent<NativeTouchEvent> | GestureResponderEvent
   ) => {
     const point = getTouchPoint(event);
 

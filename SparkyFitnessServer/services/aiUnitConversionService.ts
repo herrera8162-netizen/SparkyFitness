@@ -8,7 +8,7 @@ import {
   type JsonSchemaNode,
   type ProviderConfig,
 } from '../ai/providerDispatch.js';
-import { deriveAiNetworkPolicy } from '../utils/outboundUrlPolicy.js';
+import { resolveAiNetworkPolicy } from '../utils/outboundUrlPolicy.js';
 import {
   aiProviderRawResponseSchema,
   isAiConvertibleUnit,
@@ -193,14 +193,13 @@ export async function estimateUnitConversion(
     api_key: aiService.api_key ?? undefined,
     model_name: aiService.model_name ?? undefined,
     custom_url: aiService.custom_url ?? undefined,
-    timeout: aiService.timeout ?? undefined,
   };
 
   // 4. Build prompt + dispatch. The helper owns the api-key/custom-url checks,
   // per-provider structured-output strategy, and JSON parsing.
   const result = await dispatchAiRequest({
     provider,
-    networkPolicy: deriveAiNetworkPolicy(aiService, actorIsAdmin),
+    networkPolicy: await resolveAiNetworkPolicy(aiService, actorIsAdmin),
     prompt: buildPrompt({
       foodName: params.foodName,
       brand: params.brand,

@@ -84,19 +84,41 @@ jest.mock('../../src/components/ActiveWorkoutSetDetail', () => {
   };
 });
 
+// Body weight only matters to bodyweight exercises; the card must not need a
+// QueryClient for it in these tests.
+const mockUseBodyWeightKg = jest.fn(
+  (_date: unknown, _enabled: boolean) => null
+);
+jest.mock('../../src/hooks/useBodyWeightKg', () => ({
+  useBodyWeightKg: (date: unknown, enabled: boolean) =>
+    mockUseBodyWeightKg(date, enabled),
+}));
+
 jest.mock('../../src/hooks/useExerciseStats', () => ({
   useExerciseStats: jest.fn(() => ({ data: null })),
 }));
 
 // The card only touches the store to capture the PR baseline; a selector-based
 // stub exposes a stable spy for that action.
+const mockUseLiveHeartRate = jest.fn(
+  (_entryId: string | null): number | null => null
+);
+jest.mock('../../src/stores/liveHeartRateStore', () => ({
+  useLiveHeartRate: (entryId: string | null) => mockUseLiveHeartRate(entryId),
+}));
+
 jest.mock('../../src/stores/activeWorkoutStore', () => {
   const capturePrBaseline = jest.fn();
   const capturePreviousSessionSets = jest.fn();
   const storeState = {
     capturePrBaseline,
     capturePreviousSessionSets,
+    setWeightUnit: jest.fn(),
     plannedSetValues: {},
+    exerciseConfigs: {},
+    workoutFormat: 'standard',
+    coachingSignals: {},
+    declinedAdaptive: {},
   };
   return {
     __esModule: true,
@@ -111,12 +133,14 @@ const mockSafeImage = jest.requireMock('../../src/components/SafeImage') as {
   __getMountCount: () => number;
   __resetMountCount: () => void;
 };
-const mockUseExerciseStats = jest.requireMock('../../src/hooks/useExerciseStats')
-  .useExerciseStats as jest.Mock;
-const mockCapturePrBaseline = jest.requireMock('../../src/stores/activeWorkoutStore')
-  .__capturePrBaseline as jest.Mock;
+const mockUseExerciseStats = jest.requireMock(
+  '../../src/hooks/useExerciseStats'
+).useExerciseStats as jest.Mock;
+const mockCapturePrBaseline = jest.requireMock(
+  '../../src/stores/activeWorkoutStore'
+).__capturePrBaseline as jest.Mock;
 const mockCapturePreviousSessionSets = jest.requireMock(
-  '../../src/stores/activeWorkoutStore',
+  '../../src/stores/activeWorkoutStore'
 ).__capturePreviousSessionSets as jest.Mock;
 
 /** Stats fixture with a historical best of 100kg × 5. */
@@ -127,7 +151,9 @@ const STATS_WITH_BEST = {
   },
 };
 
-function makeExercise(overrides?: Partial<ExerciseEntryResponse>): ExerciseEntryResponse {
+function makeExercise(
+  overrides?: Partial<ExerciseEntryResponse>
+): ExerciseEntryResponse {
   return {
     id: 'ex-uuid-1',
     exercise_id: 'ex-1',
@@ -198,7 +224,7 @@ function renderCard(expanded: boolean, props?: Partial<CardProps>) {
       getImageSource={() => null}
       {...callbacks}
       {...props}
-    />,
+    />
   );
   return { ...utils, callbacks };
 }
@@ -211,7 +237,10 @@ describe('ActiveWorkoutExerciseCard', () => {
   });
 
   describe('column header per modality', () => {
-    const withModality = (modality: string | null, category: string | null = 'Strength') =>
+    const withModality = (
+      modality: string | null,
+      category: string | null = 'Strength'
+    ) =>
       makeExercise({
         exercise_snapshot: {
           ...makeExercise().exercise_snapshot!,
@@ -225,6 +254,29 @@ describe('ActiveWorkoutExerciseCard', () => {
       expect(utils.getByText('kg')).toBeTruthy();
       expect(utils.getByText('Reps')).toBeTruthy();
       expect(utils.queryByText('Sec')).toBeNull();
+    });
+
+    it('explains a bodyweight exercise with the body weight it counts', () => {
+      mockUseBodyWeightKg.mockReturnValue(90.7 as never);
+      const utils = renderCard(true, {
+        exercise: withModality('bodyweight_reps'),
+      });
+      expect(utils.getByTestId('bodyweight-banner')).toBeTruthy();
+      expect(utils.getByText(/counts your body weight \(/)).toBeTruthy();
+      expect(utils.getByText(/minus sign for assistance/)).toBeTruthy();
+      mockUseBodyWeightKg.mockReturnValue(null as never);
+    });
+
+    it('asks for a body weight when none is logged', () => {
+      const utils = renderCard(true, {
+        exercise: withModality('bodyweight_reps'),
+      });
+      expect(utils.getByText(/Log a body weight/)).toBeTruthy();
+    });
+
+    it('shows no bodyweight banner on a weighted exercise', () => {
+      const utils = renderCard(true, { exercise: withModality('weight_reps') });
+      expect(utils.queryByTestId('bodyweight-banner')).toBeNull();
     });
 
     it('drops the kg column for reps_only', () => {
@@ -241,7 +293,9 @@ describe('ActiveWorkoutExerciseCard', () => {
     });
 
     it('renders the Duration+Distance form for a ≤1-set cardio exercise', () => {
-      const utils = renderCard(true, { exercise: withModality('duration_distance') });
+      const utils = renderCard(true, {
+        exercise: withModality('duration_distance'),
+      });
       expect(utils.queryByText('Sec')).toBeNull();
       expect(utils.getByText('Duration (min)')).toBeTruthy();
       expect(utils.getByText('Distance (km)')).toBeTruthy();
@@ -314,7 +368,9 @@ describe('ActiveWorkoutExerciseCard', () => {
     });
 
     it('derives from the snapshot category when modality is absent (old server)', () => {
-      const utils = renderCard(true, { exercise: withModality(null, 'Cardio') });
+      const utils = renderCard(true, {
+        exercise: withModality(null, 'Cardio'),
+      });
       expect(utils.getByText('Duration (min)')).toBeTruthy();
     });
 
@@ -325,9 +381,15 @@ describe('ActiveWorkoutExerciseCard', () => {
         onActivateSet,
         setRenderKeys: { '101': 'rk-101' },
       });
-      fireEvent(utils.getByLabelText('Duration in minutes for Bench Press'), 'focus');
+      fireEvent(
+        utils.getByLabelText('Duration in minutes for Bench Press'),
+        'focus'
+      );
       expect(onActivateSet).toHaveBeenCalledWith('rk-101', 'duration');
-      fireEvent(utils.getByLabelText('Distance in km for Bench Press'), 'focus');
+      fireEvent(
+        utils.getByLabelText('Distance in km for Bench Press'),
+        'focus'
+      );
       expect(onActivateSet).toHaveBeenCalledWith('rk-101', 'distance');
     });
 
@@ -341,7 +403,14 @@ describe('ActiveWorkoutExerciseCard', () => {
           sets: [
             { ...holdSet, weight: null, reps: null, duration: 45 },
             // Legacy isometric row: seconds live in reps (pre-duration data).
-            { ...holdSet, id: 102, set_number: 2, weight: null, reps: 30, duration: null },
+            {
+              ...holdSet,
+              id: 102,
+              set_number: 2,
+              weight: null,
+              reps: 30,
+              duration: null,
+            },
           ],
         },
       });
@@ -359,7 +428,7 @@ describe('ActiveWorkoutExerciseCard', () => {
       fireEvent.press(utils.getByLabelText('Change metric column'));
       expect(utils.callbacks.onPressMetricHeader).toHaveBeenCalledWith(
         expect.anything(),
-        true,
+        true
       );
     });
 
@@ -374,7 +443,7 @@ describe('ActiveWorkoutExerciseCard', () => {
       fireEvent.press(utils.getByLabelText('Change metric column'));
       expect(utils.callbacks.onPressMetricHeader).toHaveBeenCalledWith(
         expect.anything(),
-        true,
+        true
       );
     });
 
@@ -388,7 +457,7 @@ describe('ActiveWorkoutExerciseCard', () => {
       fireEvent.press(utils.getByLabelText('Change metric column'));
       expect(utils.callbacks.onPressMetricHeader).toHaveBeenCalledWith(
         expect.anything(),
-        false,
+        false
       );
     });
   });
@@ -430,7 +499,8 @@ describe('ActiveWorkoutExerciseCard', () => {
         ],
       }),
     });
-    const numberOf = (id: number) => utils.getByTestId(`set-row-${id}`).props.displayNumber;
+    const numberOf = (id: number) =>
+      utils.getByTestId(`set-row-${id}`).props.displayNumber;
     expect(numberOf(102)).toBe(1);
     expect(numberOf(103)).toBe(1);
     expect(numberOf(104)).toBe(1);
@@ -481,7 +551,9 @@ describe('ActiveWorkoutExerciseCard', () => {
 
     it('does not wire long-press in edit mode (screen-scoped to live)', () => {
       const { getByLabelText } = renderCard(false, { mode: 'edit' });
-      expect(getByLabelText('Expand Bench Press').props.onLongPress).toBeUndefined();
+      expect(
+        getByLabelText('Expand Bench Press').props.onLongPress
+      ).toBeUndefined();
     });
   });
 
@@ -504,7 +576,7 @@ describe('ActiveWorkoutExerciseCard', () => {
           width: expect.any(Number),
           height: expect.any(Number),
         }),
-        false,
+        false
       );
     });
 
@@ -517,22 +589,78 @@ describe('ActiveWorkoutExerciseCard', () => {
     });
 
     it('hides the rest chip entirely with showRestChip={false}', () => {
-      const { queryByLabelText } = renderCard(true, { mode: 'view', showRestChip: false });
+      const { queryByLabelText } = renderCard(true, {
+        mode: 'view',
+        showRestChip: false,
+      });
       expect(queryByLabelText('Rest 1:30')).toBeNull();
     });
 
     it('shows read-only calories, hidden in live mode', () => {
       const view = renderCard(true, { mode: 'view' });
       expect(view.getByText('150 kcal')).toBeTruthy();
-      expect(view.queryByLabelText('Edit kcalories burned for Bench Press')).toBeNull();
+      expect(
+        view.queryByLabelText('Edit kcalories burned for Bench Press')
+      ).toBeNull();
 
       const live = renderCard(true, { mode: 'live' });
       expect(live.queryByText('150 kcal')).toBeNull();
     });
 
+    it('shows heart rate with the max in parentheses, view mode only', () => {
+      const exercise = makeExercise({
+        avg_heart_rate: 142,
+        max_heart_rate: 168,
+      });
+      const view = renderCard(true, { mode: 'view', exercise });
+      expect(view.getByText('142 (168) bpm')).toBeTruthy();
+
+      // Live mode never shows the saved average: it is only final once the
+      // workout is, and until then the chip shows the watch's live reading.
+      const live = renderCard(true, { mode: 'live', exercise });
+      expect(live.queryByText('142 (168) bpm')).toBeNull();
+    });
+
+    it('shows the live reading from the watch while the workout runs', () => {
+      mockUseLiveHeartRate.mockImplementation((entryId) =>
+        entryId === 'ex-uuid-1' ? 137 : null
+      );
+      try {
+        const live = renderCard(true, { mode: 'live' });
+        expect(live.getByText('137 bpm')).toBeTruthy();
+        expect(
+          live.getByLabelText('Current heart rate for Bench Press')
+        ).toBeTruthy();
+
+        // View mode asks for no live reading and keeps the saved figures.
+        mockUseLiveHeartRate.mockClear();
+        renderCard(true, { mode: 'view' });
+        expect(mockUseLiveHeartRate).toHaveBeenCalledWith(null);
+      } finally {
+        mockUseLiveHeartRate.mockImplementation(() => null);
+      }
+    });
+
+    it('shows a lone figure when max matches the average', () => {
+      const view = renderCard(true, {
+        mode: 'view',
+        exercise: makeExercise({ avg_heart_rate: 140, max_heart_rate: 140 }),
+      });
+      expect(view.getByText('140 bpm')).toBeTruthy();
+    });
+
+    it('shows no heart rate chip when the entry carries none', () => {
+      const view = renderCard(true, { mode: 'view' });
+      expect(view.queryByText(/bpm/)).toBeNull();
+    });
+
     it('skips the exercise stats fetch', () => {
       renderCard(true, { mode: 'view' });
-      expect(mockUseExerciseStats).toHaveBeenCalledWith(null, undefined, undefined);
+      expect(mockUseExerciseStats).toHaveBeenCalledWith(
+        null,
+        undefined,
+        undefined
+      );
     });
 
     it('never labels a collapsed exercise as planned', () => {
@@ -570,18 +698,23 @@ describe('ActiveWorkoutExerciseCard', () => {
       });
 
       expect(getByTestId('set-row-101').props.accessibilityLabel).toBe(
-        'row 101 upcoming read-only',
+        'row 101 upcoming read-only'
       );
       expect(getByTestId('set-row-102').props.accessibilityLabel).toBe(
-        'row 102 done read-only',
+        'row 102 done read-only'
       );
     });
   });
 
   describe('edit mode', () => {
     it('derives the current row from activeSetId', () => {
-      const { getByTestId } = renderCard(true, { mode: 'edit', activeSetId: '101' });
-      expect(getByTestId('set-row-101').props.accessibilityLabel).toBe('row 101 current');
+      const { getByTestId } = renderCard(true, {
+        mode: 'edit',
+        activeSetId: '101',
+      });
+      expect(getByTestId('set-row-101').props.accessibilityLabel).toBe(
+        'row 101 current'
+      );
     });
 
     it('never marks rows done — completed sets stay editable with a badge', () => {
@@ -591,7 +724,7 @@ describe('ActiveWorkoutExerciseCard', () => {
         completedSetIds: { '101': Date.parse('2026-07-06T10:00:00.000Z') },
       });
       expect(getByTestId('set-row-101').props.accessibilityLabel).toBe(
-        'row 101 upcoming badged',
+        'row 101 upcoming badged'
       );
     });
 
@@ -604,10 +737,71 @@ describe('ActiveWorkoutExerciseCard', () => {
       });
       const { getByTestId } = renderCard(true, { mode: 'edit', exercise });
       expect(getByTestId('set-row-101').props.accessibilityHint).toBe(
-        'next:102 entry:ex-uuid-1',
+        'next:102 entry:ex-uuid-1'
       );
       expect(getByTestId('set-row-102').props.accessibilityHint).toBe(
-        'next:none entry:ex-uuid-1',
+        'next:none entry:ex-uuid-1'
+      );
+    });
+
+    it('hides the progression editor on forms that cannot save it', () => {
+      const { queryByLabelText } = renderCard(true, { mode: 'edit' });
+      expect(queryByLabelText('Toggle progression settings')).toBeNull();
+    });
+
+    it('commits the per-set ramp in kg, signed by direction', () => {
+      const onUpdateProgression = jest.fn();
+      const { getByLabelText, getByText } = renderCard(true, {
+        mode: 'edit',
+        weightUnit: 'lbs',
+        onUpdateProgression,
+      });
+      fireEvent.press(getByLabelText('Toggle progression settings'));
+      fireEvent.changeText(getByLabelText('Weight added per set (lbs)'), '10');
+      expect(onUpdateProgression).toHaveBeenLastCalledWith('ex-uuid-1', {
+        rampIncrement: expect.closeTo(4.5359, 3),
+      });
+
+      fireEvent.press(getByText('Down'));
+      expect(onUpdateProgression).toHaveBeenLastCalledWith('ex-uuid-1', {
+        rampIncrement: expect.closeTo(-4.5359, 3),
+      });
+
+      fireEvent.changeText(getByLabelText('Weight added per set (lbs)'), '');
+      expect(onUpdateProgression).toHaveBeenLastCalledWith('ex-uuid-1', {
+        rampIncrement: null,
+      });
+    });
+
+    it('re-stores the typed increment when the mode changes its meaning', () => {
+      const onUpdateProgression = jest.fn();
+      const { getByLabelText, getByText, getByPlaceholderText } = renderCard(
+        true,
+        { mode: 'edit', weightUnit: 'lbs', onUpdateProgression }
+      );
+      fireEvent.press(getByLabelText('Toggle progression settings'));
+      // Rep Goal: 5 lb stores as kg.
+      fireEvent.changeText(getByPlaceholderText('5'), '5');
+      expect(onUpdateProgression).toHaveBeenLastCalledWith('ex-uuid-1', {
+        incrementValue: expect.closeTo(2.268, 3),
+      });
+      // Step-Load counts reps: the same "5" is now 5 reps, not 2.27.
+      fireEvent.press(getByText('Step-Load'));
+      expect(onUpdateProgression).toHaveBeenLastCalledWith('ex-uuid-1', {
+        incrementValue: 5,
+      });
+    });
+
+    it("shows a stored kg ramp in the lifter's unit", () => {
+      const { getByLabelText } = renderCard(true, {
+        mode: 'edit',
+        weightUnit: 'lbs',
+        onUpdateProgression: jest.fn(),
+        exercise: { ...makeExercise(), ramp_increment: 4.54 },
+      });
+      fireEvent.press(getByLabelText('Toggle progression settings'));
+      expect(getByLabelText('Weight added per set (lbs)').props.value).toBe(
+        '10'
       );
     });
 
@@ -620,17 +814,24 @@ describe('ActiveWorkoutExerciseCard', () => {
 
     it('fetches exercise stats so "Last time" works for drafts', () => {
       renderCard(true, { mode: 'edit' });
-      expect(mockUseExerciseStats).toHaveBeenCalledWith('ex-1', undefined, undefined);
+      expect(mockUseExerciseStats).toHaveBeenCalledWith(
+        'ex-1',
+        undefined,
+        undefined
+      );
     });
 
     describe('calories chip', () => {
       it('renders a tappable chip that swaps to a focused input on press', () => {
         const onChangeCalories = jest.fn();
-        const { getByText, getByLabelText, queryByLabelText } = renderCard(true, {
-          mode: 'edit',
-          onChangeCalories,
-          exercise: { ...makeExercise(), editCaloriesText: '150' },
-        });
+        const { getByText, getByLabelText, queryByLabelText } = renderCard(
+          true,
+          {
+            mode: 'edit',
+            onChangeCalories,
+            exercise: { ...makeExercise(), editCaloriesText: '150' },
+          }
+        );
 
         expect(getByText('150 kcal')).toBeTruthy();
         expect(queryByLabelText('Calories burned for Bench Press')).toBeNull();
@@ -652,7 +853,9 @@ describe('ActiveWorkoutExerciseCard', () => {
 
       it('is absent without an onChangeCalories handler', () => {
         const { queryByLabelText } = renderCard(true, { mode: 'edit' });
-        expect(queryByLabelText('Edit kcalories burned for Bench Press')).toBeNull();
+        expect(
+          queryByLabelText('Edit kcalories burned for Bench Press')
+        ).toBeNull();
       });
     });
 
@@ -663,14 +866,21 @@ describe('ActiveWorkoutExerciseCard', () => {
     });
 
     describe('prefill', () => {
-      const lastSet = { entryDate: '2026-07-01', weight: 90, reps: 5, setNumber: 1 };
+      const lastSet = {
+        entryDate: '2026-07-01',
+        weight: 90,
+        reps: 5,
+        setNumber: 1,
+      };
       const emptyFirstSet = () =>
         makeExercise({
           sets: [{ ...makeExercise().sets[0], weight: null, reps: null }],
         });
 
       beforeEach(() => {
-        mockUseExerciseStats.mockReturnValue({ data: { lastSet, bestSet: null } });
+        mockUseExerciseStats.mockReturnValue({
+          data: { lastSet, bestSet: null },
+        });
       });
 
       afterEach(() => {
@@ -703,7 +913,7 @@ describe('ActiveWorkoutExerciseCard', () => {
             onToggleExpanded={callbacks.onToggleExpanded}
             onPressMetricHeader={callbacks.onPressMetricHeader}
             onCommitField={callbacks.onCommitField}
-          />,
+          />
         );
         expect(callbacks.onCommitField).toHaveBeenCalledTimes(1);
       });
@@ -717,7 +927,9 @@ describe('ActiveWorkoutExerciseCard', () => {
           exercise,
           eligibleForPrefill: true,
         });
-        expect(callbacks.onCommitField).toHaveBeenCalledWith('101', { reps: 5 });
+        expect(callbacks.onCommitField).toHaveBeenCalledWith('101', {
+          reps: 5,
+        });
       });
 
       it('a null last-time weight fills nothing for that field', () => {
@@ -729,7 +941,9 @@ describe('ActiveWorkoutExerciseCard', () => {
           exercise: emptyFirstSet(),
           eligibleForPrefill: true,
         });
-        expect(callbacks.onCommitField).toHaveBeenCalledWith('101', { reps: 5 });
+        expect(callbacks.onCommitField).toHaveBeenCalledWith('101', {
+          reps: 5,
+        });
       });
 
       it('does not prefill without eligibility or outside edit mode', () => {
@@ -759,7 +973,11 @@ describe('ActiveWorkoutExerciseCard', () => {
 
     it('passes the session id as excludePresetEntryId to the stats query', () => {
       renderCard(true, { mode: 'live', excludePresetEntryId: 'session-1' });
-      expect(mockUseExerciseStats).toHaveBeenCalledWith('ex-1', 'session-1', undefined);
+      expect(mockUseExerciseStats).toHaveBeenCalledWith(
+        'ex-1',
+        'session-1',
+        undefined
+      );
     });
 
     it('passes sourcePresetId through to the stats query', () => {
@@ -768,16 +986,24 @@ describe('ActiveWorkoutExerciseCard', () => {
     });
 
     it('marks the tap-focused row from focusedSetKey (distinct from the cursor)', () => {
-      const { getByTestId } = renderCard(true, { mode: 'live', focusedSetKey: '101' });
+      const { getByTestId } = renderCard(true, {
+        mode: 'live',
+        focusedSetKey: '101',
+      });
       // Cursor (activeSetId) still drives 'current'; focus is an added flag.
       expect(getByTestId('set-row-101').props.accessibilityLabel).toBe(
-        'row 101 current focused',
+        'row 101 current focused'
       );
     });
 
     it('marks no row focused when focusedSetKey is null', () => {
-      const { getByTestId } = renderCard(true, { mode: 'live', focusedSetKey: null });
-      expect(getByTestId('set-row-101').props.accessibilityLabel).toBe('row 101 current');
+      const { getByTestId } = renderCard(true, {
+        mode: 'live',
+        focusedSetKey: null,
+      });
+      expect(getByTestId('set-row-101').props.accessibilityLabel).toBe(
+        'row 101 current'
+      );
     });
 
     it('translates the focus render key back to the churned server set id', () => {
@@ -790,7 +1016,7 @@ describe('ActiveWorkoutExerciseCard', () => {
         setRenderKeys: { '101': '-1' },
       });
       expect(getByTestId('set-row-101').props.accessibilityLabel).toBe(
-        'row 101 current focused',
+        'row 101 current focused'
       );
     });
 
@@ -805,19 +1031,57 @@ describe('ActiveWorkoutExerciseCard', () => {
     });
 
     it('captures a null baseline when the exercise has no history', () => {
-      mockUseExerciseStats.mockReturnValue({ data: { bestSet: null, lastSet: null } });
+      mockUseExerciseStats.mockReturnValue({
+        data: { bestSet: null, lastSet: null },
+      });
       renderCard(true, { mode: 'live' });
       expect(mockCapturePrBaseline).toHaveBeenCalledWith('ex-1', null);
     });
 
     it('renders the Best line from the historical best', () => {
       mockUseExerciseStats.mockReturnValue(STATS_WITH_BEST);
-      const { getByLabelText, getByTestId, getByText } = renderCard(true, { mode: 'live' });
+      const { getByLabelText, getByTestId, getByText } = renderCard(true, {
+        mode: 'live',
+      });
       expect(getByTestId('icon-trophy-outline')).toBeTruthy();
       expect(getByText('100 × 5')).toBeTruthy();
       // The trophy icon replaces the "Best" label visually; the accessible
       // name keeps the word.
       expect(getByLabelText('Best 100 × 5')).toBeTruthy();
+    });
+
+    it('shows an unweighted bodyweight rep PR as +0', () => {
+      mockUseExerciseStats.mockReturnValue({
+        data: {
+          bestSet: { weight: null, reps: 8, setNumber: 1 },
+          lastSet: null,
+        },
+      });
+      const exercise = makeExercise({
+        exercise_snapshot: {
+          ...makeExercise().exercise_snapshot!,
+          modality: 'bodyweight_reps',
+        } as never,
+        sets: [{ ...makeExercise().sets[0], id: 101, weight: null, reps: 12 }],
+      });
+      const { getByText, queryByText } = renderCard(true, {
+        mode: 'live',
+        exercise,
+        prSetIds: { '101': true },
+      });
+      expect(getByText('0 × 12')).toBeTruthy();
+      expect(queryByText('0 × 8')).toBeNull();
+    });
+
+    it('keeps a null-weight best hidden for a weighted exercise', () => {
+      mockUseExerciseStats.mockReturnValue({
+        data: {
+          bestSet: { weight: null, reps: 8, setNumber: 1 },
+          lastSet: null,
+        },
+      });
+      const { queryByTestId } = renderCard(true, { mode: 'live' });
+      expect(queryByTestId('icon-trophy-outline')).toBeNull();
     });
 
     it('surfaces the stamped session record when a set earned a PR', () => {
@@ -836,7 +1100,11 @@ describe('ActiveWorkoutExerciseCard', () => {
       // Without the viewed session's id to exclude, Best could show the very
       // workout being viewed — the hook stays disabled instead.
       const { queryByTestId } = renderCard(true, { mode: 'view' });
-      expect(mockUseExerciseStats).toHaveBeenCalledWith(null, undefined, undefined);
+      expect(mockUseExerciseStats).toHaveBeenCalledWith(
+        null,
+        undefined,
+        undefined
+      );
       expect(mockCapturePrBaseline).not.toHaveBeenCalled();
       expect(queryByTestId('icon-trophy-outline')).toBeNull();
     });
@@ -847,7 +1115,11 @@ describe('ActiveWorkoutExerciseCard', () => {
         mode: 'view',
         excludePresetEntryId: 'session-1',
       });
-      expect(mockUseExerciseStats).toHaveBeenCalledWith('ex-1', 'session-1', undefined);
+      expect(mockUseExerciseStats).toHaveBeenCalledWith(
+        'ex-1',
+        'session-1',
+        undefined
+      );
       expect(mockCapturePrBaseline).not.toHaveBeenCalled();
       expect(getByTestId('icon-trophy-outline')).toBeTruthy();
       expect(getByText('100 × 5')).toBeTruthy();
@@ -860,7 +1132,12 @@ describe('ActiveWorkoutExerciseCard', () => {
     const STATS_WITH_HISTORY = {
       data: {
         bestSet: null,
-        lastSet: { entryDate: '2026-01-05', weight: 100, reps: 5, setNumber: 2 },
+        lastSet: {
+          entryDate: '2026-01-05',
+          weight: 100,
+          reps: 5,
+          setNumber: 2,
+        },
         recentSessions: [
           {
             entryDate: '2026-01-05',
@@ -913,7 +1190,12 @@ describe('ActiveWorkoutExerciseCard', () => {
       mockUseExerciseStats.mockReturnValue({
         data: {
           bestSet: null,
-          lastSet: { entryDate: '2026-01-05', weight: 100, reps: 5, setNumber: 2 },
+          lastSet: {
+            entryDate: '2026-01-05',
+            weight: 100,
+            reps: 5,
+            setNumber: 2,
+          },
         },
       });
       const utils = renderCard(true, { mode: 'live' });
@@ -922,7 +1204,10 @@ describe('ActiveWorkoutExerciseCard', () => {
 
     it('omits the column entirely in view mode even with history fetched', () => {
       mockUseExerciseStats.mockReturnValue(STATS_WITH_HISTORY);
-      const utils = renderCard(true, { mode: 'view', excludePresetEntryId: 'session-1' });
+      const utils = renderCard(true, {
+        mode: 'view',
+        excludePresetEntryId: 'session-1',
+      });
       expect(prevOf(utils, 101)).toBe('prev:hidden');
     });
 
@@ -939,7 +1224,11 @@ describe('ActiveWorkoutExerciseCard', () => {
         excludePresetEntryId: 'session-9',
       });
 
-      expect(mockUseExerciseStats).toHaveBeenCalledWith('ex-1', 'session-9', undefined);
+      expect(mockUseExerciseStats).toHaveBeenCalledWith(
+        'ex-1',
+        'session-9',
+        undefined
+      );
       expect(prevOf(utils, 101)).toBe('prev:60x8');
     });
 
@@ -948,12 +1237,44 @@ describe('ActiveWorkoutExerciseCard', () => {
       renderCard(true, { mode: 'live' });
       expect(mockCapturePreviousSessionSets).toHaveBeenCalledWith(
         'ex-1',
-        STATS_WITH_HISTORY.data.recentSessions[0].sets,
+        STATS_WITH_HISTORY.data.recentSessions[0].sets
+      );
+    });
+
+    it("holds the capture until the preset's history scope has settled", () => {
+      mockUseExerciseStats.mockReturnValue(STATS_WITH_HISTORY);
+      mockCapturePreviousSessionSets.mockClear();
+      const { rerender, callbacks } = renderCard(true, {
+        mode: 'live',
+        historyScopeSettled: false,
+      });
+      expect(mockCapturePreviousSessionSets).not.toHaveBeenCalled();
+      expect(mockCapturePrBaseline).not.toHaveBeenCalled();
+
+      rerender(
+        <ActiveWorkoutExerciseCard
+          exercise={makeExercise()}
+          expanded
+          completedSetIds={{}}
+          activeSetId="101"
+          metricColumn="rpe"
+          weightUnit="kg"
+          getImageSource={() => null}
+          {...callbacks}
+          mode="live"
+          historyScopeSettled
+        />
+      );
+      expect(mockCapturePreviousSessionSets).toHaveBeenCalledWith(
+        'ex-1',
+        STATS_WITH_HISTORY.data.recentSessions[0].sets
       );
     });
 
     it('captures an empty history so no-history exercises still mark captured', () => {
-      mockUseExerciseStats.mockReturnValue({ data: { bestSet: null, lastSet: null } });
+      mockUseExerciseStats.mockReturnValue({
+        data: { bestSet: null, lastSet: null },
+      });
       renderCard(true, { mode: 'live' });
       expect(mockCapturePreviousSessionSets).toHaveBeenCalledWith('ex-1', []);
     });
@@ -1010,17 +1331,26 @@ describe('ActiveWorkoutExerciseCard', () => {
 
   describe('per-set note expand (live/edit)', () => {
     it('renders the detail panel under the matching expandedSetKey', () => {
-      const { getByTestId } = renderCard(true, { mode: 'live', expandedSetKey: '101' });
+      const { getByTestId } = renderCard(true, {
+        mode: 'live',
+        expandedSetKey: '101',
+      });
       expect(getByTestId('set-detail-101')).toBeTruthy();
     });
 
     it('renders the detail panel in edit mode', () => {
-      const { getByTestId } = renderCard(true, { mode: 'edit', expandedSetKey: '101' });
+      const { getByTestId } = renderCard(true, {
+        mode: 'edit',
+        expandedSetKey: '101',
+      });
       expect(getByTestId('set-detail-101')).toBeTruthy();
     });
 
     it('renders no detail panel when expandedSetKey matches no row', () => {
-      const { queryByTestId } = renderCard(true, { mode: 'live', expandedSetKey: null });
+      const { queryByTestId } = renderCard(true, {
+        mode: 'live',
+        expandedSetKey: null,
+      });
       expect(queryByTestId('set-detail-101')).toBeNull();
     });
 
@@ -1036,7 +1366,10 @@ describe('ActiveWorkoutExerciseCard', () => {
     });
 
     it('does not render the expand in view mode', () => {
-      const { queryByTestId } = renderCard(true, { mode: 'view', expandedSetKey: '101' });
+      const { queryByTestId } = renderCard(true, {
+        mode: 'view',
+        expandedSetKey: '101',
+      });
       expect(queryByTestId('set-detail-101')).toBeNull();
     });
   });
@@ -1047,11 +1380,16 @@ describe('ActiveWorkoutExerciseCard', () => {
         mode: 'live',
         exercise: makeExercise({ notes: 'go slow' }),
       });
-      expect(getByLabelText('Notes for Bench Press').props.value).toBe('go slow');
+      expect(getByLabelText('Notes for Bench Press').props.value).toBe(
+        'go slow'
+      );
     });
 
     it('shows the note field when the editor is opened even with no note', () => {
-      const { getByLabelText } = renderCard(true, { mode: 'live', noteEditorOpen: true });
+      const { getByLabelText } = renderCard(true, {
+        mode: 'live',
+        noteEditorOpen: true,
+      });
       expect(getByLabelText('Notes for Bench Press')).toBeTruthy();
     });
 
@@ -1065,7 +1403,9 @@ describe('ActiveWorkoutExerciseCard', () => {
         mode: 'edit',
         exercise: makeExercise({ notes: 'go slow' }),
       });
-      expect(getByLabelText('Notes for Bench Press').props.value).toBe('go slow');
+      expect(getByLabelText('Notes for Bench Press').props.value).toBe(
+        'go slow'
+      );
     });
 
     it('stays hidden without a commit handler (the preset form)', () => {
@@ -1091,9 +1431,14 @@ describe('ActiveWorkoutExerciseCard', () => {
 
     it('renders a saved set note as plain text', () => {
       const base = makeExercise();
-      const exercise = { ...base, sets: [{ ...base.sets[0], notes: 'slow tempo' }] };
+      const exercise = {
+        ...base,
+        sets: [{ ...base.sets[0], notes: 'slow tempo' }],
+      };
       const { getByLabelText } = renderCard(true, { mode: 'view', exercise });
-      expect(getByLabelText('Notes for set 1').props.children).toBe('slow tempo');
+      expect(getByLabelText('Notes for set 1').props.children).toBe(
+        'slow tempo'
+      );
     });
 
     it('renders nothing when the notes are empty', () => {

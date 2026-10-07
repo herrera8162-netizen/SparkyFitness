@@ -19,6 +19,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { resolveExerciseIdToUuid } from '../utils/uuidUtils.js';
 import { normalizeToStringArray } from '../utils/exerciseJsonFields.js';
+import { resolveTemplateStartDay } from '../utils/timezoneLoader.js';
 import {
   deriveExerciseModality,
   canEditGroupedWorkout,
@@ -39,7 +40,7 @@ import {
   muscleNameMap,
   equipmentNameMap,
 } from '../integrations/wger/wgerNameMapping.js';
-import { ExternalProviderType } from 'types/externalProvider.ts';
+import { ExternalProviderType } from '../types/externalProvider.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -256,8 +257,11 @@ async function getExerciseStats(
   presetId: number | null = null
 ) {
   const [bestRow, lastRow, recentRows] = await Promise.all([
-    // Best/last stay exercise-global by design: a heavier lift is a PR
-    // regardless of which preset it was performed under.
+    // Best/last stay exercise-global across presets by design: a heavier lift
+    // is a PR regardless of which preset it was performed under. Best alone
+    // skips sets done inside interval/WOD sessions — it is also the live PR
+    // baseline, so a metcon set must not raise the bar for strength work.
+    // Last stays unfiltered: it records what was done most recently.
     exerciseEntryDb.getBestSetForExercise(
       userId,
       exerciseId,
@@ -330,15 +334,20 @@ async function prepareExerciseEntryForCreate(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   entryData: any
 ) {
-  const resolvedExerciseId = await resolveExerciseIdToUuid(
-    entryData.exercise_id,
-    authenticatedUserId
-  );
-  const exercise = await exerciseDb.getExerciseById(
-    resolvedExerciseId,
-    authenticatedUserId
-  );
-  if (!exercise) {
+  // A null exercise_id is a preserved entry: the library exercise it was logged
+  // from has been deleted, and the entry now stands on the snapshot columns it
+  // already carries. Re-saving one must not go looking for the missing library
+  // row -- that lookup used to throw and made such a workout permanently
+  // uneditable.
+  const hasLibraryExercise =
+    entryData.exercise_id !== null && entryData.exercise_id !== undefined;
+  const resolvedExerciseId = hasLibraryExercise
+    ? await resolveExerciseIdToUuid(entryData.exercise_id, authenticatedUserId)
+    : null;
+  const exercise = hasLibraryExercise
+    ? await exerciseDb.getExerciseById(resolvedExerciseId, authenticatedUserId)
+    : null;
+  if (hasLibraryExercise && !exercise) {
     throw new Error('Exercise not found for snapshot.');
   }
   const durationMinutes =
@@ -347,8 +356,9 @@ async function prepareExerciseEntryForCreate(
       : setsDurationMinutes(entryData.sets);
   let calculatedCaloriesBurned = entryData.calories_burned;
   if (
-    calculatedCaloriesBurned === undefined ||
-    calculatedCaloriesBurned === null
+    exercise &&
+    (calculatedCaloriesBurned === undefined ||
+      calculatedCaloriesBurned === null)
   ) {
     const caloriesPerHour =
       await calorieCalculationService.estimateCaloriesBurnedPerHour(
@@ -362,9 +372,17 @@ async function prepareExerciseEntryForCreate(
     ...entryData,
     user_id: authenticatedUserId,
     exercise_id: resolvedExerciseId,
-    exercise_name: exercise.name,
-    calories_per_hour: exercise.calories_per_hour,
-    calories_burned: calculatedCaloriesBurned ?? 0,
+    // Without a library row there is nothing to re-snapshot from, so leave the
+    // snapshot fields absent and let the update path keep what the entry
+    // already stores (see mergedData in models/exerciseEntry.ts). The same goes
+    // for calories: undefined preserves the stored value rather than zeroing it.
+    ...(exercise
+      ? {
+          exercise_name: exercise.name,
+          calories_per_hour: exercise.calories_per_hour,
+          calories_burned: calculatedCaloriesBurned ?? 0,
+        }
+      : { calories_burned: calculatedCaloriesBurned ?? undefined }),
     duration_minutes: durationMinutes ?? 0,
     workout_plan_assignment_id: entryData.workout_plan_assignment_id || null,
     image_url: entryData.image_url || null,
@@ -496,6 +514,7 @@ async function updateExerciseEntry(
         updateData.exercise_id,
         authenticatedUserId
       );
+      let estimated = existingEntry.calories_burned ?? 0;
       if (exercise) {
         const caloriesPerHour =
           await calorieCalculationService.estimateCaloriesBurnedPerHour(
@@ -503,15 +522,20 @@ async function updateExerciseEntry(
             authenticatedUserId,
             updateData.sets
           );
-        updateData.calories_burned =
-          (caloriesPerHour / 60) * updateData.duration_minutes;
+        estimated = (caloriesPerHour / 60) * updateData.duration_minutes;
       } else {
         log(
           'warn',
           `Exercise ${updateData.exercise_id} not found. Cannot auto-calculate calories_burned.`
         );
-        updateData.calories_burned = 0;
       }
+      // A watch-measured figure (active_calories) beats the formula, same
+      // rule as the grouped-session edit path.
+      updateData.calories_burned = resolveEditedCaloriesBurned(
+        undefined,
+        existingEntry,
+        estimated
+      );
     } else if (updateData.calories_burned === undefined) {
       // If calories_burned is not in updateData, use existing value or 0
       updateData.calories_burned = existingEntry.calories_burned || 0;
@@ -759,16 +783,38 @@ async function updateExercise(
     throw error;
   }
 }
+/**
+ * Delete modes offered to the user. The server no longer infers intent from
+ * reference counts -- the caller says what it wants and this function either
+ * honours it or refuses.
+ *
+ * - `hide`: the exercise stops appearing in search. Nothing else changes, so
+ *   every diary entry, preset and plan keeps working exactly as before.
+ * - `delete`: the library row goes. Presets and plans lose it (they cascade),
+ *   but diary entries survive on their own snapshot with a null exercise_id.
+ * - `delete_with_history`: a `delete`, plus this user's own diary entries for
+ *   the exercise.
+ *
+ * In every mode another user's diary is left alone.
+ */
+type ExerciseDeleteMode = 'hide' | 'delete' | 'delete_with_history';
+const EXERCISE_DELETE_MODES: ExerciseDeleteMode[] = [
+  'hide',
+  'delete',
+  'delete_with_history',
+];
+function isExerciseDeleteMode(value: unknown): value is ExerciseDeleteMode {
+  return EXERCISE_DELETE_MODES.includes(value as ExerciseDeleteMode);
+}
 async function deleteExercise(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  authenticatedUserId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  exerciseId: any,
-  forceDelete = false
+  authenticatedUserId: string,
+  exerciseId: string,
+  mode: ExerciseDeleteMode = 'delete',
+  currentClientDate?: string
 ) {
   log(
     'info',
-    `deleteExercise: Attempting to delete exercise ${exerciseId} by user ${authenticatedUserId}. Force delete: ${forceDelete}`
+    `deleteExercise: Attempting to ${mode} exercise ${exerciseId} by user ${authenticatedUserId}.`
   );
   try {
     const exerciseOwnerId = await exerciseDb.getExerciseOwnerId(
@@ -782,6 +828,18 @@ async function deleteExercise(
       );
       throw new Error('Exercise not found.');
     }
+
+    if (mode === 'hide') {
+      await exerciseDb.updateExercise(exerciseId, exerciseOwnerId, {
+        is_quick_exercise: true,
+      });
+      return {
+        message:
+          'Exercise hidden. It no longer appears in search; existing diary entries, presets and plans are unchanged.',
+        status: 'hidden',
+      };
+    }
+
     const deletionImpact = await exerciseDb.getExerciseDeletionImpact(
       exerciseId,
       authenticatedUserId
@@ -790,85 +848,52 @@ async function deleteExercise(
       'info',
       `deleteExercise: Deletion impact for exercise ${exerciseId}: ${JSON.stringify(deletionImpact)}`
     );
-    const {
-      exerciseEntriesCount,
-      workoutPlansCount,
-      workoutPresetsCount,
-      otherUserReferences,
-    } = deletionImpact;
-    const totalReferences =
-      exerciseEntriesCount + workoutPlansCount + workoutPresetsCount;
-    // Scenario 1: No references at all
-    if (totalReferences === 0) {
+
+    // Presets and plans cascade from the library row for EVERY user, not just
+    // this one (workout_preset_exercises / workout_plan_template_assignments are
+    // both ON DELETE CASCADE). Diary entries would survive, but another user's
+    // presets and plans would silently lose the exercise -- so when anyone else
+    // still references it, hiding is the only honest option.
+    if (deletionImpact.otherUserReferences > 0) {
       log(
         'info',
-        `deleteExercise: Exercise ${exerciseId} has no references. Performing hard delete.`
-      );
-      const success = await exerciseDb.deleteExerciseAndDependencies(
-        exerciseId,
-        authenticatedUserId
-      );
-      if (!success) {
-        throw new Error('Exercise not found or not authorized to delete.');
-      }
-      return { message: 'Exercise deleted permanently.', status: 'deleted' };
-    }
-    // Scenario 2: References only by the current user
-    if (otherUserReferences === 0) {
-      if (forceDelete) {
-        log(
-          'info',
-          `deleteExercise: Exercise ${exerciseId} has references only by current user. Force deleting.`
-        );
-        const success = await exerciseDb.deleteExerciseAndDependencies(
-          exerciseId,
-          authenticatedUserId
-        );
-        if (!success) {
-          throw new Error('Exercise not found or not authorized to delete.');
-        }
-        return {
-          message: 'Exercise and all its references deleted permanently.',
-          status: 'force_deleted',
-        };
-      } else {
-        // Hide the exercise (mark as quick/hidden) so it won't appear in searches but existing references remain
-        log(
-          'info',
-          `deleteExercise: Exercise ${exerciseId} has references only by current user. Hiding as quick exercise.`
-        );
-        await exerciseDb.updateExercise(exerciseId, exerciseOwnerId, {
-          is_quick_exercise: true,
-        });
-        return {
-          message:
-            'Exercise hidden (marked as quick exercise). Existing references remain.',
-          status: 'hidden',
-        };
-      }
-    }
-    // Scenario 3: References by other users
-    if (otherUserReferences > 0) {
-      // If other users reference this exercise, hide it (mark as quick exercise) so it's removed from searches
-      log(
-        'info',
-        `deleteExercise: Exercise ${exerciseId} has references by other users. Hiding as quick exercise.`
+        `deleteExercise: Exercise ${exerciseId} is referenced by other users. Hiding instead of deleting.`
       );
       await exerciseDb.updateExercise(exerciseId, exerciseOwnerId, {
         is_quick_exercise: true,
       });
       return {
         message:
-          'Exercise hidden (marked as quick exercise). Existing references remain.',
+          'Exercise is used by other users, so it was hidden rather than deleted. Their history, presets and plans are unaffected.',
         status: 'hidden',
       };
     }
-    // Fallback for any unhandled cases (should not be reached)
-    log(
-      'warn',
-      `deleteExercise: Unhandled deletion scenario for exercise ${exerciseId}.`
+
+    const today = await resolveTemplateStartDay(
+      authenticatedUserId,
+      currentClientDate
     );
-    throw new Error('Could not delete exercise due to an unknown issue.');
+    const deleteResult = await exerciseDb.deleteExerciseAndDependencies(
+      exerciseId,
+      authenticatedUserId,
+      today,
+      { deleteHistory: mode === 'delete_with_history' }
+    );
+    if (!deleteResult.success) {
+      throw new Error('Exercise not found or not authorized to delete.');
+    }
+
+    return mode === 'delete_with_history'
+      ? {
+          message: `Exercise deleted along with ${deleteResult.deletedEntries} of your diary entries.`,
+          status: 'deleted_with_history',
+          deletedEntries: deleteResult.deletedEntries,
+        }
+      : {
+          message:
+            'Exercise deleted. Your logged workouts are preserved in the diary.',
+          status: 'deleted',
+        };
   } catch (error) {
     log(
       'error',
@@ -1069,7 +1094,10 @@ async function searchExternalExercises(
           id: exercise.id.toString(),
           name: exercise.name,
           category: exercise.category?.name ?? 'Uncategorized',
-          modality: deriveExerciseModality(exercise.category?.name),
+          modality: deriveExerciseModality(
+            exercise.category?.name,
+            exercise.equipment.map((e) => e.name)
+          ),
           calories_per_hour: 0,
           source: 'wger',
           description: instructions[0] ?? exercise.name,
@@ -1115,7 +1143,10 @@ async function searchExternalExercises(
         id: exercise.id,
         name: exercise.name,
         category: exercise.category,
-        modality: deriveExerciseModality(exercise.category),
+        modality: deriveExerciseModality(
+          exercise.category,
+          normalizeToStringArray(exercise.equipment)
+        ),
         calories_per_hour: 0,
         description: exercise.description,
         source: 'free-exercise-db',
@@ -1868,7 +1899,8 @@ async function createGroupedExerciseEntriesWithClient(
         : {}),
       sort_order: exercise.sort_order ?? 0,
       superset_group: exercise.superset_group ?? null,
-      workout_plan_assignment_id: workoutPlanAssignmentId,
+      workout_plan_assignment_id:
+        exercise.workout_plan_assignment_id || workoutPlanAssignmentId || null,
       distance: exercise.distance,
       avg_heart_rate: exercise.avg_heart_rate,
       entry_time: exercise.entry_time ?? null,
@@ -1908,14 +1940,16 @@ async function createGroupedWorkoutSession(
       name,
       description,
       notes,
+      location,
       source = 'manual',
       exercises,
       workoutPlanAssignmentId = null,
     } = sessionData;
-    let presetEntry;
-    let exerciseDefinitions;
+    let presetEntry: any;
+    let exerciseDefinitions: any;
     let childEntrySource = source;
     let preserveLegacyPresetDurationFallback = false;
+
     if (workout_preset_id !== undefined && workout_preset_id !== null) {
       const workoutPreset = await workoutPresetRepository.getWorkoutPresetById(
         workout_preset_id,
@@ -1937,20 +1971,22 @@ async function createGroupedWorkoutSession(
                 : workoutPreset.description,
             entry_date,
             notes,
+            location: location ?? null,
             source,
           },
           actingUserId
         );
-      if (exercises !== undefined) {
-        // Client supplied its own exercise/set structure (e.g. a live
-        // workout's Hevy-style placeholders) — use it verbatim. The entry is
-        // still tagged to the preset (for recentSessions stats scoping), but
-        // keeps its own source and stays nested-edit-able like any other
-        // client-authored session, unlike a pure workout_preset_id start
-        // (source 'Workout Preset', not in EDITABLE_SOURCES).
-        exerciseDefinitions = exercises;
-      } else {
-        exerciseDefinitions = workoutPreset.exercises || [];
+
+      // Client supplied its own exercise/set structure (e.g. a live
+      // workout's Hevy-style placeholders) — use it verbatim. The entry is
+      // still tagged to the preset (for recentSessions stats scoping), but
+      // keeps its own source and stays nested-edit-able like any other
+      // client-authored session, unlike a pure workout_preset_id start
+      // (source 'Workout Preset', not in EDITABLE_SOURCES).
+      exerciseDefinitions =
+        exercises !== undefined ? exercises : workoutPreset.exercises || [];
+
+      if (exercises === undefined) {
         childEntrySource = 'Workout Preset';
         preserveLegacyPresetDurationFallback = true;
       }
@@ -1965,12 +2001,14 @@ async function createGroupedWorkoutSession(
             description: description ?? null,
             entry_date,
             notes: notes ?? null,
+            location: location ?? null,
             source,
           },
           actingUserId
         );
       exerciseDefinitions = exercises || [];
     }
+
     await createGroupedExerciseEntriesWithClient(
       client,
       userId,
@@ -1984,6 +2022,25 @@ async function createGroupedWorkoutSession(
         preserveLegacyPresetDurationFallback,
       }
     );
+    if (
+      sessionData.activity_details &&
+      sessionData.activity_details.length > 0
+    ) {
+      for (const detail of sessionData.activity_details) {
+        await activityDetailsRepository._createActivityDetailWithClient(
+          client,
+          {
+            exercise_entry_id: null,
+            exercise_preset_entry_id: presetEntry.id,
+            provider_name: detail.provider_name || 'SparkyFitness',
+            detail_type: detail.detail_type || 'wod_score',
+            detail_data: detail.detail_data,
+            created_by_user_id: actingUserId || userId,
+            updated_by_user_id: actingUserId || userId,
+          }
+        );
+      }
+    }
     const groupedSession = await getGroupedExerciseSessionByIdWithClient(
       client,
       userId,
@@ -1999,6 +2056,43 @@ async function createGroupedWorkoutSession(
     client.release();
   }
 }
+/**
+ * Picks the calorie figure an edited exercise entry should keep.
+ *
+ * Precedence: a value the client sent is a deliberate override and wins. A
+ * saved figure that already differs from `active_calories` is an earlier
+ * override — later edits omit `calories_burned` unless the user changes it
+ * again, and preferring the measurement would wipe it. Otherwise a device
+ * measurement beats the duration-and-sets estimate. Only an entry with no
+ * measurement re-derives.
+ *
+ * The measurement lives in `active_calories`, a telemetry column the entry
+ * update preserves. The watch writes the same number to both columns, so
+ * they diverge only after an explicit override. Postgres returns `numeric`
+ * as a string, hence the parse.
+ */
+function resolveEditedCaloriesBurned(
+  clientCalories: unknown,
+  existingEntry:
+    { active_calories?: unknown; calories_burned?: unknown } | null | undefined,
+  recomputed: number
+): number {
+  if (typeof clientCalories === 'number') return clientCalories;
+  const measured = parseMeasuredCalories(existingEntry?.active_calories);
+  const saved = parseMeasuredCalories(existingEntry?.calories_burned);
+  if (measured !== undefined && saved !== undefined && saved !== measured) {
+    return saved;
+  }
+  return measured !== undefined ? measured : recomputed;
+}
+
+/** Finite nonnegative device measurement. `null`/`''` must not become 0. */
+function parseMeasuredCalories(raw: unknown): number | undefined {
+  if (raw === null || raw === undefined || raw === '') return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
 async function updateGroupedWorkoutSession(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   userId: any,
@@ -2015,7 +2109,10 @@ async function updateGroupedWorkoutSession(
     const existingSession = await getGroupedExerciseSessionByIdWithClient(
       client,
       userId,
-      presetEntryId
+      presetEntryId,
+      // Child rows are about to be rewritten from this snapshot. Lock them
+      // so a watch flush cannot commit newer HR or calories in between.
+      updateData.exercises !== undefined
     );
     if (!existingSession) {
       throw createServiceError(404, 'Exercise preset entry not found.');
@@ -2028,6 +2125,7 @@ async function updateGroupedWorkoutSession(
         name: updateData.name,
         description: updateData.description,
         notes: updateData.notes,
+        location: updateData.location,
         entry_date: updateData.entry_date,
       }
     );
@@ -2041,20 +2139,13 @@ async function updateGroupedWorkoutSession(
       }
 
       const incomingExercises = updateData.exercises;
-      const withId = incomingExercises.filter(
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (e: any) => e.id !== undefined && e.id !== null
-      ).length;
-
-      if (withId !== 0 && withId !== incomingExercises.length) {
-        throw createServiceError(
-          400,
-          'exercises[].id must be provided for all entries or none.'
-        );
-      }
-
-      const useReconcile =
-        withId === incomingExercises.length && incomingExercises.length > 0;
+      // Any stable entry UUID is enough to reconcile in place. New
+      // occurrences omit id; mixed payloads used to 400 and force the
+      // client to strip every id, which then reattached telemetry by
+      // exercise_id. Keep ids that exist, create the ones that don't.
+      const useReconcile = incomingExercises.some(
+        (e: { id?: unknown }) => typeof e.id === 'string'
+      );
 
       // Capture the workout plan assignment before any child rows are deleted:
       // the assignment id lives on exercise_entries, so once delete-and-recreate
@@ -2068,6 +2159,30 @@ async function updateGroupedWorkoutSession(
         );
 
       if (!useReconcile) {
+        // No string ids means we cannot match replacements to prior rows.
+        // Deleting would drop measured calories / HR / zones. Current
+        // clients send ids (mixed is allowed); older all-id-absent payloads
+        // are refused when the session already has watch telemetry.
+        const hasWatchTelemetry = (existingSession.exercises || []).some(
+          (ex: {
+            avg_heart_rate?: unknown;
+            max_heart_rate?: unknown;
+            active_calories?: unknown;
+          }) =>
+            (ex?.avg_heart_rate !== null &&
+              ex?.avg_heart_rate !== undefined &&
+              ex?.avg_heart_rate !== '') ||
+            (ex?.max_heart_rate !== null &&
+              ex?.max_heart_rate !== undefined &&
+              ex?.max_heart_rate !== '') ||
+            parseMeasuredCalories(ex?.active_calories) !== undefined
+        );
+        if (hasWatchTelemetry) {
+          throw createServiceError(
+            409,
+            'Exercise entry ids are required to edit a session with watch telemetry.'
+          );
+        }
         await exerciseEntryDb.deleteExerciseEntriesByPresetEntryIdWithClient(
           client,
           userId,
@@ -2116,7 +2231,7 @@ async function updateGroupedWorkoutSession(
           // client uuid, then skip the update/reconcile-sets path below — the
           // create already inserts its sets, so falling through would
           // double-insert them.
-          if (!existingById.has(ex.id)) {
+          if (typeof ex.id !== 'string' || !existingById.has(ex.id)) {
             await createGroupedExerciseEntriesWithClient(
               client,
               userId,
@@ -2167,9 +2282,15 @@ async function updateGroupedWorkoutSession(
                 preparedEntry.distance ??
                 existingById.get(ex.id)?.distance ??
                 null,
-              avg_heart_rate: preparedEntry.avg_heart_rate,
+              avg_heart_rate:
+                existingById.get(ex.id)?.avg_heart_rate ??
+                preparedEntry.avg_heart_rate,
               duration_minutes: preparedEntry.duration_minutes,
-              calories_burned: preparedEntry.calories_burned,
+              calories_burned: resolveEditedCaloriesBurned(
+                ex.calories_burned,
+                existingById.get(ex.id),
+                preparedEntry.calories_burned
+              ),
               entry_date: targetEntryDate,
               entry_time: ex.entry_time ?? null,
             },
@@ -2195,6 +2316,44 @@ async function updateGroupedWorkoutSession(
         updateData.entry_date,
         actingUserId
       );
+    }
+    if (updateData.activity_details !== undefined) {
+      const providersToReplace = new Set<string>();
+      if (updateData.activity_details.length > 0) {
+        for (const detail of updateData.activity_details) {
+          const providerName = detail.provider_name || 'SparkyFitness';
+          const detailType = detail.detail_type || 'wod_score';
+          providersToReplace.add(`${providerName}::${detailType}`);
+        }
+      } else {
+        providersToReplace.add('SparkyFitness::wod_score');
+      }
+      for (const item of providersToReplace) {
+        const [providerName, detailType] = item.split('::');
+        await activityDetailsRepository._deleteActivityDetailsByEntryIdAndProviderWithClient(
+          client,
+          userId,
+          presetEntryId,
+          providerName,
+          detailType
+        );
+      }
+      if (updateData.activity_details.length > 0) {
+        for (const detail of updateData.activity_details) {
+          await activityDetailsRepository._createActivityDetailWithClient(
+            client,
+            {
+              exercise_entry_id: null,
+              exercise_preset_entry_id: presetEntryId,
+              provider_name: detail.provider_name || 'SparkyFitness',
+              detail_type: detail.detail_type || 'wod_score',
+              detail_data: detail.detail_data,
+              created_by_user_id: actingUserId || userId,
+              updated_by_user_id: actingUserId || userId,
+            }
+          );
+        }
+      }
     }
     const groupedSession = await getGroupedExerciseSessionByIdWithClient(
       client,
@@ -2544,6 +2703,8 @@ export { updateExerciseEntry };
 export { deleteExerciseEntry };
 export { updateExercise };
 export { deleteExercise };
+export { isExerciseDeleteMode };
+export type { ExerciseDeleteMode };
 export { getExerciseEntriesByDate };
 export { addFreeExerciseDBExerciseToUserExercises };
 export { getSuggestedExercises };
@@ -2581,6 +2742,7 @@ export default {
   deleteExerciseEntry,
   updateExercise,
   deleteExercise,
+  isExerciseDeleteMode,
   getExerciseEntriesByDate,
   addFreeExerciseDBExerciseToUserExercises,
   getSuggestedExercises,

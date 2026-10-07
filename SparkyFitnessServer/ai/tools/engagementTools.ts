@@ -18,11 +18,7 @@ function daysBetween(from: string, to: string): number {
   return Math.round((Date.parse(to) - Date.parse(from)) / MS_PER_DAY);
 }
 
-export function buildEngagementTools(
-  userId: string,
-  tz: string,
-  _actingUserId?: string
-) {
+export function buildEngagementTools(userId: string, tz: string) {
   return {
     sparky_check_engagement: tool({
       description:

@@ -19,6 +19,10 @@ function scaleProviderNutrients(
 // Using native fetch (standard in Node 22+)
 const USDA_API_BASE_URL = 'https://api.nal.usda.gov/fdc/v1';
 
+// Excludes Branded (manufacturer SKU noise) by default so a plain query like
+// "chicken breast" reaches the generic entry instead of retail duplicates.
+const DEFAULT_USDA_SEARCH_DATA_TYPES = 'Foundation,SR Legacy,Survey (FNDDS)';
+
 const STANDARD_UNITS = new Set([
   'g',
   'ml',
@@ -94,7 +98,8 @@ async function searchUsdaFoods(
   query: string,
   apiKey: string | undefined,
   page = 1,
-  pageSize = 50
+  pageSize = 50,
+  dataType: string = DEFAULT_USDA_SEARCH_DATA_TYPES
 ): Promise<
   UsdaSearchResponse & {
     pagination: {
@@ -106,8 +111,27 @@ async function searchUsdaFoods(
   }
 > {
   try {
-    const searchUrl = `${USDA_API_BASE_URL}/foods/search?query=${encodeURIComponent(query)}&pageNumber=${page}&pageSize=${pageSize}&api_key=${apiKey || ''}`;
-    const response = await fetch(searchUrl, { method: 'GET' });
+    // POST with a JSON body rather than GET query params: USDA's gateway
+    // rejects roughly half of GET searches that carry a dataType filter with
+    // a bare nginx 400, whatever the encoding, while the POST form is
+    // reliable (#2675). The api_key stays in the query string.
+    const searchUrl = `${USDA_API_BASE_URL}/foods/search?${new URLSearchParams({
+      api_key: apiKey || '',
+    }).toString()}`;
+    const dataTypes = dataType
+      .split(',')
+      .map((type) => type.trim())
+      .filter(Boolean);
+    const response = await fetch(searchUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        pageNumber: page,
+        pageSize,
+        ...(dataTypes.length > 0 && { dataType: dataTypes }),
+      }),
+    });
     log('debug', 'USDA API Search Response Status:', response.status);
     if (!response.ok) {
       const errorText = await response.text();
@@ -336,6 +360,15 @@ function mapUsdaBarcodeProduct(food: UsdaFood) {
           Math.round((nutrients[1292] || 0) * scale * 10) / 10,
         vitamin_a: Math.round((nutrients[1104] || 0) * 0.3 * scale),
         vitamin_c: Math.round((nutrients[1162] || 0) * scale * 10) / 10,
+        // FDC nutrient id 1057 = Caffeine, reported mg/100g -- no unit
+        // conversion needed, unlike the g/100g nutrients above.
+        caffeine_mg: Math.round((nutrients[1057] || 0) * scale * 10) / 10,
+        // FDC nutrient id 1051 = Water, reported in grams/100g. Water's
+        // density is ~1 g/ml, so grams and millilitres are numerically
+        // equivalent -- no unit conversion, same pattern as protein/carbs.
+        water_ml: Math.round((nutrients[1051] || 0) * scale * 10) / 10,
+        // FDC nutrient id 1018 = Alcohol, ethyl, reported in grams/100g.
+        alcohol_g: Math.round((nutrients[1018] || 0) * scale * 10) / 10,
         provider_nutrients: scaleProviderNutrients(
           providerNutrientsByLabel,
           scale

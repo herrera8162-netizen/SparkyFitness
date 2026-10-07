@@ -22,6 +22,9 @@ import {
   Cookie, // Used for Snacks
   UtensilsCrossed, // Used for Dinner
   Salad, // Used for Food Log
+  BookOpen, // Used for the docs link
+  Languages, // Used for the translation link
+  HeartPulse, // Used for the delegate-only Symptoms page
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { toast } from '@/hooks/use-toast';
@@ -33,6 +36,7 @@ import GlobalSyncButton from '@/components/GlobalSyncButton';
 import ProfileSwitcher from '@/components/ProfileSwitcher';
 import GitHubStarCounter from '@/components/GitHubStarCounter';
 import GitHubSponsorButton from '@/components/GitHubSponsorButton';
+import HeaderLinkPill from '@/components/HeaderLinkPill';
 import GlobalNotificationIcon from '@/components/GlobalNotificationIcon';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
@@ -44,6 +48,8 @@ import { useCurrentVersionQuery } from '@/hooks/useGeneralQueries';
 import { useCycleSettings } from '@/hooks/useCycle';
 import { cn } from '@/lib/utils';
 import { getGridClassNormal } from '@/utils/layout';
+
+const SHOW_SPONSOR_BUTTON = false;
 
 interface AddCompItem {
   value: string;
@@ -91,15 +97,15 @@ const MainLayout: React.FC<MainLayoutProps> = ({
     try {
       await signOut();
       toast({
-        title: 'Success',
-        description: 'Signed out successfully',
+        title: t('common.success', 'Success'),
+        description: t('auth.signedOut', 'Signed out successfully'),
       });
       navigate('/login'); // Navigate to login page after sign out
     } catch (err) {
       error(loggingLevel, 'MainLayout: Sign out error:', err);
       toast({
-        title: 'Error',
-        description: 'Failed to sign out',
+        title: t('common.error', 'Error'),
+        description: t('auth.signOutFailed', 'Failed to sign out'),
         variant: 'destructive',
       });
     }
@@ -110,7 +116,11 @@ const MainLayout: React.FC<MainLayoutProps> = ({
     if (!isActingOnBehalf) {
       // Keep this order consistent with the desktop tab order in availableTabs:
       // Check-In, Cycle, Medications, Foods, Exercises, Goals.
-      items.push({ value: 'checkin', label: 'Check-In', icon: Activity });
+      items.push({
+        value: 'checkin',
+        label: t('nav.checkin', 'Check-In'),
+        icon: Activity,
+      });
       if (cycleSettings?.enabled) {
         items.push({
           value: 'cycle',
@@ -128,13 +138,13 @@ const MainLayout: React.FC<MainLayoutProps> = ({
           label: t('nav.medications', 'Medications'),
           icon: Pill,
         },
-        { value: 'foods', label: 'Foods', icon: Utensils },
+        { value: 'foods', label: t('nav.foods', 'Foods'), icon: Utensils },
         {
           value: 'exercises',
           label: t('exercise.title', 'Exercises'),
           icon: Dumbbell,
         },
-        { value: 'goals', label: 'Goals', icon: Target },
+        { value: 'goals', label: t('nav.goals', 'Goals'), icon: Target },
         {
           value: 'foodlog',
           label: t('nav.foodLog', 'Food Log'),
@@ -144,7 +154,11 @@ const MainLayout: React.FC<MainLayoutProps> = ({
       );
     } else {
       if (hasWritePermission('checkin')) {
-        items.push({ value: 'checkin', label: 'Check-In', icon: Activity });
+        items.push({
+          value: 'checkin',
+          label: t('nav.checkin', 'Check-In'),
+          icon: Activity,
+        });
       }
       if (hasWritePermission('diary')) {
         items.push({
@@ -273,6 +287,18 @@ const MainLayout: React.FC<MainLayoutProps> = ({
           icon: Pill,
         });
       }
+      // Owners and check-in delegates reach symptoms from the Check-in page; a
+      // delegate who may track symptoms but not check-ins gets their own entry.
+      if (
+        hasWritePermission('can_manage_symptoms') &&
+        !hasWritePermission('checkin')
+      ) {
+        tabs.push({
+          value: '/symptoms',
+          label: t('nav.symptoms', 'Symptoms'),
+          icon: HeartPulse,
+        });
+      }
     }
     if (user?.role === 'admin' && !isActingOnBehalf) {
       tabs.push({ value: '/admin', label: t('nav.admin'), icon: Shield });
@@ -333,6 +359,16 @@ const MainLayout: React.FC<MainLayoutProps> = ({
           value: '/medications',
           label: t('nav.medications', 'Medications'),
           icon: Pill,
+        });
+      }
+      if (
+        hasWritePermission('can_manage_symptoms') &&
+        !hasWritePermission('checkin')
+      ) {
+        mobileTabs.push({
+          value: '/symptoms',
+          label: t('nav.symptoms', 'Symptoms'),
+          icon: HeartPulse,
         });
       }
     }
@@ -450,7 +486,19 @@ const MainLayout: React.FC<MainLayoutProps> = ({
             {!isMobile && (
               <>
                 <GitHubStarCounter owner="CodeWithCJ" repo="SparkyFitness" />
-                <GitHubSponsorButton owner="CodeWithCJ" />
+                {SHOW_SPONSOR_BUTTON && (
+                  <GitHubSponsorButton owner="CodeWithCJ" />
+                )}
+                <HeaderLinkPill
+                  href="https://codewithcj.github.io/SparkyFitness/"
+                  label={t('layout.docs', 'Docs')}
+                  icon={BookOpen}
+                />
+                <HeaderLinkPill
+                  href="https://weblate.sparkyfitness.com/engage/sparkyfitness/"
+                  label={t('layout.translate', 'Translate')}
+                  icon={Languages}
+                />
               </>
             )}
           </div>
@@ -467,12 +515,14 @@ const MainLayout: React.FC<MainLayoutProps> = ({
                 size="sm"
                 onClick={onStartOnboarding}
                 className="flex items-center gap-2"
-                title="Complete your setup"
+                title={t('onboarding.completeSetup', 'Complete your setup')}
               >
                 <span className="hidden sm:inline">
                   {t('onboarding.completeSetup', 'Complete Setup')}
                 </span>
-                <span className="sm:hidden">Setup</span>
+                <span className="sm:hidden">
+                  {t('onboarding.setupShort', 'Setup')}
+                </span>
               </Button>
             )}
             <GlobalNotificationIcon />
@@ -486,7 +536,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({
             >
               <LogOut className="h-4 w-4" />
               <span className="hidden sm:inline dark:text-slate-300">
-                Sign Out
+                {t('auth.signOut', 'Sign Out')}
               </span>
             </Button>
           </div>
@@ -598,9 +648,21 @@ const MainLayout: React.FC<MainLayoutProps> = ({
       <footer className="text-center text-muted-foreground text-sm py-4">
         {isMobile ? (
           <div className="flex flex-col items-center gap-2 mb-14">
-            <div className="flex justify-center gap-2">
+            <div className="flex flex-wrap justify-center gap-2">
               <GitHubStarCounter owner="CodeWithCJ" repo="SparkyFitness" />
-              <GitHubSponsorButton owner="CodeWithCJ" />
+              {SHOW_SPONSOR_BUTTON && (
+                <GitHubSponsorButton owner="CodeWithCJ" />
+              )}
+              <HeaderLinkPill
+                href="https://codewithcj.github.io/SparkyFitness/"
+                label={t('layout.docs', 'Docs')}
+                icon={BookOpen}
+              />
+              <HeaderLinkPill
+                href="https://weblate.sparkyfitness.com/engage/sparkyfitness/"
+                label={t('layout.translate', 'Translate')}
+                icon={Languages}
+              />
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -616,7 +678,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({
                 className="cursor-pointer underline hover:text-foreground bg-transparent border-0 p-0 text-inherit font-normal text-sm"
                 onClick={onShowNewReleaseDialog}
               >
-                What's New
+                {t('release.whatsNew', "What's New")}
               </button>
             </div>
           </div>
@@ -635,7 +697,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({
               className="cursor-pointer underline hover:text-foreground bg-transparent border-0 p-0 text-inherit font-normal text-sm"
               onClick={onShowNewReleaseDialog}
             >
-              What's New
+              {t('release.whatsNew', "What's New")}
             </button>
           </div>
         )}

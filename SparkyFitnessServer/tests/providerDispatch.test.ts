@@ -102,7 +102,8 @@ function mockFetch(
   const m = vi.fn().mockResolvedValue({
     ok: init.ok ?? true,
     status: init.status ?? 200,
-    text: async () => (typeof jsonBody === 'string' ? jsonBody : ''),
+    text: async () =>
+      typeof jsonBody === 'string' ? jsonBody : JSON.stringify(jsonBody),
     json: async () => jsonBody,
   });
   global.fetch = m as typeof global.fetch;
@@ -566,6 +567,99 @@ describe('dispatchAiRequest — text-only structured request shapes', () => {
     expect(body.provider).toBeUndefined();
   });
 
+  it('perplexity routes to api.perplexity.ai/v1/responses and uses strict json_schema', async () => {
+    const m = mockFetch({ output_text: JSON.stringify(SAMPLE) });
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'perplexity',
+          model_name: 'sonar',
+        }),
+      })
+    );
+    const { url, body } = captured(m);
+    expect(url).toBe('https://api.perplexity.ai/v1/responses');
+    expect((body.response_format as { type: string }).type).toBe('json_schema');
+    expect(body.input).toBeDefined();
+    expect(body.messages).toBeUndefined();
+    expect(body.preset).toBe('fast');
+    expect(body.model).toBeUndefined();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.json).toEqual(SAMPLE);
+    }
+  });
+
+  it('perplexity maps custom Anthropic models with model and max_output_tokens', async () => {
+    const m = mockFetch({ output_text: JSON.stringify(SAMPLE) });
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'perplexity',
+          model_name: 'anthropic/claude-sonnet-4-6',
+        }),
+      })
+    );
+    const { url, body } = captured(m);
+    expect(url).toBe('https://api.perplexity.ai/v1/responses');
+    expect(body.model).toBe('anthropic/claude-sonnet-4-6');
+    expect(body.preset).toBeUndefined();
+    expect(body.max_output_tokens).toBe(4096);
+    expect(result.ok).toBe(true);
+  });
+
+  it('perplexity formats vision requests with input_image and input_text in Responses schema', async () => {
+    const m = mockFetch({ output_text: JSON.stringify(SAMPLE) });
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({ service_type: 'perplexity' }),
+        images: [{ mimeType: 'image/jpeg', base64: 'abc123xyz' }],
+      })
+    );
+    const { url, body } = captured(m);
+    expect(url).toBe('https://api.perplexity.ai/v1/responses');
+    expect(body.messages).toBeUndefined();
+    expect(body.input).toEqual([
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'input_image',
+            image_url: 'data:image/jpeg;base64,abc123xyz',
+          },
+          {
+            type: 'input_text',
+            text: 'Do the thing.',
+          },
+        ],
+      },
+    ]);
+    expect(result.ok).toBe(true);
+  });
+
+  it('perplexity extracts text from nested Agent API output message content blocks', async () => {
+    mockFetch({
+      output: [
+        {
+          type: 'message',
+          content: [
+            {
+              type: 'output_text',
+              text: JSON.stringify(SAMPLE),
+            },
+          ],
+        },
+      ],
+    });
+    const result = await dispatchAiRequest(
+      baseRequest({ provider: makeProvider({ service_type: 'perplexity' }) })
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.json).toEqual(SAMPLE);
+    }
+  });
+
   it('meta routes to api.meta.ai and uses json_object fallback (not strict schema)', async () => {
     const m = mockFetch(openAiBody(JSON.stringify(SAMPLE)));
     await dispatchAiRequest(
@@ -616,7 +710,7 @@ describe('dispatchAiRequest — text-only structured request shapes', () => {
     expect(messages[0].content).toBe('Do the thing.');
   });
 
-  it('openai_compatible appends /chat/completions to custom_url and uses json_object with the schema embedded in the prompt', async () => {
+  it('openai_compatible appends /chat/completions to custom_url and uses strict json_schema', async () => {
     const m = mockFetch(openAiBody(JSON.stringify(SAMPLE)));
     await dispatchAiRequest(
       baseRequest({
@@ -628,16 +722,12 @@ describe('dispatchAiRequest — text-only structured request shapes', () => {
     );
     const { url, body } = captured(m);
     expect(url).toBe('https://example.local/v1/chat/completions');
-    expect(body.response_format).toEqual({ type: 'json_object' });
-    // json_object mode does not carry the schema, so the prompt must.
+    expect((body.response_format as { type: string }).type).toBe('json_schema');
     const messages = body.messages as Array<{ content: string }>;
-    expect(messages[0].content).toContain('Do the thing.');
-    expect(messages[0].content).toContain(
-      JSON.stringify(toStrictJsonSchema(SCHEMA))
-    );
+    expect(messages[0].content).toBe('Do the thing.');
   });
 
-  it('custom uses the user-supplied URL as-is and json_object with the schema embedded in the prompt', async () => {
+  it('custom uses the user-supplied URL as-is and strict json_schema', async () => {
     const m = mockFetch(openAiBody(JSON.stringify(SAMPLE)));
     await dispatchAiRequest(
       baseRequest({
@@ -649,11 +739,9 @@ describe('dispatchAiRequest — text-only structured request shapes', () => {
     );
     const { url, body } = captured(m);
     expect(url).toBe('https://example.local/api/foo');
-    expect(body.response_format).toEqual({ type: 'json_object' });
+    expect((body.response_format as { type: string }).type).toBe('json_schema');
     const messages = body.messages as Array<{ content: string }>;
-    expect(messages[0].content).toContain(
-      JSON.stringify(toStrictJsonSchema(SCHEMA))
-    );
+    expect(messages[0].content).toBe('Do the thing.');
   });
 
   it('gemini sends responseMimeType + responseSchema with additionalProperties stripped, propertyOrdering kept', async () => {
@@ -709,7 +797,7 @@ describe('dispatchAiRequest — text-only structured request shapes', () => {
     );
   });
 
-  it('ollama sends the raw schema as format on /api/chat with no auth header', async () => {
+  it('ollama asks for JSON and carries the schema in the prompt', async () => {
     const m = mockFetch(ollamaBody(JSON.stringify(SAMPLE)));
     await dispatchAiRequest(
       baseRequest({
@@ -723,9 +811,29 @@ describe('dispatchAiRequest — text-only structured request shapes', () => {
     );
     const { url, headers, body } = captured(m);
     expect(url).toBe('http://localhost:11434/api/chat');
+    // No key configured, so no Authorization header — one is sent only when
+    // the provider has an api_key (Ollama behind an authenticating proxy).
     expect(headers.Authorization).toBeUndefined();
     expect(body.stream).toBe(false);
-    expect(body.format).toEqual(SCHEMA);
+    // Ollama takes format: 'json' and reads the schema from the prompt.
+    expect(body.format).toBe('json');
+    const message = (body.messages as { content: string }[])[0];
+    expect(message.content).toContain('conforms to this JSON Schema');
+  });
+
+  it('ollama sends a bearer token when the provider has an api key', async () => {
+    const m = mockFetch(ollamaBody(JSON.stringify(SAMPLE)));
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'ollama',
+          api_key: 'secret-key',
+          custom_url: 'http://localhost:11434',
+        }),
+        networkPolicy: PRIVATE_NETWORK_POLICY,
+      })
+    );
+    expect(captured(m).headers.Authorization).toBe('Bearer secret-key');
   });
 });
 
@@ -770,8 +878,7 @@ describe('dispatchAiRequest — vision request shapes', () => {
     await dispatchAiRequest(
       baseRequest({
         provider: makeProvider({
-          service_type: 'openai_compatible',
-          custom_url: 'https://example.local/v1',
+          service_type: 'meta',
         }),
         images: [IMG],
       })
@@ -828,7 +935,8 @@ describe('dispatchAiRequest — vision request shapes', () => {
       body.messages as Array<{ images?: string[]; content: string }>
     )[0];
     expect(message.images).toEqual([IMG.base64]);
-    expect(message.content).toBe('Do the thing.');
+    // The structured-output schema is appended to the prompt for Ollama.
+    expect(message.content).toContain('Do the thing.');
   });
 });
 
@@ -1126,6 +1234,32 @@ describe('dispatchAiRequest — fence stripping', () => {
       // text preserves the raw (still-fenced) extracted string.
       expect(result.text).toBe(fenced);
     }
+  });
+
+  it('strips <think> and <thought> reasoning blocks before parsing JSON', async () => {
+    const reasoningText = `<thought>\nAnalyzing the image details and ingredients...\n</thought>\n\`\`\`json\n${JSON.stringify(SAMPLE)}\n\`\`\``;
+    mockFetch(openAiBody(reasoningText));
+    const result = await dispatchAiRequest(
+      baseRequest({
+        jsonSchema: undefined,
+        schemaName: undefined,
+        parseJson: true,
+      })
+    );
+    expect(result).toMatchObject({ ok: true, json: SAMPLE });
+  });
+
+  it('extracts valid JSON object when conversational commentary surrounds the payload', async () => {
+    const conversationalText = `Here is the estimation result:\n${JSON.stringify(SAMPLE)}\nHope this helps!`;
+    mockFetch(openAiBody(conversationalText));
+    const result = await dispatchAiRequest(
+      baseRequest({
+        jsonSchema: undefined,
+        schemaName: undefined,
+        parseJson: true,
+      })
+    );
+    expect(result).toMatchObject({ ok: true, json: SAMPLE });
   });
 });
 
@@ -1701,4 +1835,110 @@ describe('anthropic temperature compatibility', () => {
       expect(captured(m).body.temperature).toBe(0.7);
     }
   );
+});
+
+describe('JSON extraction with multiple balanced candidates', () => {
+  it('extracts the intended JSON result when preceded by commentary objects', async () => {
+    mockFetch({
+      choices: [
+        {
+          message: {
+            content:
+              'Note: {"field":"x"}. Result: {"answer":"ok","nested":{"x":2}}',
+          },
+        },
+      ],
+    });
+    const result = await dispatchAiRequest(
+      baseRequest({
+        parseJson: true,
+      })
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.json).toEqual({ answer: 'ok', nested: { x: 2 } });
+    }
+  });
+});
+
+describe('dispatchAiRequest — default request timeout', () => {
+  // Self-hosted runtimes pay a model cold start on the first request, so any
+  // service type that carries its own URL gets the long default, not just
+  // Ollama. Cloud providers keep the short one.
+  let timeoutSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+  });
+
+  afterEach(() => {
+    timeoutSpy.mockRestore();
+  });
+
+  it.each([
+    ['openai_compatible', 300_000],
+    ['custom', 300_000],
+    ['openai', 90_000],
+  ])('%s defaults to %sms', async (serviceType, expected) => {
+    mockFetch(openAiBody(JSON.stringify(SAMPLE)));
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: serviceType,
+          custom_url: 'http://localhost:8080/v1',
+        }),
+        networkPolicy: PRIVATE_NETWORK_POLICY,
+      })
+    );
+    expect(timeoutSpy).toHaveBeenCalledWith(expected);
+  });
+
+  it('an explicit timeoutMs still wins over the defaults', async () => {
+    mockFetch(openAiBody(JSON.stringify(SAMPLE)));
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'openai_compatible',
+          custom_url: 'http://localhost:8080/v1',
+        }),
+        networkPolicy: PRIVATE_NETWORK_POLICY,
+        timeoutMs: 1_000,
+      })
+    );
+    expect(timeoutSpy).toHaveBeenCalledWith(1_000);
+  });
+});
+
+describe('dispatchAiRequest — Perplexity 403 deprecation handling', () => {
+  it('translates Sonar chat completions deprecation 403 into a user-friendly message', async () => {
+    mockFetch(
+      {
+        error: {
+          message:
+            'Sonar is now the Agent API. Use /v1/responses instead of /v1/sonar. Migrate here: https://docs.perplexity.ai/docs/agent-api/migrate-from-sonar/overview',
+          type: 'chat_completions_not_available',
+          code: 403,
+        },
+      },
+      { ok: false, status: 403 }
+    );
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'openai_compatible',
+          custom_url: 'https://api.perplexity.ai',
+          model_name: 'sonar-pro',
+        }),
+      })
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.category).toBe('upstream_error');
+      expect(result.status).toBe(403);
+      expect(result.detail).toContain(
+        'Perplexity has retired the OpenAI-compatible Chat Completions API'
+      );
+      expect(result.detail).toContain('Use OpenRouter with a Perplexity model');
+    }
+  });
 });

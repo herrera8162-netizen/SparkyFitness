@@ -56,13 +56,13 @@ describe('ChartTouchOverlay', () => {
         onSelect={onSelect}
         onClear={onClear}
         testIDPrefix="touch-overlay"
-      />,
+      />
     );
 
     fireEvent(
       screen.getByTestId('touch-overlay'),
       'touchStart',
-      createTouchEvent(25, 20),
+      createTouchEvent(25, 20)
     );
 
     expect(onSelect).not.toHaveBeenCalled();
@@ -76,7 +76,7 @@ describe('ChartTouchOverlay', () => {
     fireEvent(
       screen.getByTestId('touch-overlay'),
       'touchEnd',
-      createTouchEvent(25, 20),
+      createTouchEvent(25, 20)
     );
 
     expect(onClear).toHaveBeenCalledTimes(1);
@@ -89,18 +89,18 @@ describe('ChartTouchOverlay', () => {
         layout={layout}
         onSelect={onSelect}
         testIDPrefix="touch-overlay"
-      />,
+      />
     );
 
     fireEvent(
       screen.getByTestId('touch-overlay'),
       'touchStart',
-      createTouchEvent(25, 20),
+      createTouchEvent(25, 20)
     );
     fireEvent(
       screen.getByTestId('touch-overlay'),
       'touchMove',
-      createTouchEvent(25, 35),
+      createTouchEvent(25, 35)
     );
 
     act(() => {
@@ -119,13 +119,13 @@ describe('ChartTouchOverlay', () => {
         onSelect={onSelect}
         onClear={onClear}
         testIDPrefix="touch-overlay"
-      />,
+      />
     );
 
     fireEvent(
       screen.getByTestId('touch-overlay'),
       'touchStart',
-      createTouchEvent(10, 20),
+      createTouchEvent(10, 20)
     );
     act(() => {
       jest.advanceTimersByTime(CHART_TOUCH_LONG_PRESS_DELAY_MS);
@@ -134,10 +134,46 @@ describe('ChartTouchOverlay', () => {
     fireEvent(
       screen.getByTestId('touch-overlay'),
       'touchMove',
-      createTouchEvent(45, 20),
+      createTouchEvent(45, 20)
     );
 
     expect(onSelect).toHaveBeenNthCalledWith(1, 0);
     expect(onSelect).toHaveBeenNthCalledWith(2, 2);
+  });
+
+  it('reports the raw touch point via onPointMove on every update, even within the same zone', () => {
+    const onSelect = jest.fn();
+    const onPointMove = jest.fn();
+    const screen = render(
+      <ChartTouchOverlay
+        layout={layout}
+        onSelect={onSelect}
+        onPointMove={onPointMove}
+        testIDPrefix="touch-overlay"
+      />
+    );
+
+    fireEvent(
+      screen.getByTestId('touch-overlay'),
+      'touchStart',
+      createTouchEvent(10, 20)
+    );
+    act(() => {
+      jest.advanceTimersByTime(CHART_TOUCH_LONG_PRESS_DELAY_MS);
+    });
+
+    expect(onPointMove).toHaveBeenLastCalledWith({ x: 10, y: 20 });
+
+    // Still inside zone 0 (0-20), so onSelect does not refire, but onPointMove still
+    // reports the moved position -- a caller reading finer-grained position (e.g. which
+    // stacked segment a point falls in) needs every update, not just zone changes.
+    fireEvent(
+      screen.getByTestId('touch-overlay'),
+      'touchMove',
+      createTouchEvent(5, 35)
+    );
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onPointMove).toHaveBeenLastCalledWith({ x: 5, y: 35 });
   });
 });

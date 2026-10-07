@@ -1,5 +1,10 @@
 import * as Notifications from 'expo-notifications';
-import { addNotificationResponseListener, dismissDeliveredNotification, MEDICATION_TAKEN_ACTION, MEDICATION_SKIP_ACTION } from './notifications';
+import {
+  addNotificationResponseListener,
+  dismissDeliveredNotification,
+  MEDICATION_TAKEN_ACTION,
+  MEDICATION_SKIP_ACTION,
+} from './notifications';
 import { createEntry, listEntries } from './api/medicationsApi';
 import { queryClient } from '../hooks/queryClient';
 import { invalidateMedicationEntryCaches } from '../hooks/invalidateMedicationEntryCaches';
@@ -31,37 +36,75 @@ export function initMedicationNotificationActions(): void {
     const scheduleId = data?.scheduleId;
     const entryDate = data?.entryDate;
 
-    if (!medicationId || !entryDate) {
-      addLog('[MedicationNotificationAction] Missing required data in notification', 'WARNING');
+    if ((!medicationId && !data?.doses) || !entryDate) {
+      addLog(
+        '[MedicationNotificationAction] Missing required data in notification',
+        'WARNING'
+      );
       return;
     }
 
-    void handleNotificationAction(status, medicationId, scheduleId ?? null, entryDate, response.notification.request.identifier, data?.baseKey ?? data?.key ?? null);
+    let doses: { medicationId: string; scheduleId: string | null }[] = [];
+    if (data?.doses) {
+      try {
+        const parsed = JSON.parse(data.doses);
+        if (Array.isArray(parsed)) {
+          doses = parsed;
+        }
+      } catch {
+        // fallback below
+      }
+    }
+    if (doses.length === 0 && medicationId) {
+      doses = [{ medicationId, scheduleId: scheduleId ?? null }];
+    }
+
+    void handleNotificationAction(
+      status,
+      doses,
+      entryDate,
+      response.notification.request.identifier,
+      data?.baseKey ?? data?.key ?? null
+    );
   });
 }
 
 async function handleNotificationAction(
   status: MedicationEntryStatus,
-  medicationId: string,
-  scheduleId: string | null,
+  doses: { medicationId: string; scheduleId: string | null }[],
   entryDate: string,
   notificationId: string,
-  key: string | null,
+  key: string | null
 ): Promise<void> {
   try {
-    const existing = await listEntries({ fromDate: entryDate, toDate: entryDate, medicationId });
-    if (isDoseLogged(existing, medicationId, scheduleId)) {
+    const existing = await listEntries({
+      fromDate: entryDate,
+      toDate: entryDate,
+      ...(doses.length === 1 ? { medicationId: doses[0].medicationId } : {}),
+    });
+
+    const unlogged = doses.filter(
+      (d) => !isDoseLogged(existing, d.medicationId, d.scheduleId)
+    );
+
+    if (unlogged.length === 0) {
       await dismissDeliveredNotification(notificationId);
       return;
     }
 
-    await createEntry({
-      medication_id: medicationId,
-      schedule_id: scheduleId,
-      status,
-      entry_date: entryDate,
-      taken_at: status === 'taken' ? new Date().toISOString() : undefined,
-    });
+    const takenAt = status === 'taken' ? new Date().toISOString() : undefined;
+
+    await Promise.all(
+      unlogged.map((d) =>
+        createEntry({
+          medication_id: d.medicationId,
+          schedule_id: d.scheduleId,
+          status,
+          entry_date: entryDate,
+          taken_at: takenAt,
+        })
+      )
+    );
 
     // This path writes the entry through the API directly rather than through the
     // mutations, so nothing else marks the caches stale. With an infinite stale time the
@@ -70,16 +113,29 @@ async function handleNotificationAction(
     invalidateMedicationEntryCaches(queryClient);
 
     if (key) {
-      const allPending = await Notifications.getAllScheduledNotificationsAsync();
-      const toCancel = allPending.filter((n) => n.content.data?.baseKey === key);
-      await Promise.all(toCancel.map((n) =>
-        Notifications.cancelScheduledNotificationAsync(n.identifier).catch(() => {}),
-      ));
+      const allPending =
+        await Notifications.getAllScheduledNotificationsAsync();
+      const toCancel = allPending.filter(
+        (n) => n.content.data?.baseKey === key
+      );
+      await Promise.all(
+        toCancel.map((n) =>
+          Notifications.cancelScheduledNotificationAsync(n.identifier).catch(
+            () => {}
+          )
+        )
+      );
     }
 
     await dismissDeliveredNotification(notificationId);
-    addLog(`[MedicationNotificationAction] Logged medication ${medicationId} as ${status}`, 'DEBUG');
+    addLog(
+      `[MedicationNotificationAction] Logged ${unlogged.length} medication(s) as ${status}`,
+      'DEBUG'
+    );
   } catch (error) {
-    addLog(`[MedicationNotificationAction] Failed to log medication: ${(error as Error).message}`, 'ERROR');
+    addLog(
+      `[MedicationNotificationAction] Failed to log medication: ${(error as Error).message}`,
+      'ERROR'
+    );
   }
 }

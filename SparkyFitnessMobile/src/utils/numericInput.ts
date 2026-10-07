@@ -49,12 +49,12 @@ const SPACE_THOUSANDS = /^\d{1,3}(?:[\s\u00a0\u202f]\d{3})+(?:[.,]\d+)?$/;
 // (`"1,234.56"` / `"1.234,56"`) stay unambiguous and still parse as
 // thousands even with a single group.
 const PLAIN_INT = /^\d+$/;
-const US_THOUSANDS_WITH_DECIMAL = /^\d{1,3}(?:,\d{3})+\.\d+$/;   // 1,234.56 / 1,234,567.89
-const US_THOUSANDS = /^\d{1,3}(?:,\d{3}){2,}$/;                   // 1,234,567 (≥2 groups)
-const EU_THOUSANDS_WITH_DECIMAL = /^\d{1,3}(?:\.\d{3})+,\d+$/;    // 1.234,56 / 1.234.567,89
-const EU_THOUSANDS = /^\d{1,3}(?:\.\d{3}){2,}$/;                  // 1.234.567 (≥2 groups)
-const DOT_DECIMAL = /^(?:\d+\.\d*|\.\d+)$/;                       // 1.5 / 1. / .5
-const COMMA_DECIMAL = /^(?:\d+,\d*|,\d+)$/;                       // 1,5 / 1, / ,5
+const US_THOUSANDS_WITH_DECIMAL = /^\d{1,3}(?:,\d{3})+\.\d+$/; // 1,234.56 / 1,234,567.89
+const US_THOUSANDS = /^\d{1,3}(?:,\d{3}){2,}$/; // 1,234,567 (≥2 groups)
+const EU_THOUSANDS_WITH_DECIMAL = /^\d{1,3}(?:\.\d{3})+,\d+$/; // 1.234,56 / 1.234.567,89
+const EU_THOUSANDS = /^\d{1,3}(?:\.\d{3}){2,}$/; // 1.234.567 (≥2 groups)
+const DOT_DECIMAL = /^(?:\d+\.\d*|\.\d+)$/; // 1.5 / 1. / .5
+const COMMA_DECIMAL = /^(?:\d+,\d*|,\d+)$/; // 1,5 / 1, / ,5
 
 /**
  * Parse a user-entered decimal string. Accepts both `.` and `,` as the
@@ -94,6 +94,24 @@ export function parseDecimalInput(value: string | null | undefined): number {
   if (COMMA_DECIMAL.test(s)) return parseFloat(s.replace(',', '.'));
 
   return NaN;
+}
+
+/**
+ * `parseDecimalInput` with an optional leading sign (`-`, `+`, or the typographic
+ * minus `−`). Only a bodyweight exercise's set weight takes one: negative is
+ * assistance, positive is added load. Everywhere else a sign stays invalid,
+ * which is why this is separate rather than a change to the base parser.
+ */
+export function parseSignedDecimalInput(
+  value: string | null | undefined
+): number {
+  if (value == null) return NaN;
+  const trimmed = value.replace(OUTER_WHITESPACE_REGEX, '');
+  const match = /^([-+\u2212])\s*(.*)$/.exec(trimmed);
+  if (!match) return parseDecimalInput(trimmed);
+  const magnitude = parseDecimalInput(match[2]);
+  if (Number.isNaN(magnitude)) return NaN;
+  return match[1] === '+' ? magnitude : -magnitude;
 }
 
 /**

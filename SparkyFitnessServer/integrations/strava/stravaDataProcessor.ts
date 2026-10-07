@@ -1,7 +1,6 @@
 import { log } from '../../config/logging.js';
 import exerciseRepository from '../../models/exercise.js';
 import exerciseEntryRepository from '../../models/exerciseEntry.js';
-import activityDetailsRepository from '../../models/activityDetailsRepository.js';
 import measurementRepository from '../../models/measurementRepository.js';
 import * as workoutTelemetryRepo from '../../models/workoutTelemetryRepository.js';
 import { todayInZone, instantToDay } from '@workspace/shared';
@@ -144,14 +143,20 @@ async function processStravaActivities(
           : 0;
       const durationMinutes = Math.round(durationSeconds / 60);
       // Strava SummaryActivity often lacks calories, but DetailedActivity (if available) has it.
-      // Default to 0 to satisfy the NOT NULL constraint in the database.
+      // Missing calories preserve existing values; new entries default to 0.
       const detailedActivity = detailedActivities[activity.id] as
-        | StravaActivity
-        | undefined;
+        StravaActivity | undefined;
       const caloriesAuto =
-        (detailedActivity && detailedActivity.calories) ||
-        activity.calories ||
-        0;
+        detailedActivity?.calories ?? activity.calories ?? undefined;
+      // This source skips the manual duplicate check, so without a source_id
+      // createExerciseEntry finds no existing entry and every re-sync would
+      // save the activity again.
+      const startedAt = activity.start_date ?? activity.start_date_local;
+      const sourceId = activity.id
+        ? activity.id.toString()
+        : startedAt
+          ? `strava-activity-${startedAt}`
+          : null;
       const entryData = {
         exercise_id: exercise.id,
         entry_date: entryDate,
@@ -168,7 +173,7 @@ async function processStravaActivities(
             : null,
         notes: `Synced from Strava. Type: ${sportType}${activity.moving_time ? `. Moving time: ${Math.round(activity.moving_time / 60)}min` : ''}${activity.total_elevation_gain ? `. Elevation: ${activity.total_elevation_gain}m` : ''}`,
         entry_source: 'Strava',
-        source_id: activity.id ? activity.id.toString() : null,
+        source_id: sourceId,
         sets: [
           {
             set_number: 1,
@@ -182,22 +187,22 @@ async function processStravaActivities(
         userId,
         entryData,
         createdByUserId,
-        'Strava'
+        'Strava',
+        null,
+        {
+          // A failed detail fetch must not replace a previously complete dump.
+          activityDetail: detailedActivity
+            ? {
+                provider_name: 'Strava',
+                detail_type: 'full_activity_data',
+                detail_data: detailedActivity,
+                created_by_user_id: String(createdByUserId),
+                updated_by_user_id: String(createdByUserId),
+              }
+            : undefined,
+        }
       );
-      // Store detailed activity data (GPS, laps, splits, segments) if available
       if (newEntry && newEntry.id) {
-        const detailedActivity = detailedActivities[activity.id] as
-          | StravaActivity
-          | undefined;
-        const detailData = detailedActivity || activity;
-        await activityDetailsRepository.createActivityDetail(userId, {
-          exercise_entry_id: newEntry.id,
-          provider_name: 'Strava',
-          detail_type: 'full_activity_data',
-          detail_data: detailData,
-          created_by_user_id: createdByUserId,
-        });
-
         // Only the DetailedActivity response (fetched per-activity) carries laps and
         // the fuller telemetry summary; a bare SummaryActivity has neither.
         if (detailedActivity) {

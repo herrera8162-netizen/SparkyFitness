@@ -1,14 +1,21 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { View, Text } from 'react-native';
-import { CartesianChart, Line } from 'victory-native';
+import { CartesianChart } from 'victory-native';
 import { useCSSVariable } from 'uniwind';
 import { formatLocalizedNumber } from '../localization/i18n';
-import { makeChartFont, formatXLabel7d, formatXLabel30d90d, formatTooltipDate } from './charts/chartFormatting';
-import type {
-  WeightDataPoint,
-  StepsRange,
-} from '../hooks/useMeasurementsRange';
+import {
+  makeChartFont,
+  CHART_LABEL_FONT_SIZE,
+  formatXLabel7d,
+  formatXLabel30d90d,
+  formatTooltipDate,
+  computeNiceYAxisScale,
+} from './charts/chartFormatting';
+import LineSeriesMark from './charts/LineSeriesMark';
+import TrendGoalLine from './charts/TrendGoalLine';
+import type { WeightDataPoint } from '../hooks/useMeasurementsRange';
+import type { HealthTrendDateRange } from '../types/healthTrends';
 import ChartTouchOverlay, {
   ChartLayoutReporter,
   EMPTY_CHART_TOUCH_LAYOUT,
@@ -20,17 +27,19 @@ type WeightLineChartProps = {
   data: WeightDataPoint[];
   isLoading: boolean;
   isError: boolean;
-  range: StepsRange;
+  range: HealthTrendDateRange;
   unit: string;
+  /** The user's target weight, already converted to `unit`. */
+  goal?: number | null;
 };
 
-const X_TICK_COUNT: Record<StepsRange, number> = {
+const X_TICK_COUNT: Record<HealthTrendDateRange, number> = {
   '7d': 7,
   '30d': 6,
   '90d': 5,
 };
 
-const font = makeChartFont(12);
+const font = makeChartFont(CHART_LABEL_FONT_SIZE);
 
 const DEFAULT_TOOLTIP = '';
 
@@ -48,7 +57,7 @@ const WeightTooltip: React.FC<{ text: string }> = ({ text }) => (
  */
 export const buildWeightTooltipText = (
   point: { weight: number; day: string } | undefined,
-  unit: string,
+  unit: string
 ): string => {
   if (!point) return DEFAULT_TOOLTIP;
   const formattedWeight = formatLocalizedNumber(point.weight, {
@@ -64,6 +73,7 @@ const WeightLineChart: React.FC<WeightLineChartProps> = ({
   isError,
   range,
   unit,
+  goal,
 }) => {
   const { t } = useTranslation();
   const [accentColor, textMuted] = useCSSVariable([
@@ -72,10 +82,35 @@ const WeightLineChart: React.FC<WeightLineChartProps> = ({
   ]) as [string, string];
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [touchLayout, setTouchLayout] = useState<ChartTouchLayout>(
-    EMPTY_CHART_TOUCH_LAYOUT,
+    EMPTY_CHART_TOUCH_LAYOUT
   );
 
   const hasData = useMemo(() => data.length > 0, [data]);
+
+  // A nice round scale, not just an auto-fit one, so the axis labels in whole units instead
+  // of whatever decimal fraction a narrow week-over-week weight range happens to fall on.
+  const yAxisScale = useMemo(() => {
+    if (data.length === 0) {
+      return undefined;
+    }
+    const weightValues = data.map((point) => point.weight);
+    const hasGoal = goal != null && goal > 0;
+    const min = hasGoal
+      ? Math.min(...weightValues, goal)
+      : Math.min(...weightValues);
+    const max = hasGoal
+      ? Math.max(...weightValues, goal)
+      : Math.max(...weightValues);
+    return computeNiceYAxisScale(min, max);
+  }, [data, goal]);
+
+  const domain = useMemo(
+    () =>
+      yAxisScale
+        ? { y: [yAxisScale.min, yAxisScale.max] as [number, number] }
+        : undefined,
+    [yAxisScale]
+  );
 
   const formatXLabel = range === '7d' ? formatXLabel7d : formatXLabel30d90d;
 
@@ -99,7 +134,7 @@ const WeightLineChart: React.FC<WeightLineChartProps> = ({
 
   const handleTouchLayoutChange = useCallback(
     (nextLayout: ChartTouchLayout) => {
-      setTouchLayout(currentLayout => {
+      setTouchLayout((currentLayout) => {
         const currentSignature = createChartTouchLayoutSignature(currentLayout);
         const nextSignature = createChartTouchLayoutSignature(nextLayout);
 
@@ -110,7 +145,7 @@ const WeightLineChart: React.FC<WeightLineChartProps> = ({
         return nextLayout;
       });
     },
-    [],
+    []
   );
 
   const handleSelectPoint = useCallback(
@@ -123,16 +158,12 @@ const WeightLineChart: React.FC<WeightLineChartProps> = ({
 
       setSelectedIndex(index);
     },
-    [data],
+    [data]
   );
 
   const handleClearSelection = useCallback(() => {
     setSelectedIndex(null);
   }, []);
-
-  if (!hasData && !isLoading && !isError) {
-    return null;
-  }
 
   return (
     <View className="bg-surface rounded-xl p-4 my-2 shadow-sm">
@@ -144,12 +175,24 @@ const WeightLineChart: React.FC<WeightLineChartProps> = ({
 
       {isLoading ? (
         <View className="h-50 justify-center items-center">
-          <Text className="text-text-muted text-sm">{t('common.loading', { defaultValue: 'Loading...' })}</Text>
+          <Text className="text-text-muted text-sm">
+            {t('common.loading', { defaultValue: 'Loading...' })}
+          </Text>
         </View>
       ) : isError ? (
         <View className="h-50 justify-center items-center">
           <Text className="text-text-muted text-sm">
-            {t('charts.weight.loadFailed', { defaultValue: 'Failed to load weight data' })}
+            {t('charts.weight.loadFailed', {
+              defaultValue: 'Failed to load weight data',
+            })}
+          </Text>
+        </View>
+      ) : !hasData ? (
+        <View className="h-50 justify-center items-center">
+          <Text className="text-text-muted text-sm">
+            {t('charts.weight.empty', {
+              defaultValue: 'No weight data for this period',
+            })}
           </Text>
         </View>
       ) : (
@@ -158,7 +201,8 @@ const WeightLineChart: React.FC<WeightLineChartProps> = ({
             data={data}
             xKey="day"
             yKeys={['weight']}
-            domainPadding={{ left: 25, right: 25 }}
+            domain={domain}
+            domainPadding={{ left: 25, right: 25, top: 12, bottom: 12 }}
             xAxis={{
               font,
               tickCount: X_TICK_COUNT[range],
@@ -168,25 +212,36 @@ const WeightLineChart: React.FC<WeightLineChartProps> = ({
             yAxis={[
               {
                 font,
-                tickCount: 5,
+                // Must match tickValues.length exactly: a smaller tickCount makes
+                // victory-native re-sample the array by index and can silently skip a
+                // value in the middle.
+                tickCount: yAxisScale?.tickValues.length ?? 5,
                 labelColor: textMuted,
+                tickValues: yAxisScale?.tickValues,
               },
             ]}
           >
-            {({ points, chartBounds }) => (
+            {({ points, chartBounds, yScale }) => (
               <>
                 <ChartLayoutReporter
                   chartBounds={chartBounds}
                   points={points.weight}
                   onChange={handleTouchLayoutChange}
                 />
-                <Line
+                <LineSeriesMark
                   points={points.weight}
                   color={accentColor}
                   strokeWidth={2}
                   animate={{ type: 'timing', duration: 300 }}
                   curveType="cardinal"
                   connectMissingData
+                />
+                <TrendGoalLine
+                  points={points.weight}
+                  chartBounds={chartBounds}
+                  yScale={yScale}
+                  goals={data.map(() => goal)}
+                  color={textMuted}
                 />
               </>
             )}

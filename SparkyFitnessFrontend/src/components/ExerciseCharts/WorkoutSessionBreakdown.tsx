@@ -5,8 +5,11 @@ import { formatWeight } from '@/utils/numberFormatting';
 import { FaChevronDown, FaChevronUp, FaDumbbell } from 'react-icons/fa';
 import { useBodyMapSvgQuery } from '@/hooks/Exercises/useExercises';
 import { useGroupedWorkoutSession } from '@/hooks/Exercises/useExercises';
-import { svgClassToSchemaName } from '@/constants/exercises';
-import type { ExerciseEntryResponse } from '@workspace/shared';
+import {
+  svgClassToSchemaName,
+  type ExerciseEntryResponse,
+} from '@workspace/shared';
+import { localizeMuscle } from '@/utils/exerciseTaxonomy';
 import './WorkoutSessionBodyMap.css';
 
 const formatExerciseName = (name: string | undefined | null): string => {
@@ -67,12 +70,9 @@ export const WorkoutSessionBreakdown = ({
   const [activeTab, setActiveTab] = useState<'sets' | 'exercises' | 'muscles'>(
     () => {
       const snapshot = exerciseEntry?.['exercise_snapshot'] as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       const primary = snapshot?.['primary_muscles'] as
-        | string[]
-        | null
-        | undefined;
+        string[] | null | undefined;
       return primary && primary.length > 0 ? 'muscles' : 'sets';
     }
   );
@@ -93,9 +93,7 @@ export const WorkoutSessionBreakdown = ({
   };
 
   const presetEntryId = exerciseEntry?.['exercise_preset_entry_id'] as
-    | string
-    | null
-    | undefined as string | undefined;
+    string | null | undefined as string | undefined;
   const { data: groupedSession } = useGroupedWorkoutSession(
     presetEntryId ?? undefined
   );
@@ -116,8 +114,7 @@ export const WorkoutSessionBreakdown = ({
 
     for (const entry of sessionExercises) {
       const snapshot = entry?.exercise_snapshot as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       const exerciseName = formatExerciseName(
         (snapshot?.['name'] as string) || 'Exercise'
       );
@@ -187,8 +184,7 @@ export const WorkoutSessionBreakdown = ({
     const map = new Map<string, { primary: string[]; secondary: string[] }>();
     for (const entry of sessionExercises) {
       const snapshot = entry?.exercise_snapshot as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       const exerciseName = formatExerciseName(
         (snapshot?.['name'] as string) || 'Exercise'
       );
@@ -524,7 +520,7 @@ export const WorkoutSessionBreakdown = ({
                           )}
                         </td>
                         <td className="py-3 px-3 font-bold text-foreground capitalize">
-                          {mgSummary.muscleName}
+                          {localizeMuscle(t, mgSummary.muscleName)}
                         </td>
                         <td className="py-3 px-3 font-bold">
                           {formatSeconds(mgSummary.totalTimeSeconds)}

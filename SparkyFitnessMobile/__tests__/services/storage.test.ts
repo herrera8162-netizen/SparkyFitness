@@ -16,12 +16,12 @@ import {
   loadCollapsedCategories,
   clearServerConfigCache,
   clearSessionToken,
+  takeIdentityChangeServerConfigIds,
   ServerConfig,
 } from '../../src/services/storage';
 import { CATEGORY_ORDER } from '../../src/HealthMetrics';
 
 const { __clear: clearSecureStore } = SecureStore as any;
-
 
 describe('storage', () => {
   beforeEach(async () => {
@@ -57,11 +57,13 @@ describe('storage', () => {
       expect(SecureStore.setItemAsync).toHaveBeenCalledWith(
         'apiKey_test-id-1',
         'test-api-key',
-        expect.objectContaining({ keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK }),
+        expect.objectContaining({
+          keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+        })
       );
 
       const raw = JSON.parse(
-        (await AsyncStorage.getItem('serverConfigs')) || '[]',
+        (await AsyncStorage.getItem('serverConfigs')) || '[]'
       );
       expect(raw[0]).not.toHaveProperty('apiKey');
     });
@@ -104,7 +106,9 @@ describe('storage', () => {
       expect(SecureStore.setItemAsync).toHaveBeenCalledWith(
         'sessionToken_test-id-1',
         'tok',
-        expect.objectContaining({ keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK }),
+        expect.objectContaining({
+          keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+        })
       );
     });
 
@@ -115,17 +119,23 @@ describe('storage', () => {
       };
       await saveServerConfig(config);
 
-      expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith('sessionToken_test-id-1');
+      expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith(
+        'sessionToken_test-id-1'
+      );
     });
 
     test('does not touch sessionToken when undefined', async () => {
       await saveServerConfig(testConfig);
 
-      const sessionCalls = (SecureStore.setItemAsync as jest.Mock).mock.calls.filter(
-        (call: any[]) => (call[0] as string).startsWith('sessionToken_'),
+      const sessionCalls = (
+        SecureStore.setItemAsync as jest.Mock
+      ).mock.calls.filter((call: any[]) =>
+        (call[0] as string).startsWith('sessionToken_')
       );
-      const deleteCalls = (SecureStore.deleteItemAsync as jest.Mock).mock.calls.filter(
-        (call: any[]) => (call[0] as string).startsWith('sessionToken_'),
+      const deleteCalls = (
+        SecureStore.deleteItemAsync as jest.Mock
+      ).mock.calls.filter((call: any[]) =>
+        (call[0] as string).startsWith('sessionToken_')
       );
       expect(sessionCalls).toHaveLength(0);
       expect(deleteCalls).toHaveLength(0);
@@ -144,9 +154,13 @@ describe('storage', () => {
     });
 
     test('throws when setItem fails', async () => {
-      jest.spyOn(AsyncStorage, 'setItem').mockRejectedValueOnce(new Error('Storage error'));
+      jest
+        .spyOn(AsyncStorage, 'setItem')
+        .mockRejectedValueOnce(new Error('Storage error'));
 
-      await expect(saveServerConfig(testConfig)).rejects.toThrow('Storage error');
+      await expect(saveServerConfig(testConfig)).rejects.toThrow(
+        'Storage error'
+      );
     });
   });
 
@@ -181,7 +195,9 @@ describe('storage', () => {
     });
 
     test('throws on storage error', async () => {
-      jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('Storage error'));
+      jest
+        .spyOn(AsyncStorage, 'getItem')
+        .mockRejectedValueOnce(new Error('Storage error'));
 
       await expect(getActiveServerConfig()).rejects.toThrow('Storage error');
     });
@@ -195,8 +211,16 @@ describe('storage', () => {
     });
 
     test('returns all saved configs', async () => {
-      const config1: ServerConfig = { id: '1', url: 'https://a.com', apiKey: 'key1' };
-      const config2: ServerConfig = { id: '2', url: 'https://b.com', apiKey: 'key2' };
+      const config1: ServerConfig = {
+        id: '1',
+        url: 'https://a.com',
+        apiKey: 'key1',
+      };
+      const config2: ServerConfig = {
+        id: '2',
+        url: 'https://b.com',
+        apiKey: 'key2',
+      };
 
       await saveServerConfig(config1);
       await saveServerConfig(config2);
@@ -215,7 +239,9 @@ describe('storage', () => {
     });
 
     test("returns empty array on storage error (doesn't throw)", async () => {
-      jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('Storage error'));
+      jest
+        .spyOn(AsyncStorage, 'getItem')
+        .mockRejectedValueOnce(new Error('Storage error'));
 
       const result = await getAllServerConfigs();
 
@@ -224,24 +250,30 @@ describe('storage', () => {
 
     test('migrates legacy apiKey from AsyncStorage to SecureStore', async () => {
       // Simulate legacy data: apiKey stored inline in AsyncStorage
-      const legacy = [{ id: 'legacy-1', url: 'https://old.com', apiKey: 'old-key' }];
+      const legacy = [
+        { id: 'legacy-1', url: 'https://old.com', apiKey: 'old-key' },
+      ];
       await AsyncStorage.setItem('serverConfigs', JSON.stringify(legacy));
 
       const configs = await getAllServerConfigs();
 
       // Key is returned to caller
-      expect(configs).toEqual([{ id: 'legacy-1', url: 'https://old.com', apiKey: 'old-key' }]);
+      expect(configs).toEqual([
+        { id: 'legacy-1', url: 'https://old.com', apiKey: 'old-key' },
+      ]);
 
       // Key was written to SecureStore
       expect(SecureStore.setItemAsync).toHaveBeenCalledWith(
         'apiKey_legacy-1',
         'old-key',
-        expect.objectContaining({ keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK }),
+        expect.objectContaining({
+          keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+        })
       );
 
       // AsyncStorage was cleaned up (apiKey stripped)
       const raw = JSON.parse(
-        (await AsyncStorage.getItem('serverConfigs')) || '[]',
+        (await AsyncStorage.getItem('serverConfigs')) || '[]'
       );
       expect(raw[0]).not.toHaveProperty('apiKey');
     });
@@ -250,7 +282,9 @@ describe('storage', () => {
       // SecureStore has the current key
       await SecureStore.setItemAsync('apiKey_cfg-1', 'secure-key');
       // AsyncStorage has a stale key
-      const stale = [{ id: 'cfg-1', url: 'https://x.com', apiKey: 'stale-key' }];
+      const stale = [
+        { id: 'cfg-1', url: 'https://x.com', apiKey: 'stale-key' },
+      ];
       await AsyncStorage.setItem('serverConfigs', JSON.stringify(stale));
 
       const configs = await getAllServerConfigs();
@@ -259,7 +293,7 @@ describe('storage', () => {
 
       // Stale plaintext key should be stripped from AsyncStorage
       const raw = JSON.parse(
-        (await AsyncStorage.getItem('serverConfigs')) || '[]',
+        (await AsyncStorage.getItem('serverConfigs')) || '[]'
       );
       expect(raw[0]).not.toHaveProperty('apiKey');
     });
@@ -304,7 +338,11 @@ describe('storage', () => {
 
   describe('setActiveServerConfig', () => {
     test('saves config ID to storage', async () => {
-      const config: ServerConfig = { id: 'my-config-id', url: 'https://a.com', apiKey: 'k1' };
+      const config: ServerConfig = {
+        id: 'my-config-id',
+        url: 'https://a.com',
+        apiKey: 'k1',
+      };
       await saveServerConfig(config);
 
       await setActiveServerConfig('my-config-id');
@@ -314,15 +352,84 @@ describe('storage', () => {
     });
 
     test('throws on storage error', async () => {
-      jest.spyOn(AsyncStorage, 'setItem').mockRejectedValueOnce(new Error('Storage error'));
+      jest
+        .spyOn(AsyncStorage, 'setItem')
+        .mockRejectedValueOnce(new Error('Storage error'));
 
-      await expect(setActiveServerConfig('id')).rejects.toThrow('Storage error');
+      await expect(setActiveServerConfig('id')).rejects.toThrow(
+        'Storage error'
+      );
+    });
+  });
+
+  describe('takeIdentityChangeServerConfigIds', () => {
+    beforeEach(async () => {
+      // Module state: drain what earlier tests left behind.
+      await takeIdentityChangeServerConfigIds();
+    });
+
+    test('returns the configs switched away from and the active one, once', async () => {
+      await setActiveServerConfig('config-a');
+      await setActiveServerConfig('config-b');
+      await setActiveServerConfig('config-c');
+
+      expect((await takeIdentityChangeServerConfigIds()).sort()).toEqual([
+        'config-a',
+        'config-b',
+        'config-c',
+      ]);
+      expect(await takeIdentityChangeServerConfigIds()).toEqual(['config-c']);
+    });
+
+    test('returns the active config when signing in again keeps its id', async () => {
+      await setActiveServerConfig('config-a');
+      await takeIdentityChangeServerConfigIds();
+      await setActiveServerConfig('config-a');
+
+      expect(await takeIdentityChangeServerConfigIds()).toEqual(['config-a']);
+    });
+
+    test('remembers the active config when deleting it clears the active id', async () => {
+      const config: ServerConfig = {
+        id: 'config-a',
+        url: 'https://a.com',
+        apiKey: 'k1',
+      };
+      await saveServerConfig(config);
+      await setActiveServerConfig('config-a');
+      await takeIdentityChangeServerConfigIds();
+
+      await deleteServerConfig('config-a');
+
+      expect(await takeIdentityChangeServerConfigIds()).toEqual(['config-a']);
+    });
+
+    test('keeps the outgoing configs when reading the active one fails', async () => {
+      await setActiveServerConfig('config-a');
+      await setActiveServerConfig('config-b');
+      jest
+        .spyOn(AsyncStorage, 'getItem')
+        .mockRejectedValueOnce(new Error('disk'));
+
+      await expect(takeIdentityChangeServerConfigIds()).rejects.toThrow('disk');
+      expect((await takeIdentityChangeServerConfigIds()).sort()).toEqual([
+        'config-a',
+        'config-b',
+      ]);
     });
   });
 
   describe('deleteServerConfig', () => {
-    const config1: ServerConfig = { id: 'id-1', url: 'https://a.com', apiKey: 'k1' };
-    const config2: ServerConfig = { id: 'id-2', url: 'https://b.com', apiKey: 'k2' };
+    const config1: ServerConfig = {
+      id: 'id-1',
+      url: 'https://a.com',
+      apiKey: 'k1',
+    };
+    const config2: ServerConfig = {
+      id: 'id-2',
+      url: 'https://b.com',
+      apiKey: 'k2',
+    };
 
     test('removes config from storage', async () => {
       await saveServerConfig(config1);
@@ -347,7 +454,9 @@ describe('storage', () => {
 
       await deleteServerConfig('id-1');
 
-      expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith('sessionToken_id-1');
+      expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith(
+        'sessionToken_id-1'
+      );
     });
 
     test('clears active config when deleted config was active', async () => {
@@ -376,7 +485,9 @@ describe('storage', () => {
       await saveServerConfig(config1);
       await saveServerConfig(config2);
 
-      jest.spyOn(AsyncStorage, 'setItem').mockRejectedValueOnce(new Error('Storage error'));
+      jest
+        .spyOn(AsyncStorage, 'setItem')
+        .mockRejectedValueOnce(new Error('Storage error'));
 
       await expect(deleteServerConfig('id-1')).rejects.toThrow('Storage error');
     });
@@ -391,7 +502,9 @@ describe('storage', () => {
     });
 
     test('throws on storage error', async () => {
-      jest.spyOn(AsyncStorage, 'setItem').mockRejectedValueOnce(new Error('Storage error'));
+      jest
+        .spyOn(AsyncStorage, 'setItem')
+        .mockRejectedValueOnce(new Error('Storage error'));
 
       await expect(saveTimeRange('24h')).rejects.toThrow('Storage error');
     });
@@ -429,7 +542,9 @@ describe('storage', () => {
     });
 
     test("returns null on storage error (doesn't throw)", async () => {
-      jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('Storage error'));
+      jest
+        .spyOn(AsyncStorage, 'getItem')
+        .mockRejectedValueOnce(new Error('Storage error'));
 
       const result = await loadTimeRange();
 
@@ -459,7 +574,9 @@ describe('storage', () => {
     });
 
     test("returns null on storage error (doesn't throw)", async () => {
-      jest.spyOn(AsyncStorage, 'setItem').mockRejectedValueOnce(new Error('Storage error'));
+      jest
+        .spyOn(AsyncStorage, 'setItem')
+        .mockRejectedValueOnce(new Error('Storage error'));
 
       const result = await saveLastSyncedTime();
 
@@ -486,7 +603,9 @@ describe('storage', () => {
     });
 
     test("returns null on storage error (doesn't throw)", async () => {
-      jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('Storage error'));
+      jest
+        .spyOn(AsyncStorage, 'getItem')
+        .mockRejectedValueOnce(new Error('Storage error'));
 
       const result = await loadLastSyncedTime();
 
@@ -510,7 +629,9 @@ describe('storage', () => {
     });
 
     test("doesn't throw on storage error", async () => {
-      jest.spyOn(AsyncStorage, 'setItem').mockRejectedValueOnce(new Error('Storage error'));
+      jest
+        .spyOn(AsyncStorage, 'setItem')
+        .mockRejectedValueOnce(new Error('Storage error'));
 
       await expect(saveBackgroundSyncEnabled(true)).resolves.toBeUndefined();
     });
@@ -524,7 +645,9 @@ describe('storage', () => {
     });
 
     test("defaults to false on storage error (doesn't throw)", async () => {
-      jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('Storage error'));
+      jest
+        .spyOn(AsyncStorage, 'getItem')
+        .mockRejectedValueOnce(new Error('Storage error'));
 
       const result = await loadBackgroundSyncEnabled();
 
@@ -549,9 +672,13 @@ describe('storage', () => {
     });
 
     test("doesn't throw on storage error", async () => {
-      jest.spyOn(AsyncStorage, 'setItem').mockRejectedValueOnce(new Error('Storage error'));
+      jest
+        .spyOn(AsyncStorage, 'setItem')
+        .mockRejectedValueOnce(new Error('Storage error'));
 
-      await expect(saveCollapsedCategories(['Activity'])).resolves.toBeUndefined();
+      await expect(
+        saveCollapsedCategories(['Activity'])
+      ).resolves.toBeUndefined();
     });
   });
 
@@ -559,16 +686,18 @@ describe('storage', () => {
     test('returns all categories except Common when nothing stored', async () => {
       const result = await loadCollapsedCategories();
 
-      expect(result).toEqual(CATEGORY_ORDER.filter(c => c !== 'Common'));
+      expect(result).toEqual(CATEGORY_ORDER.filter((c) => c !== 'Common'));
       expect(result).not.toContain('Common');
     });
 
     test('returns default categories on storage error', async () => {
-      jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('Storage error'));
+      jest
+        .spyOn(AsyncStorage, 'getItem')
+        .mockRejectedValueOnce(new Error('Storage error'));
 
       const result = await loadCollapsedCategories();
 
-      expect(result).toEqual(CATEGORY_ORDER.filter(c => c !== 'Common'));
+      expect(result).toEqual(CATEGORY_ORDER.filter((c) => c !== 'Common'));
     });
   });
 
@@ -576,11 +705,17 @@ describe('storage', () => {
     test('deletes session token from SecureStore', async () => {
       await clearSessionToken('cfg-1');
 
-      expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith('sessionToken_cfg-1');
+      expect(SecureStore.deleteItemAsync).toHaveBeenCalledWith(
+        'sessionToken_cfg-1'
+      );
     });
 
     test('invalidates active config cache', async () => {
-      const config: ServerConfig = { id: 'cache-test', url: 'https://a.com', apiKey: 'k' };
+      const config: ServerConfig = {
+        id: 'cache-test',
+        url: 'https://a.com',
+        apiKey: 'k',
+      };
       await saveServerConfig(config);
 
       // Prime the cache
@@ -591,13 +726,23 @@ describe('storage', () => {
 
       // Next call should hit storage again (cache was invalidated)
       await getActiveServerConfig();
-      expect((AsyncStorage.getItem as jest.Mock).mock.calls.length).toBeGreaterThan(callsBefore);
+      expect(
+        (AsyncStorage.getItem as jest.Mock).mock.calls.length
+      ).toBeGreaterThan(callsBefore);
     });
   });
 
   describe('getActiveServerConfig cache', () => {
-    const configA: ServerConfig = { id: 'a', url: 'https://a.com', apiKey: 'key-a' };
-    const configB: ServerConfig = { id: 'b', url: 'https://b.com', apiKey: 'key-b' };
+    const configA: ServerConfig = {
+      id: 'a',
+      url: 'https://a.com',
+      apiKey: 'key-a',
+    };
+    const configB: ServerConfig = {
+      id: 'b',
+      url: 'https://b.com',
+      apiKey: 'key-b',
+    };
 
     test('returns cached value without hitting storage again', async () => {
       await saveServerConfig(configA);
@@ -607,7 +752,9 @@ describe('storage', () => {
       const result = await getActiveServerConfig();
 
       expect(result).toEqual(configA);
-      expect((AsyncStorage.getItem as jest.Mock).mock.calls.length).toBe(callsBefore);
+      expect((AsyncStorage.getItem as jest.Mock).mock.calls.length).toBe(
+        callsBefore
+      );
     });
 
     test('caches null when no active config', async () => {
@@ -616,7 +763,9 @@ describe('storage', () => {
       const result = await getActiveServerConfig();
 
       expect(result).toBeNull();
-      expect((AsyncStorage.getItem as jest.Mock).mock.calls.length).toBe(callsBefore);
+      expect((AsyncStorage.getItem as jest.Mock).mock.calls.length).toBe(
+        callsBefore
+      );
     });
 
     test('saveServerConfig invalidates cache', async () => {
@@ -659,11 +808,15 @@ describe('storage', () => {
       const callsBefore = (AsyncStorage.getItem as jest.Mock).mock.calls.length;
       await getActiveServerConfig();
 
-      expect((AsyncStorage.getItem as jest.Mock).mock.calls.length).toBeGreaterThan(callsBefore);
+      expect(
+        (AsyncStorage.getItem as jest.Mock).mock.calls.length
+      ).toBeGreaterThan(callsBefore);
     });
 
     test('does not cache on error', async () => {
-      jest.spyOn(AsyncStorage, 'getItem').mockRejectedValueOnce(new Error('Storage error'));
+      jest
+        .spyOn(AsyncStorage, 'getItem')
+        .mockRejectedValueOnce(new Error('Storage error'));
       await expect(getActiveServerConfig()).rejects.toThrow('Storage error');
 
       jest.restoreAllMocks();
@@ -699,5 +852,4 @@ describe('storage', () => {
       expect(retryResult).toEqual(configA);
     });
   });
-
 });

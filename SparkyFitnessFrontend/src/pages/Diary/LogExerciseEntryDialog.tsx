@@ -363,18 +363,26 @@ const LogExerciseEntryDialog: React.FC<LogExerciseEntryDialogProps> = ({
                 collisionDetection={closestCenter}
                 onDragEnd={handleDragEnd}
               >
-                <SetColumnHeaders modality={toSetTableModality(modality)} />
+                <SetColumnHeaders
+                  modality={toSetTableModality(modality)}
+                  showRir
+                />
                 <SortableContext items={sets.map((set) => set._dndId)}>
                   <div className="space-y-0.5">
                     {sets.map((set, index) => (
                       <SortableSetItem
+                        showRir
                         key={set._dndId}
                         id={set._dndId}
                         set={set}
                         setIndex={index}
                         exerciseIndex={0}
                         onSetChange={(_, sIdx, field, value) =>
-                          handleSetChange(sIdx, field, value ?? undefined)
+                          handleSetChange(
+                            sIdx,
+                            field as Parameters<typeof handleSetChange>[1],
+                            value ?? undefined
+                          )
                         }
                         onDuplicateSet={(_, sIdx) => handleDuplicateSet(sIdx)}
                         onRemoveSet={(_, sIdx) => handleRemoveSet(sIdx)}

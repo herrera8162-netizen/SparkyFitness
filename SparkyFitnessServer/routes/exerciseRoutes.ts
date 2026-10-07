@@ -7,7 +7,7 @@ import wgerService from '../integrations/wger/wgerService.js';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import { ExternalProviderType } from 'types/externalProvider.ts';
+import { ExternalProviderType } from '../types/externalProvider.js';
 import {
   exerciseWriteArrayFieldsSchema,
   type ExerciseWriteArrayFields,
@@ -527,7 +527,7 @@ router.get('/search', authenticate, async (req, res, next) => {
  *                         nullable: true
  *                       modality:
  *                         type: string
- *                         enum: [weight_reps, reps_only, duration, duration_distance]
+ *                         enum: [weight_reps, reps_only, bodyweight_reps, weight_duration, weight_distance, duration, duration_distance]
  *                         description: Derived from the provider category so import previews can pick a set editor.
  *                       calories_per_hour:
  *                         type: number
@@ -775,13 +775,24 @@ router.get('/wger-filters', authenticate, async (req, res, next) => {
  *             schema:
  *               type: array
  *               items:
- *                 type: string
+ *                 type: object
+ *                 properties:
+ *                   id:
+ *                     type: string
+ *                     format: uuid
+ *                     description: Exercise ID.
+ *                   name:
+ *                     type: string
+ *                     description: Exercise name.
  *       500:
  *         description: Server error.
  */
 router.get('/names', authenticate, async (req, res, next) => {
   try {
-    const { muscle, equipment } = req.query;
+    const muscle =
+      typeof req.query.muscle === 'string' ? req.query.muscle : undefined;
+    const equipment =
+      typeof req.query.equipment === 'string' ? req.query.equipment : undefined;
     const exerciseNames = await reportRepository.getExerciseNames(
       req.userId,
       muscle,
@@ -825,6 +836,19 @@ router.get('/names', authenticate, async (req, res, next) => {
  *       500:
  *         description: Server error.
  */
+/**
+ * Image values a client may carry over when creating an exercise (e.g. when
+ * duplicating one): an http(s) URL, or a library-relative "Folder/file.ext"
+ * path under uploads/exercises. Rejects traversal and absolute paths.
+ */
+function isSafeExerciseImageReference(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 500)
+    return false;
+  if (/^https?:\/\//i.test(value)) return true;
+  if (value.startsWith('/') || value.includes('\\')) return false;
+  return value.split('/').every((part) => part !== '' && part !== '..');
+}
+
 router.post('/add-external', authenticate, async (req, res, next) => {
   const { wgerExerciseId, language } = req.body;
   if (!wgerExerciseId) {
@@ -978,7 +1002,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
  *             properties:
  *               exerciseData:
  *                 type: string
- *                 description: JSON string of exercise data (name, category, modality, equipment, muscle_groups, description, instructions, is_public). modality is one of weight_reps, reps_only, duration, duration_distance; omitted or unrecognized values are derived from the category.
+ *                 description: JSON string of exercise data (name, category, modality, equipment, muscle_groups, description, instructions, is_public). modality is one of weight_reps, reps_only, bodyweight_reps, weight_duration, weight_distance, duration, duration_distance; omitted or unrecognized values are derived from the category.
  *                 example: '{"name": "Push-up", "category": "Strength", "modality": "reps_only", "equipment": ["None"], "muscle_groups": ["Chest", "Triceps"], "description": "A classic bodyweight exercise.", "instructions": ["Start in a plank position.", "Lower your body until your chest nearly touches the floor.", "Push back up to the starting position."], "is_public": true}'
  *               images:
  *                 type: array
@@ -1022,11 +1046,18 @@ router.post(
           )
         : [];
 
+      // A duplicated exercise carries the original's image references; keep
+      // them alongside any new uploads, as PUT does. Only library-relative
+      // paths or http(s) URLs are accepted, never traversal or absolute paths.
+      const carriedImages = (exerciseData.images ?? []).filter(
+        isSafeExerciseImageReference
+      );
+
       const newExercise = await exerciseService.createExercise(req.userId, {
         ...exerciseData,
 
         user_id: req.userId,
-        images: imagePaths,
+        images: [...carriedImages, ...imagePaths],
       });
       res.status(201).json(newExercise);
     } catch (error) {
@@ -1190,7 +1221,7 @@ router.post('/import-json', authenticate, async (req, res, next) => {
  *             properties:
  *               exerciseData:
  *                 type: string
- *                 description: JSON string of exercise data to update (name, category, modality, equipment, muscle_groups, description, instructions, is_public, images - existing image URLs). modality is one of weight_reps, reps_only, duration, duration_distance; omitted or unrecognized values leave the stored modality untouched, and changing the category alone never re-derives it.
+ *                 description: JSON string of exercise data to update (name, category, modality, equipment, muscle_groups, description, instructions, is_public, images - existing image URLs). modality is one of weight_reps, reps_only, bodyweight_reps, weight_duration, weight_distance, duration, duration_distance; omitted or unrecognized values leave the stored modality untouched, and changing the category alone never re-derives it.
  *                 example: '{"name": "Updated Push-up", "category": "Strength", "modality": "reps_only", "equipment": ["None"], "muscle_groups": ["Chest", "Triceps"], "description": "An updated classic bodyweight exercise.", "instructions": ["Start in a plank position.", "Lower your body until your chest nearly touches the floor.", "Push back up to the starting position."], "is_public": true, "images": ["http://example.com/old_image.jpg"]}'
  *               images:
  *                 type: array
@@ -1369,11 +1400,23 @@ router.get('/:id/deletion-impact', authenticate, async (req, res, next) => {
  *         required: true
  *         description: The ID of the exercise to delete.
  *       - in: query
+ *         name: mode
+ *         schema:
+ *           type: string
+ *           enum: [hide, delete, delete_with_history]
+ *           default: delete
+ *         description: >
+ *           hide - stop showing the exercise in search, change nothing else.
+ *           delete - remove it from the library and from presets/plans; diary
+ *           entries are preserved. delete_with_history - also delete the
+ *           caller's own diary entries. Another user's diary is never touched;
+ *           if anyone else still references the exercise it is hidden instead.
+ *       - in: query
  *         name: forceDelete
  *         schema:
  *           type: boolean
  *           default: false
- *         description: If true, forces deletion even if there are linked entries.
+ *         description: Deprecated alias for mode=delete_with_history.
  *     responses:
  *       200:
  *         description: Exercise deleted successfully.
@@ -1395,7 +1438,11 @@ router.get('/:id/deletion-impact', authenticate, async (req, res, next) => {
  */
 router.delete('/:id', authenticate, async (req, res, next) => {
   const { id } = req.params;
-  const { forceDelete } = req.query; // Get forceDelete from query parameters
+  const { forceDelete, mode, clientDate } = req.query as {
+    forceDelete?: string;
+    mode?: string;
+    clientDate?: string;
+  };
   const uuidRegex =
     /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
   if (!id || !uuidRegex.test(id)) {
@@ -1404,18 +1451,28 @@ router.delete('/:id', authenticate, async (req, res, next) => {
       .json({ error: 'Exercise ID is required and must be a valid UUID.' });
   }
   try {
+    // `forceDelete=true` is the pre-mode spelling of delete_with_history; keep
+    // honouring it so an older client upgrading mid-release behaves the same.
+    const requestedMode =
+      mode ?? (forceDelete === 'true' ? 'delete_with_history' : 'delete');
+    if (!exerciseService.isExerciseDeleteMode(requestedMode)) {
+      return res.status(400).json({
+        error: 'mode must be one of: hide, delete, delete_with_history.',
+      });
+    }
     const result = await exerciseService.deleteExercise(
       req.userId,
       id,
-      forceDelete === 'true'
+      requestedMode,
+      typeof clientDate === 'string' ? clientDate : undefined
     );
     // Based on the result status, return appropriate messages and status codes
-    if (result.status === 'deleted') {
-      res.status(200).json({ message: result.message });
-    } else if (result.status === 'force_deleted') {
-      res.status(200).json({ message: result.message });
-    } else if (result.status === 'hidden') {
-      res.status(200).json({ message: result.message });
+    if (
+      result.status === 'deleted' ||
+      result.status === 'deleted_with_history' ||
+      result.status === 'hidden'
+    ) {
+      res.status(200).json({ message: result.message, status: result.status });
     } else {
       // Fallback for unexpected status
       res

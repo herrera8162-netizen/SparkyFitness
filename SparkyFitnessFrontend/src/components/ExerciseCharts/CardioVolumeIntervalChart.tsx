@@ -11,6 +11,7 @@ import {
   CartesianGrid,
 } from 'recharts';
 import type { ExerciseStatsSummaryResponse } from '@workspace/shared';
+import { useTranslation } from 'react-i18next';
 
 interface CardioVolumeIntervalChartProps {
   summaryData?: ExerciseStatsSummaryResponse;
@@ -21,6 +22,7 @@ export const CardioVolumeIntervalChart = ({
   summaryData,
   onIntervalChange,
 }: CardioVolumeIntervalChartProps) => {
+  const { t } = useTranslation();
   const [metric, setMetric] = useState<'distance' | 'duration' | 'calories'>(
     'distance'
   );
@@ -34,11 +36,19 @@ export const CardioVolumeIntervalChart = ({
       <Card className="shadow-sm border">
         <CardHeader>
           <CardTitle className="text-lg font-semibold flex items-center justify-between">
-            <span>Exercise Volume & Time Totals</span>
+            <span>
+              {t(
+                'exerciseAnalytics.volume.emptyTitle',
+                'Exercise Volume & Time Totals'
+              )}
+            </span>
           </CardTitle>
         </CardHeader>
         <CardContent className="h-64 flex items-center justify-center text-muted-foreground text-sm">
-          No exercise distance or duration logged for this date range.
+          {t(
+            'exerciseAnalytics.volume.noData',
+            'No exercise distance or duration logged for this date range.'
+          )}
         </CardContent>
       </Card>
     );
@@ -48,9 +58,9 @@ export const CardioVolumeIntervalChart = ({
 
   const chartData = summaryData.intervalsBreakdown.map((pt) => ({
     label: pt.label,
-    distance: pt.distanceFormatted,
-    duration: pt.durationMinutes,
-    calories: pt.caloriesBurned,
+    distance: Number(pt.distanceFormatted.toFixed(2)),
+    duration: Math.round(pt.durationMinutes),
+    calories: Math.round(pt.caloriesBurned),
     workouts: pt.workoutCount,
   }));
 
@@ -62,10 +72,10 @@ export const CardioVolumeIntervalChart = ({
         : 'calories';
   const metricLabel =
     metric === 'distance'
-      ? `Distance (${unitLabel})`
+      ? `${t('exerciseAnalytics.volume.distance', 'Distance')} (${unitLabel})`
       : metric === 'duration'
-        ? 'Duration (mins)'
-        : 'Calories (kcal)';
+        ? `${t('exerciseAnalytics.volume.duration', 'Duration')} (${t('common.min', 'min')})`
+        : `${t('exerciseAnalytics.volume.calories', 'Calories')} (kcal)`;
   const barColor =
     metric === 'distance'
       ? '#3b82f6'
@@ -78,41 +88,59 @@ export const CardioVolumeIntervalChart = ({
       <CardHeader className="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-3 gap-2">
         <div>
           <CardTitle className="text-lg font-semibold">
-            Exercise Volume & Interval Totals
+            {t(
+              'exerciseAnalytics.volume.title',
+              'Exercise Volume & Interval Totals'
+            )}
           </CardTitle>
           <p className="text-xs text-muted-foreground mt-1">
-            Grouped by {summaryData.interval} • Total{' '}
-            {summaryData.totals.totalDistanceFormatted} {unitLabel} across{' '}
-            {summaryData.totals.workoutCount} workouts
+            {t('exerciseAnalytics.volume.summary', {
+              defaultValue_one:
+                'Grouped by {{interval}} • Total {{distance}} {{unit}} across {{count}} workout',
+              defaultValue_other:
+                'Grouped by {{interval}} • Total {{distance}} {{unit}} across {{count}} workouts',
+              interval: t(
+                `exerciseAnalytics.intervals.${summaryData.interval}`,
+                summaryData.interval
+              ),
+              distance: summaryData.totals.totalDistanceFormatted,
+              unit: unitLabel,
+              count: summaryData.totals.workoutCount,
+            })}
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* Metric Selector */}
           <div className="flex items-center bg-muted p-1 rounded-md text-xs">
-            <Button
-              variant={metric === 'distance' ? 'default' : 'ghost'}
-              size="sm"
-              className="h-7 px-2 text-xs"
-              onClick={() => setMetric('distance')}
-            >
-              Distance
-            </Button>
-            <Button
-              variant={metric === 'duration' ? 'default' : 'ghost'}
-              size="sm"
-              className="h-7 px-2 text-xs"
-              onClick={() => setMetric('duration')}
-            >
-              Duration
-            </Button>
-            <Button
-              variant={metric === 'calories' ? 'default' : 'ghost'}
-              size="sm"
-              className="h-7 px-2 text-xs"
-              onClick={() => setMetric('calories')}
-            >
-              Calories
-            </Button>
+            {(
+              [
+                [
+                  'distance',
+                  t('exerciseAnalytics.volume.distance', 'Distance'),
+                ],
+                [
+                  'duration',
+                  t('exerciseAnalytics.volume.duration', 'Duration'),
+                ],
+                [
+                  'calories',
+                  t('exerciseAnalytics.volume.calories', 'Calories'),
+                ],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className={`h-7 px-2.5 rounded text-xs font-medium ${
+                  metric === key
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'text-muted-foreground'
+                }`}
+                onClick={() => setMetric(key)}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
           {/* Interval Selector */}
@@ -124,7 +152,7 @@ export const CardioVolumeIntervalChart = ({
                 className="h-7 px-2 text-xs"
                 onClick={() => onIntervalChange('week')}
               >
-                Week
+                {t('exerciseAnalytics.intervals.week', 'Week')}
               </Button>
               <Button
                 variant={summaryData.interval === 'month' ? 'default' : 'ghost'}
@@ -132,7 +160,7 @@ export const CardioVolumeIntervalChart = ({
                 className="h-7 px-2 text-xs"
                 onClick={() => onIntervalChange('month')}
               >
-                Month
+                {t('exerciseAnalytics.intervals.month', 'Month')}
               </Button>
               <Button
                 variant={summaryData.interval === 'year' ? 'default' : 'ghost'}
@@ -140,13 +168,13 @@ export const CardioVolumeIntervalChart = ({
                 className="h-7 px-2 text-xs"
                 onClick={() => onIntervalChange('year')}
               >
-                Year
+                {t('exerciseAnalytics.intervals.year', 'Year')}
               </Button>
             </div>
           )}
         </div>
       </CardHeader>
-      <CardContent className="h-72 pt-2">
+      <CardContent className="h-56 sm:h-72 pt-2">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={chartData}
@@ -163,12 +191,29 @@ export const CardioVolumeIntervalChart = ({
               axisLine={false}
               tick={{ fontSize: 11 }}
             />
-            <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 11 }} />
+            <YAxis
+              tickLine={false}
+              axisLine={false}
+              tick={{ fontSize: 11 }}
+              tickFormatter={(value: number) =>
+                metric === 'distance'
+                  ? Number(value).toFixed(value >= 10 ? 0 : 1)
+                  : String(Math.round(value))
+              }
+            />
             <Tooltip
-              formatter={(val: unknown) => [
-                `${String(val ?? 0)} ${metric === 'distance' ? unitLabel : metric === 'duration' ? 'mins' : 'kcal'}`,
-                metricLabel,
-              ]}
+              formatter={(val: unknown) => {
+                const n = Number(val ?? 0);
+                const shown =
+                  metric === 'distance' ? n.toFixed(2) : String(Math.round(n));
+                const suffix =
+                  metric === 'distance'
+                    ? unitLabel
+                    : metric === 'duration'
+                      ? t('common.min', 'min')
+                      : 'kcal';
+                return [`${shown} ${suffix}`, metricLabel];
+              }}
               contentStyle={{ borderRadius: '8px', fontSize: '12px' }}
             />
             <Bar dataKey={dataKey} fill={barColor} radius={[4, 4, 0, 0]} />

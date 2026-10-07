@@ -5,6 +5,7 @@ import {
   getDefaultModel,
   getDefaultVisionModel,
   getOpenAiCompatibleBaseUrl,
+  getPerplexityPreset,
 } from './config.js';
 import {
   createGuardedDispatcher,
@@ -40,7 +41,6 @@ export interface ProviderConfig {
   api_key?: string;
   model_name?: string;
   custom_url?: string;
-  timeout?: number;
 }
 
 export interface DispatchImage {
@@ -73,7 +73,7 @@ export interface DispatchRequest {
   parseJson?: boolean;
   /** Forwarded to every provider family; omitted from the request body when unset. */
   temperature?: number;
-  /** Default 90_000; Ollama default 120_000 (or `provider.timeout`). */
+  /** Default 90_000; 300_000 for custom-URL services (ollama, openai_compatible, custom). */
   timeoutMs?: number;
 }
 
@@ -100,7 +100,16 @@ export type DispatchResult =
     };
 
 const DEFAULT_TIMEOUT_MS = 90_000;
-const OLLAMA_DEFAULT_TIMEOUT_MS = 120_000;
+// Ollama and models using a custom URL are nearly always local, where the first
+// request often triggers a cold start: loading a multi-billion-parameter model
+// can take minutes on modest hardware, before inference begins. 120s was short
+// enough to fail that load outright. Matches CHAT_REQUEST_TIMEOUT_MS in
+// chatService.ts, so the dispatch path is no longer the stricter of the two.
+const LOCAL_MODEL_TIMEOUT_MS = 5 * 60_000;
+// Ask Ollama to hold the model in memory well past its 5-minute default, so
+// only the first request in a session pays the cold start rather than every
+// request that follows a short pause.
+const OLLAMA_KEEP_ALIVE = '30m';
 // On Claude Opus 5 and Sonnet 5, omitting the `thinking` parameter runs
 // adaptive thinking by default, and max_tokens caps thinking *and* the visible
 // response together. At 2048 with a forced tool call, reasoning could consume
@@ -142,15 +151,18 @@ type ProviderFamily = 'google' | 'openai' | 'anthropic' | 'ollama';
 // normalizeImagesForDispatch); the primary HEIC decision is made from the bytes.
 const HEIC_MIME_TYPES = new Set(['image/heic', 'image/heif']);
 
-// OpenAI-family providers that reliably support strict `response_format.json_schema`.
-// Others (openai_compatible/custom) fall back to `json_object` with the schema
-// embedded in the prompt, since arbitrary compatible servers may not support it.
+// OpenAI-family providers that support strict `response_format.json_schema`.
+// Modern compatible servers (LM Studio, vLLM, Ollama via /v1, OpenAI, Mistral, Groq, etc.)
+// require or prefer json_schema for structured outputs.
 const STRICT_SCHEMA_PROVIDERS = new Set([
   'openai',
+  'openai_compatible',
+  'custom',
   'mistral',
   'groq',
   'openrouter',
   'xai',
+  'perplexity',
 ]);
 
 function providerFamily(serviceType: string): ProviderFamily | null {
@@ -163,6 +175,7 @@ function providerFamily(serviceType: string): ProviderFamily | null {
     case 'groq':
     case 'openrouter':
     case 'xai':
+    case 'perplexity':
     case 'meta': // Muse Spark's OpenAI-compatible endpoint; see openAiFamilyUrl.
     case 'custom':
       return 'openai';
@@ -357,10 +370,22 @@ function truncateBody(body: string): string {
 }
 
 function stripCodeFences(content: string): string {
-  return content
-    .replace(/^```(?:json)?\n?/, '')
-    .replace(/\n?```$/, '')
-    .trim();
+  let text = content.trim();
+  // Strip reasoning blocks from models with internal thoughts (<think>...</think>, <thought>...</thought>)
+  text = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  text = text.replace(/<thought>[\s\S]*?<\/thought>/gi, '').trim();
+
+  // If the content is wrapped in markdown code fences, extract the inner block
+  const fencedMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fencedMatch) {
+    text = fencedMatch[1].trim();
+  } else {
+    text = text
+      .replace(/^```(?:json)?\n?/, '')
+      .replace(/\n?```$/, '')
+      .trim();
+  }
+  return text;
 }
 
 /**
@@ -432,6 +457,9 @@ function openAiFamilyUrl(provider: ProviderConfig): string {
   if (provider.service_type === 'custom') {
     return provider.custom_url as string;
   }
+  if (provider.service_type === 'perplexity') {
+    return 'https://api.perplexity.ai/v1/responses';
+  }
   const baseUrl = getOpenAiCompatibleBaseUrl(
     provider.service_type,
     provider.custom_url
@@ -501,11 +529,50 @@ function buildOpenAiFamilyRequest(ctx: BuildContext): BuiltRequest {
           { type: 'text', text: prompt },
         ]
       : prompt;
+  const perplexityInput =
+    ctx.images.length > 0
+      ? [
+          {
+            role: 'user',
+            content: [
+              ...ctx.images.map((img) => ({
+                type: 'input_image',
+                image_url: `data:${img.mimeType};base64,${img.base64}`,
+              })),
+              { type: 'input_text', text: prompt },
+            ],
+          },
+        ]
+      : prompt;
+
   const body: Record<string, unknown> = {
     model: ctx.model,
     messages: [{ role: 'user', content }],
   };
-  if (ctx.temperature !== undefined) {
+
+  if (ctx.provider.service_type === 'perplexity') {
+    delete body.messages;
+    body.input = perplexityInput;
+
+    const preset = getPerplexityPreset(ctx.model);
+    if (preset) {
+      body.preset = preset;
+      delete body.model;
+    } else {
+      body.model = ctx.model;
+      const modelLower = (ctx.model ?? '').toLowerCase();
+      if (
+        modelLower.startsWith('anthropic/') ||
+        modelLower.includes('claude')
+      ) {
+        body.max_output_tokens = 4096;
+      }
+    }
+  }
+  if (
+    ctx.temperature !== undefined &&
+    ctx.provider.service_type !== 'perplexity'
+  ) {
     body.temperature = ctx.temperature;
   }
   if (ctx.jsonSchema) {
@@ -588,9 +655,12 @@ function buildAnthropicRequest(ctx: BuildContext): BuiltRequest {
 }
 
 function buildOllamaRequest(ctx: BuildContext): BuiltRequest {
+  const prompt = ctx.jsonSchema
+    ? `${ctx.prompt}\n\nRespond with a single JSON object that conforms to this JSON Schema:\n${JSON.stringify(toStrictJsonSchema(ctx.jsonSchema))}`
+    : ctx.prompt;
   const message: Record<string, unknown> = {
     role: 'user',
-    content: ctx.prompt,
+    content: prompt,
   };
   if (ctx.images.length > 0) {
     message.images = ctx.images.map((img) => img.base64);
@@ -599,17 +669,24 @@ function buildOllamaRequest(ctx: BuildContext): BuiltRequest {
     model: ctx.model,
     messages: [message],
     stream: false,
+    keep_alive: OLLAMA_KEEP_ALIVE,
     options: {
       num_ctx: 8192, // Enforce 8k context window support
       ...(ctx.temperature !== undefined && { temperature: ctx.temperature }),
     },
   };
   if (ctx.jsonSchema) {
-    body.format = ctx.jsonSchema;
+    body.format = 'json';
+  }
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (ctx.provider.api_key) {
+    headers['Authorization'] = `Bearer ${ctx.provider.api_key}`;
   }
   return {
     url: `${ctx.provider.custom_url}/api/chat`,
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body,
   };
 }
@@ -653,13 +730,63 @@ function extractGoogle(data: unknown): ExtractResult {
   return { kind: 'text', text };
 }
 
+function extractTextFromAgentOutput(output: unknown): string | null {
+  if (!Array.isArray(output)) return null;
+  const texts: string[] = [];
+
+  for (const item of output) {
+    if (!item || typeof item !== 'object') continue;
+    const obj = item as {
+      type?: string;
+      text?: unknown;
+      output_text?: unknown;
+      content?: unknown;
+    };
+    if (typeof obj.text === 'string') {
+      texts.push(obj.text);
+    } else if (typeof obj.output_text === 'string') {
+      texts.push(obj.output_text);
+    } else if (typeof obj.content === 'string') {
+      texts.push(obj.content);
+    } else if (Array.isArray(obj.content)) {
+      for (const block of obj.content) {
+        if (!block || typeof block !== 'object') continue;
+        const b = block as {
+          type?: string;
+          text?: unknown;
+          output_text?: unknown;
+        };
+        if (typeof b.text === 'string') {
+          texts.push(b.text);
+        } else if (typeof b.output_text === 'string') {
+          texts.push(b.output_text);
+        }
+      }
+    }
+  }
+
+  const combined = texts.join('\n').trim();
+  return combined.length > 0 ? combined : null;
+}
+
 function extractOpenAiFamily(data: unknown): ExtractResult {
   const d = data as {
     choices?: Array<{
       finish_reason?: string;
       message?: { content?: unknown; refusal?: unknown };
     }>;
+    output_text?: unknown;
+    output?: unknown;
   };
+  // Perplexity Agent API responses (/v1/responses) return `output_text` or `output`
+  if (typeof d?.output_text === 'string' && d.output_text.trim() !== '') {
+    return { kind: 'text', text: d.output_text };
+  }
+  const agentText = extractTextFromAgentOutput(d?.output);
+  if (agentText) {
+    return { kind: 'text', text: agentText };
+  }
+
   const choice = d?.choices?.[0];
   const message = choice?.message;
   if (message?.refusal) {
@@ -806,8 +933,7 @@ function extractResponse(
 // `DispatchResult` is unchanged, so nothing extra reaches the API surface.
 type DispatchFailure = Extract<DispatchResult, { ok: false }>;
 type HttpOutcome =
-  | { data: unknown }
-  | { error: DispatchFailure; rawBody?: string };
+  { data: unknown } | { error: DispatchFailure; rawBody?: string };
 
 function timeoutError(): DispatchFailure {
   return {
@@ -828,11 +954,21 @@ async function readResponse(response: Response): Promise<HttpOutcome> {
     // A 400 naming a request parameter is otherwise surfaced as raw JSON the
     // user has to decode; say it in a sentence instead.
     const rejected = describeRejectedParam(response.status, body);
-    const detail = rejected
-      ? `The AI service rejected the '${rejected}' parameter for this model. ${truncateBody(body)}`
-      : `AI service returned status ${response.status}${
-          body ? `: ${truncateBody(body)}` : ''
-        }`;
+    let detail: string;
+    if (rejected) {
+      detail = `The AI service rejected the '${rejected}' parameter for this model. ${truncateBody(body)}`;
+    } else if (
+      response.status === 403 &&
+      (body.includes('chat_completions_not_available') ||
+        body.includes('Sonar is now the Agent API'))
+    ) {
+      detail =
+        'Perplexity has retired the OpenAI-compatible Chat Completions API (/chat/completions) in favor of the Agent API (/v1/responses). Direct connections via OpenAI-compatible endpoints are not supported. Use OpenRouter with a Perplexity model (e.g., perplexity/sonar or perplexity/sonar-pro) instead.';
+    } else {
+      detail = `AI service returned status ${response.status}${
+        body ? `: ${truncateBody(body)}` : ''
+      }`;
+    }
     return {
       error: {
         ok: false,
@@ -977,10 +1113,81 @@ async function performOllama(
 
 function resolveTimeout(req: DispatchRequest, family: ProviderFamily): number {
   if (typeof req.timeoutMs === 'number') return req.timeoutMs;
-  if (family === 'ollama') {
-    return req.provider.timeout ?? OLLAMA_DEFAULT_TIMEOUT_MS;
+  if (family === 'ollama' || requiresCustomUrl(req.provider.service_type)) {
+    return LOCAL_MODEL_TIMEOUT_MS;
   }
   return DEFAULT_TIMEOUT_MS;
+}
+
+export function extractJsonCandidate(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Continue to balanced extraction
+  }
+
+  const candidates: unknown[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === '{' || char === '[') {
+      const openChar = char;
+      const closeChar = char === '{' ? '}' : ']';
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+
+      for (let j = i; j < text.length; j++) {
+        const c = text[j];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (c === '\\') {
+          escape = true;
+          continue;
+        }
+        if (c === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (!inString) {
+          if (c === openChar) {
+            depth++;
+          } else if (c === closeChar) {
+            depth--;
+            if (depth === 0) {
+              const snippet = text.slice(i, j + 1);
+              try {
+                const parsed = JSON.parse(snippet);
+                candidates.push(parsed);
+                i = j;
+              } catch {
+                // Ignore invalid candidate
+              }
+              break;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (candidates.length > 0) {
+    return candidates[candidates.length - 1];
+  }
+
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    return JSON.parse(text.slice(firstBrace, lastBrace + 1));
+  }
+  const firstBracket = text.indexOf('[');
+  const lastBracket = text.lastIndexOf(']');
+  if (firstBracket !== -1 && lastBracket > firstBracket) {
+    return JSON.parse(text.slice(firstBracket, lastBracket + 1));
+  }
+
+  throw new Error('No JSON structure found');
 }
 
 /**
@@ -1160,7 +1367,8 @@ export async function dispatchAiRequest(
   }
 
   try {
-    const json = JSON.parse(stripCodeFences(extracted.text));
+    const cleaned = stripCodeFences(extracted.text);
+    const json = extractJsonCandidate(cleaned);
     return { ok: true, text: extracted.text, json };
   } catch {
     return {
@@ -1174,4 +1382,5 @@ export async function dispatchAiRequest(
 export default {
   dispatchAiRequest,
   toStrictJsonSchema,
+  extractJsonCandidate,
 };

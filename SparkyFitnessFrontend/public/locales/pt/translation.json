@@ -278,7 +278,6 @@
     "editPresetTooltip": "Editar este treino predefinido",
     "deletePresetTooltip": "Apagar este treino predefinido",
     "loading": "A carregar...",
-    "loadMore": "Mais",
     "noExercisesInPreset": "Sem exercícios nesse treino predefinido",
     "failedToLoadPresets": "Falha ao carregar treinos predefinidos.",
     "createSuccess": "Treino predefinido carregado com sucesso.",
@@ -1436,7 +1435,6 @@
     "reps": "Repetições",
     "weight": "Peso",
     "tonnage": "Tonelagem",
-    "durationMin": "Duração (min)",
     "restS": "Descanso (s)",
     "notes": "Notas",
     "caloriesBurned": "Calorias Queimadas",
@@ -1843,5 +1841,8 @@
     "liveAiContextTitle": "Contexto de IA em direto",
     "liveAiContextDescription": "Este é o contexto atual que seria fornecido ao assistente de IA",
     "loadingAiContext": "A carregar o contexto de IA..."
+  },
+  "layout": {
+    "welcome": "Bem vindo {{activeUserName}}"
   }
 }

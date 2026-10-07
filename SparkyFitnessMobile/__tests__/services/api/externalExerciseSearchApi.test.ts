@@ -2,16 +2,29 @@ import {
   searchExternalExercises,
   importExercise,
 } from '../../../src/services/api/externalExerciseSearchApi';
-import { getActiveServerConfig, type ServerConfig } from '../../../src/services/storage';
+import {
+  getActiveServerConfig,
+  type ServerConfig,
+} from '../../../src/services/storage';
+import { getAppLanguageCode } from '../../../src/localization/i18n';
 
 jest.mock('../../../src/services/storage', () => ({
   getActiveServerConfig: jest.fn(),
-  proxyHeadersToRecord: jest.requireActual('../../../src/services/storage').proxyHeadersToRecord,
+  proxyHeadersToRecord: jest.requireActual('../../../src/services/storage')
+    .proxyHeadersToRecord,
 }));
 
 jest.mock('../../../src/services/LogService', () => ({
   addLog: jest.fn(),
 }));
+
+jest.mock('../../../src/localization/i18n', () => ({
+  getAppLanguageCode: jest.fn(() => 'en'),
+}));
+
+const mockGetAppLanguageCode = getAppLanguageCode as jest.MockedFunction<
+  typeof getAppLanguageCode
+>;
 
 const mockGetActiveServerConfig = getActiveServerConfig as jest.MockedFunction<
   typeof getActiveServerConfig
@@ -31,6 +44,7 @@ describe('externalExerciseSearchApi', () => {
     (globalThis as any).fetch = mockFetch;
     jest.spyOn(console, 'log').mockImplementation(() => {});
     jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockGetAppLanguageCode.mockReturnValue('en');
   });
 
   afterEach(() => {
@@ -39,7 +53,10 @@ describe('externalExerciseSearchApi', () => {
 
   describe('searchExternalExercises', () => {
     it('sends GET request with correct query params', async () => {
-      const responseData = { items: [], pagination: { page: 1, pageSize: 20, totalCount: 0, hasMore: false } };
+      const responseData = {
+        items: [],
+        pagination: { page: 1, pageSize: 20, totalCount: 0, hasMore: false },
+      };
       mockGetActiveServerConfig.mockResolvedValue(testConfig);
       mockFetch.mockResolvedValue({
         ok: true,
@@ -50,7 +67,7 @@ describe('externalExerciseSearchApi', () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         expect.stringContaining('/api/exercises/search-external?'),
-        expect.objectContaining({ method: 'GET' }),
+        expect.objectContaining({ method: 'GET' })
       );
       const url = mockFetch.mock.calls[0][0] as string;
       expect(url).toContain('query=bench+press');
@@ -58,13 +75,46 @@ describe('externalExerciseSearchApi', () => {
       expect(url).toContain('providerId=provider-1');
       expect(url).toContain('page=2');
       expect(url).toContain('pageSize=10');
+      expect(url).toContain('language=en');
+    });
+
+    it('sends the active app language so localized queries match', async () => {
+      mockGetAppLanguageCode.mockReturnValue('de');
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            items: [],
+            pagination: {
+              page: 1,
+              pageSize: 20,
+              totalCount: 0,
+              hasMore: false,
+            },
+          }),
+      });
+
+      await searchExternalExercises('Beinpresse', 'wger', 'p-1');
+
+      const url = mockFetch.mock.calls[0][0] as string;
+      expect(url).toContain('language=de');
     });
 
     it('uses default page and pageSize', async () => {
       mockGetActiveServerConfig.mockResolvedValue(testConfig);
       mockFetch.mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve({ items: [], pagination: { page: 1, pageSize: 20, totalCount: 0, hasMore: false } }),
+        json: () =>
+          Promise.resolve({
+            items: [],
+            pagination: {
+              page: 1,
+              pageSize: 20,
+              totalCount: 0,
+              hasMore: false,
+            },
+          }),
       });
 
       await searchExternalExercises('squat', 'wger', 'p-1');
@@ -105,8 +155,26 @@ describe('externalExerciseSearchApi', () => {
         'https://example.com/api/exercises/add-external',
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({ wgerExerciseId: 42 }),
-        }),
+          body: JSON.stringify({ wgerExerciseId: 42, language: 'en' }),
+        })
+      );
+    });
+
+    it('imports the wger exercise in the active app language', async () => {
+      mockGetAppLanguageCode.mockReturnValue('de');
+      mockGetActiveServerConfig.mockResolvedValue(testConfig);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ id: 'new-ex-1', name: 'Beinpresse' }),
+      });
+
+      await importExercise('wger', '371');
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://example.com/api/exercises/add-external',
+        expect.objectContaining({
+          body: JSON.stringify({ wgerExerciseId: 371, language: 'de' }),
+        })
       );
     });
 
@@ -125,18 +193,22 @@ describe('externalExerciseSearchApi', () => {
         expect.objectContaining({
           method: 'POST',
           body: JSON.stringify({ exerciseId: 'abc-123' }),
-        }),
+        })
       );
     });
 
     it('throws for unsupported source', async () => {
       await expect(importExercise('unknown-source', '1')).rejects.toThrow(
-        'Unsupported exercise source: unknown-source',
+        'Unsupported exercise source: unknown-source'
       );
     });
 
     it('returns the imported exercise with id and name', async () => {
-      const responseData = { id: 'new-ex-1', name: 'Bench Press', category: 'Strength' };
+      const responseData = {
+        id: 'new-ex-1',
+        name: 'Bench Press',
+        category: 'Strength',
+      };
       mockGetActiveServerConfig.mockResolvedValue(testConfig);
       mockFetch.mockResolvedValue({
         ok: true,
@@ -158,7 +230,8 @@ describe('externalExerciseSearchApi', () => {
         id: 'ex-1',
         name: 'One-Arm Kettlebell Clean',
         source: 'free-exercise-db',
-        images: '["One-Arm_Kettlebell_Clean/0.jpg","One-Arm_Kettlebell_Clean/1.jpg"]',
+        images:
+          '["One-Arm_Kettlebell_Clean/0.jpg","One-Arm_Kettlebell_Clean/1.jpg"]',
       };
       mockGetActiveServerConfig.mockResolvedValue(testConfig);
       mockFetch.mockResolvedValue({
@@ -166,7 +239,10 @@ describe('externalExerciseSearchApi', () => {
         json: () => Promise.resolve(responseData),
       });
 
-      const result = await importExercise('free-exercise-db', 'One-Arm_Kettlebell_Clean');
+      const result = await importExercise(
+        'free-exercise-db',
+        'One-Arm_Kettlebell_Clean'
+      );
 
       expect(result.images).toEqual([
         'One-Arm_Kettlebell_Clean/0.jpg',

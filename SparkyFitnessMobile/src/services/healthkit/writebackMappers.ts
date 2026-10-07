@@ -1,9 +1,15 @@
+import { isEntryTimeString } from '@workspace/shared';
 import type {
   QuantitySampleForSaving,
   QuantityTypeIdentifierWriteable,
 } from '@kingstinct/react-native-healthkit';
 import type { FoodEntry } from '../../types/foodEntries';
-import { HC_NUTRIENT_COLUMNS, G_TO_MG, G_TO_MCG, tidyNumber } from '../shared/dataTransformation';
+import {
+  HC_NUTRIENT_COLUMNS,
+  G_TO_MG,
+  G_TO_MCG,
+  tidyNumber,
+} from '../shared/dataTransformation';
 import { toLocalDateString, addDays } from '../../utils/dateUtils';
 
 // Pure mappers: SparkyFitness diary data → HealthKit write descriptors. No HealthKit
@@ -21,8 +27,10 @@ import { toLocalDateString, addDays } from '../../utils/dateUtils';
 // factor so the stored value is written verbatim (no conversion).
 type DietaryUnit = 'g' | 'mg' | 'mcg';
 
-export const DIETARY_ENERGY_IDENTIFIER = 'HKQuantityTypeIdentifierDietaryEnergyConsumed' as const;
-export const DIETARY_WATER_IDENTIFIER = 'HKQuantityTypeIdentifierDietaryWater' as const;
+export const DIETARY_ENERGY_IDENTIFIER =
+  'HKQuantityTypeIdentifierDietaryEnergyConsumed' as const;
+export const DIETARY_WATER_IDENTIFIER =
+  'HKQuantityTypeIdentifierDietaryWater' as const;
 
 // factor (from HC_NUTRIENT_COLUMNS) → the unit Sparky already stores that column in.
 // Sodium etc. are stored in mg, vitamin A in mcg, macros in grams; HealthKit accepts
@@ -36,7 +44,10 @@ const UNIT_BY_FACTOR: Record<number, DietaryUnit> = {
 // Sparky food column → HealthKit dietary quantity identifier. `trans_fat` is absent:
 // @kingstinct/react-native-healthkit@13.3.1 exposes no trans-fat identifier, so we
 // drop that one column (Health Connect writes it; HealthKit can't).
-const DIETARY_IDENTIFIER_BY_COLUMN: Record<string, QuantityTypeIdentifierWriteable> = {
+const DIETARY_IDENTIFIER_BY_COLUMN: Record<
+  string,
+  QuantityTypeIdentifierWriteable
+> = {
   protein: 'HKQuantityTypeIdentifierDietaryProtein',
   carbs: 'HKQuantityTypeIdentifierDietaryCarbohydrates',
   fat: 'HKQuantityTypeIdentifierDietaryFatTotal',
@@ -52,22 +63,28 @@ const DIETARY_IDENTIFIER_BY_COLUMN: Record<string, QuantityTypeIdentifierWriteab
   iron: 'HKQuantityTypeIdentifierDietaryIron',
   vitamin_c: 'HKQuantityTypeIdentifierDietaryVitaminC',
   vitamin_a: 'HKQuantityTypeIdentifierDietaryVitaminA',
+  caffeine_mg: 'HKQuantityTypeIdentifierDietaryCaffeine',
 };
 
 // Sparky column → { HK identifier, HK unit }. Built from HC_NUTRIENT_COLUMNS so the
 // unit is derived from the same factor the read side uses, and any column without an
 // HK identifier (trans_fat) is excluded.
-export const DIETARY_HK_MAP: Record<string, { identifier: QuantityTypeIdentifierWriteable; unit: DietaryUnit }> =
-  HC_NUTRIENT_COLUMNS.reduce(
-    (map, { column, factor }) => {
-      const identifier = DIETARY_IDENTIFIER_BY_COLUMN[column];
-      if (identifier) {
-        map[column] = { identifier, unit: UNIT_BY_FACTOR[factor] ?? 'g' };
-      }
-      return map;
-    },
-    {} as Record<string, { identifier: QuantityTypeIdentifierWriteable; unit: DietaryUnit }>,
-  );
+export const DIETARY_HK_MAP: Record<
+  string,
+  { identifier: QuantityTypeIdentifierWriteable; unit: DietaryUnit }
+> = HC_NUTRIENT_COLUMNS.reduce(
+  (map, { column, factor }) => {
+    const identifier = DIETARY_IDENTIFIER_BY_COLUMN[column];
+    if (identifier) {
+      map[column] = { identifier, unit: UNIT_BY_FACTOR[factor] ?? 'g' };
+    }
+    return map;
+  },
+  {} as Record<
+    string,
+    { identifier: QuantityTypeIdentifierWriteable; unit: DietaryUnit }
+  >
+);
 
 // Every dietary quantity type Sparky writes — energy + the mapped nutrients. The
 // permission request (index.ts) and the orchestrator's per-type authorization filter
@@ -77,8 +94,8 @@ export const DIETARY_WRITE_IDENTIFIERS: QuantityTypeIdentifierWriteable[] = [
   ...Object.values(DIETARY_HK_MAP).map((m) => m.identifier),
 ];
 
-// Food entries carry only a calendar date; HealthKit needs an instant. Anchor each
-// meal to a representative local time so records order sensibly within the day.
+// Default meal start times when an entry does not have a recorded entry_time.
+// Anchor each meal to a representative local time so records order sensibly within the day.
 const MEAL_START_HM: Record<string, [number, number]> = {
   breakfast: [8, 0],
   lunch: [12, 30],
@@ -86,12 +103,21 @@ const MEAL_START_HM: Record<string, [number, number]> = {
   snacks: [15, 0],
 };
 
+const resolveFoodEntryTime = (entry: FoodEntry): [number, number, number] => {
+  if (entry.entry_time && isEntryTimeString(entry.entry_time)) {
+    const parts = entry.entry_time.split(':').map(Number);
+    return [parts[0], parts[1], parts[2] || 0];
+  }
+  const [hour, minute] = MEAL_START_HM[entry.meal_type] ?? MEAL_START_HM.snacks;
+  return [hour, minute, 0];
+};
+
 // Consumed amount of a per-serving snapshot value — same formula the diary uses. For
 // collapsed logged meals serving_size === quantity, so this returns the meal's total.
 const scaleConsumed = (
   value: number | undefined,
   quantity: number,
-  servingSize: number,
+  servingSize: number
 ): number | undefined => {
   // Guard falsy serving sizes (0/null/undefined/NaN): the type says number, but the
   // daily-summary can return null, and `x / null` coerces to `x / 0` → Infinity.
@@ -99,15 +125,20 @@ const scaleConsumed = (
   return (value * quantity) / servingSize;
 };
 
-const localDayInstant = (date: string, hour: number, minute: number): Date => {
+const localDayInstant = (
+  date: string,
+  hour: number,
+  minute: number,
+  second = 0
+): Date => {
   // Construct from parts in local time. `new Date('YYYY-MM-DDT00:00:00')` is parsed
   // as UTC in some JS engines, which shifts the calendar day for non-UTC offsets.
   const [year, month, day] = date.split('-').map(Number);
-  return new Date(year, month - 1, day, hour, minute, 0, 0);
+  return new Date(year, month - 1, day, hour, minute, second, 0);
 };
 
-// A point-in-time anchor at a representative local meal time, returned as an equal
-// start/end pair. HealthKit dietary samples are instantaneous (start === end), so —
+// A point-in-time anchor at the entry's logged time or a representative local meal time,
+// returned as an equal start/end pair. HealthKit dietary samples are instantaneous (start === end), so —
 // unlike Android's interval records — we emit a zero-length sample, matching how
 // MyFitnessPal writes nutrition (Apple Health then shows a single time, not a range).
 // Returns null when the anchor is still in the future, so a snack logged early defers
@@ -116,9 +147,10 @@ const recordInterval = (
   date: string,
   hour: number,
   minute: number,
-  now: Date = new Date(),
+  second = 0,
+  now: Date = new Date()
 ): { start: Date; end: Date } | null => {
-  const start = localDayInstant(date, hour, minute);
+  const start = localDayInstant(date, hour, minute, second);
   if (start.getTime() > now.getTime()) return null;
   return { start, end: start };
 };
@@ -147,18 +179,18 @@ export interface WaterSampleDescriptor {
 
 /**
  * Map one Sparky food entry to a HealthKit Food-correlation descriptor.
- * Returns null when the entry can't be scaled (serving_size === 0), its meal-time
+ * Returns null when the entry can't be scaled (serving_size === 0), its time
  * anchor is still in the future (deferred to a later sync), or it has no positive
  * nutrient values (a correlation needs at least one contained sample).
  */
 export const foodEntryToNutrientSamples = (
   entry: FoodEntry,
-  now: Date = new Date(),
+  now: Date = new Date()
 ): NutrientSampleDescriptor | null => {
   if (!entry.serving_size) return null; // 0 / null / undefined — can't scale
 
-  const [hour, minute] = MEAL_START_HM[entry.meal_type] ?? MEAL_START_HM.snacks;
-  const interval = recordInterval(entry.entry_date, hour, minute, now);
+  const [hour, minute, second] = resolveFoodEntryTime(entry);
+  const interval = recordInterval(entry.entry_date, hour, minute, second, now);
   if (!interval) return null; // anchor still in the future — defer to a later sync
 
   const { start, end } = interval;
@@ -167,15 +199,25 @@ export const foodEntryToNutrientSamples = (
   const pushSample = (
     identifier: QuantityTypeIdentifierWriteable,
     unit: string,
-    value: number | undefined,
+    value: number | undefined
   ): void => {
     // Zero/absent values are omitted, not written as 0.
     if (value != null && value > 0) {
-      samples.push({ quantityType: identifier, unit, quantity: tidyNumber(value), startDate: start, endDate: end });
+      samples.push({
+        quantityType: identifier,
+        unit,
+        quantity: tidyNumber(value),
+        startDate: start,
+        endDate: end,
+      });
     }
   };
 
-  pushSample(DIETARY_ENERGY_IDENTIFIER, 'kcal', scaleConsumed(entry.calories, entry.quantity, entry.serving_size));
+  pushSample(
+    DIETARY_ENERGY_IDENTIFIER,
+    'kcal',
+    scaleConsumed(entry.calories, entry.quantity, entry.serving_size)
+  );
 
   // Each nutrient is written in the unit Sparky stores it in (factor → HK unit), so no
   // conversion is needed — same value the read side would multiply grams into.
@@ -185,7 +227,7 @@ export const foodEntryToNutrientSamples = (
     const value = scaleConsumed(
       entry[column as keyof FoodEntry] as number | undefined,
       entry.quantity,
-      entry.serving_size,
+      entry.serving_size
     );
     pushSample(mapped.identifier, mapped.unit, value);
   }
@@ -210,11 +252,11 @@ export const foodEntryToNutrientSamples = (
 export const waterMlToSample = (
   date: string,
   ml: number,
-  now: Date = new Date(),
+  now: Date = new Date()
 ): WaterSampleDescriptor | null => {
   if (ml <= 0) return null;
 
-  const interval = recordInterval(date, 12, 0, now); // noon anchor
+  const interval = recordInterval(date, 12, 0, 0, now); // noon anchor
   if (!interval) return null; // noon anchor still in the future — defer to a later sync
 
   return {
@@ -237,11 +279,13 @@ const MAX_WRITEBACK_DAYS = 7;
  */
 export const computeWritebackDates = (
   lastWritebackIso: string | null,
-  now: Date = new Date(),
+  now: Date = new Date()
 ): string[] => {
   let backDays = 1; // default: yesterday + today
   if (lastWritebackIso) {
-    const elapsed = Math.floor((now.getTime() - new Date(lastWritebackIso).getTime()) / DAY_MS);
+    const elapsed = Math.floor(
+      (now.getTime() - new Date(lastWritebackIso).getTime()) / DAY_MS
+    );
     backDays = Math.min(Math.max(elapsed + 1, 1), MAX_WRITEBACK_DAYS);
   }
   // Generate calendar days with addDays (local, DST-safe) rather than subtracting

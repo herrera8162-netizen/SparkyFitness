@@ -1,4 +1,9 @@
 import { z } from 'zod/v4';
+import {
+  isDayString,
+  MIN_MEASURED_BMR_KCAL,
+  MAX_MEASURED_BMR_KCAL,
+} from '@workspace/shared';
 
 const coerceLegacyNumber = (value: unknown) => {
   if (typeof value !== 'string') {
@@ -18,6 +23,14 @@ const requiredLegacyString = (fieldName: string) =>
   z.preprocess(
     (value) => (typeof value === 'string' ? value.trim() : value),
     z.string().min(1, `${fieldName} is required`)
+  );
+
+const requiredDayString = (fieldName: string) =>
+  z.preprocess(
+    (value) => (typeof value === 'string' ? value.trim() : value),
+    z
+      .string()
+      .refine(isDayString, `${fieldName} must be a YYYY-MM-DD calendar date`)
   );
 
 const optionalLegacyString = z.preprocess(
@@ -91,11 +104,25 @@ const boundedNullableOptionalLegacyNumber = (min: number, max: number) =>
 // numeric(5,2) columns, so 999.99 is the largest storable mass.
 const smartScaleMassKg = boundedNullableOptionalLegacyNumber(0, 999.99);
 const percentage = boundedNullableOptionalLegacyNumber(0, 100);
+// numeric(6,1) column for BMR kcal. Bounds are shared with every consumer that
+// decides whether a measured BMR may replace the formula estimate.
+const smartScaleBmrKcal = boundedNullableOptionalLegacyNumber(
+  MIN_MEASURED_BMR_KCAL,
+  MAX_MEASURED_BMR_KCAL
+);
 
 export const UpsertWaterIntakeBodySchema = z
   .object({
     entry_date: requiredLegacyString('entry_date'),
-    change_drinks: requiredLegacyNumber,
+    // Bounded and integral because upsertWaterIntake loops once per drink, and
+    // since #2115 a single iteration can also insert a food_entries row. An
+    // unbounded (or fractional) value turned one request into an unbounded
+    // serial write loop. 100 presses of "+" in one call is already far past
+    // anything the UI issues.
+    change_drinks: z.preprocess(
+      coerceLegacyNumber,
+      z.number().int().min(-100).max(100)
+    ),
     container_id: nullableOptionalLegacyNumber,
     user_id: optionalLegacyString,
   })
@@ -130,6 +157,7 @@ export const UpsertCheckInBodySchema = z
     muscle_mass_kg: smartScaleMassKg,
     bone_mass_kg: smartScaleMassKg,
     body_water_percentage: percentage,
+    bmr: smartScaleBmrKcal,
   })
   .loose();
 
@@ -148,6 +176,7 @@ export const UpdateCheckInBodySchema = z
     muscle_mass_kg: smartScaleMassKg,
     bone_mass_kg: smartScaleMassKg,
     body_water_percentage: percentage,
+    bmr: smartScaleBmrKcal,
   })
   .loose();
 
@@ -201,7 +230,7 @@ export type UpsertCustomEntryBody = z.infer<typeof UpsertCustomEntryBodySchema>;
 
 export const DateParamSchema = z
   .object({
-    date: requiredLegacyString('date'),
+    date: requiredDayString('date'),
   })
   .loose();
 
@@ -217,8 +246,8 @@ export type UuidParam = z.infer<typeof UuidParamSchema>;
 
 export const DateRangeParamSchema = z
   .object({
-    startDate: requiredLegacyString('startDate'),
-    endDate: requiredLegacyString('endDate'),
+    startDate: requiredDayString('startDate'),
+    endDate: requiredDayString('endDate'),
   })
   .loose();
 
@@ -227,13 +256,27 @@ export type DateRangeParam = z.infer<typeof DateRangeParamSchema>;
 export const CustomMeasurementsRangeParamSchema = z
   .object({
     categoryId: requiredLegacyString('categoryId'),
-    startDate: requiredLegacyString('startDate'),
-    endDate: requiredLegacyString('endDate'),
+    startDate: requiredDayString('startDate'),
+    endDate: requiredDayString('endDate'),
   })
   .loose();
 
 export type CustomMeasurementsRangeParam = z.infer<
   typeof CustomMeasurementsRangeParamSchema
+>;
+
+/**
+ * Query params for the "latest manual custom value per category on or before a
+ * date" lookup.
+ */
+export const LatestCustomEntryQuerySchema = z
+  .object({
+    date: requiredDayString('date'),
+  })
+  .loose();
+
+export type LatestCustomEntryQuery = z.infer<
+  typeof LatestCustomEntryQuerySchema
 >;
 
 export const UpdateWaterIntakeLogTimeBodySchema = z
@@ -264,6 +307,7 @@ export const ImportHealthDataItemSchema = z
     timestamp: optionalLegacyString,
     source: optionalLegacyString,
     source_id: optionalLegacyString,
+    exercise_source_id: optionalLegacyString,
     record_timezone: nullableOptionalLegacyString,
     record_utc_offset_minutes: nullableOptionalLegacyInteger,
     // Sleep session fields (only present on SleepSession rows).

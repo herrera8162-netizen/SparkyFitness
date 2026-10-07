@@ -71,7 +71,7 @@ describe('getDailyNutritionTotalsRange select list', () => {
     );
   });
 
-  it('emits one output column per shared nutrient field and no others', async () => {
+  it('emits every shared nutrient field plus legacy completeness metadata', async () => {
     const sql = await sqlOf();
     const aliases = [...sql.matchAll(/\bas (\w+),?$/gim)].map((m) => m[1]);
     // The NAMES, not just the count. Counting and de-duplicating alone accepts any renaming
@@ -79,9 +79,16 @@ describe('getDailyNutritionTotalsRange select list', () => {
     // names, so the query would publish that name and no `calories` at all with this test
     // green. Expected names are spelled out here rather than derived from the alias map
     // under test, because a guard that imports the thing it guards proves nothing.
-    const expected = FOOD_VARIANT_NUTRIENT_FIELDS.map((field) =>
-      field === 'dietary_fiber' ? 'fiber' : field === 'sugars' ? 'sugar' : field
-    );
+    const expected = [
+      ...FOOD_VARIANT_NUTRIENT_FIELDS.map((field) =>
+        field === 'dietary_fiber'
+          ? 'fiber'
+          : field === 'sugars'
+            ? 'sugar'
+            : field
+      ),
+      'legacy_ambiguous_entry_count',
+    ];
     expect(aliases).toEqual(expected);
     expect(new Set(aliases).size).toBe(aliases.length);
   });
@@ -89,11 +96,31 @@ describe('getDailyNutritionTotalsRange select list', () => {
   // Two fields are published under a different name than their column, and the consumers read
   // the alias: foodTools maps row.fiber and row.sugar. Renaming a column without carrying the
   // alias would hand those consumers undefined, which they coerce to 0.
+  it('recognizes legacy units that embed a reference serving size', async () => {
+    const sql = await sqlOf();
+    expect(sql).toContain("fe.unit ~ '^\\s*[0-9]+(?:\\.[0-9]+)?\\s+\\S'");
+  });
+
   it('publishes dietary_fiber as fiber and sugars as sugar', async () => {
     const sql = await sqlOf();
     expect(sql).toMatch(/\bas fiber,?$/m);
     expect(sql).toMatch(/\bas sugar,?$/m);
     expect(sql).not.toMatch(/\bas dietary_fiber,?$/im);
     expect(sql).not.toMatch(/\bas sugars,?$/im);
+  });
+
+  // Phase 3 (#1557): water_ml is deliberately NOT in FOOD_VARIANT_NUTRIENT_FIELDS
+  // (see shared/src/constants/foodVariantNutrients.ts) -- it is a sibling
+  // column, not a nutrient supplements dose or Reports trends should sum.
+  // This locks that decision against a future well-meaning addition: if
+  // water_ml is ever added to the shared list, this query would start
+  // publishing a water column here (and, per the earlier test in this file,
+  // start summing a "water dose" from medication_entries) with nothing else
+  // to catch it.
+  it('does NOT select water_ml -- it is a sibling column, not a shared nutrient field', async () => {
+    const sql = await sqlOf();
+    expect(FOOD_VARIANT_NUTRIENT_FIELDS).not.toContain('water_ml');
+    expect(sql).not.toMatch(/\bas water_ml,?$/im);
+    expect(sql).not.toContain('fe.water_ml');
   });
 });

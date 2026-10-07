@@ -464,6 +464,34 @@ describe('Exercise entry API schemas', () => {
       });
       expect(withNull.success).toBe(true);
     });
+
+    // Deleting a library exercise nulls the pointer instead of cascading
+    // (20260912150000_preserve_data_on_user_and_library_deletes.sql), so an
+    // entry that outlived its exercise has to survive the response parse --
+    // the routes parse with this schema before replying, and a throw here
+    // would take out the whole diary for everyone who logged that exercise.
+    it('accepts an entry whose library exercise has been deleted', () => {
+      const orphaned = runSchema('exerciseEntryResponseSchema', {
+        ...baseEntryResponse,
+        exercise_id: null,
+        superset_group: null,
+        exercise_snapshot: {
+          id: null,
+          name: 'Deleted Exercise',
+          category: null,
+          images: null,
+          primary_muscles: null,
+          secondary_muscles: null,
+          equipment: null,
+          instructions: null,
+          force: null,
+          level: null,
+          mechanic: null,
+        },
+      });
+      expect(orphaned.success).toBe(true);
+      expect(orphaned.data.exercise_id).toBeNull();
+    });
   });
 
   describe('set duration (integer seconds)', () => {
@@ -493,6 +521,54 @@ describe('Exercise entry API schemas', () => {
       const result = runSchema('exerciseEntrySetRequestSchema', {
         ...baseSetRequest,
         duration: 1.5,
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('set RIR (reps in reserve)', () => {
+    const baseSetRequest = { set_number: 1, reps: 8, weight: 100 };
+
+    it('accepts 0-10 and null', () => {
+      for (const rir of [0, 2.5, 10, null]) {
+        expect(
+          runSchema('exerciseEntrySetRequestSchema', { ...baseSetRequest, rir })
+            .success
+        ).toBe(true);
+      }
+    });
+
+    it('rejects values outside 0-10 (numeric(3,1) column)', () => {
+      for (const rir of [-1, 11, 150]) {
+        expect(
+          runSchema('exerciseEntrySetRequestSchema', { ...baseSetRequest, rir })
+            .success
+        ).toBe(false);
+      }
+    });
+  });
+
+  describe('session location', () => {
+    const baseSession = { workout_preset_id: 42, entry_date: '2026-09-24' };
+
+    it('trims the location and stores blank as null', () => {
+      const trimmed = runSchema('createPresetSessionRequestSchema', {
+        ...baseSession,
+        location: '  Home Gym  ',
+      });
+      expect(trimmed.success).toBe(true);
+      expect(trimmed.data.location).toBe('Home Gym');
+
+      const blank = runSchema('updatePresetSessionRequestSchema', {
+        location: '   ',
+      });
+      expect(blank.success).toBe(true);
+      expect(blank.data.location).toBeNull();
+    });
+
+    it('rejects a location longer than the varchar(255) column', () => {
+      const result = runSchema('updatePresetSessionRequestSchema', {
+        location: 'x'.repeat(256),
       });
       expect(result.success).toBe(false);
     });

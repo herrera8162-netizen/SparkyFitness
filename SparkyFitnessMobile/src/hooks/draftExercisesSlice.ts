@@ -9,6 +9,7 @@ import {
   ungroupDraftExercise,
 } from '../utils/workoutSession';
 import type { Exercise } from '../types/exercise';
+import { newUuid } from '../utils/ids';
 import type {
   WorkoutDraftExercise,
   WorkoutDraftSet,
@@ -26,14 +27,30 @@ export function generateClientId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
 
+export type ExerciseProgressionPatch = {
+  progressionMode?: 'rep_goal' | 'fixed' | 'step_load' | 'manual' | null;
+  repGoal?: number | null;
+  incrementType?: 'weight' | 'reps' | null;
+  incrementValue?: number | null;
+  equipmentBrand?: string | null;
+  rampIncrement?: number | null;
+};
+
 export type DraftExercisesAction =
-  | { type: 'ADD_EXERCISE'; exercise: Exercise; exerciseClientId: string; setClientId: string }
+  | {
+      type: 'ADD_EXERCISE';
+      exercise: Exercise;
+      exerciseClientId: string;
+      setClientId: string;
+      serverId: string;
+    }
   | { type: 'REMOVE_EXERCISE'; clientId: string }
   | {
       type: 'REPLACE_EXERCISE';
       clientId: string;
       exercise: Exercise;
       setClientId: string;
+      serverId: string;
       /**
        * Keep the entry's already-entered sets instead of resetting to one
        * empty set. Opt-in (preset form only) — the workout form still wants
@@ -48,6 +65,7 @@ export type DraftExercisesAction =
       clientId: string;
       newExerciseClientId: string;
       setClientIds: string[];
+      newServerId: string;
     }
   | { type: 'CLEAR_EXERCISE_COMPLETIONS'; clientId: string }
   | { type: 'ADD_SET'; exerciseClientId: string; setClientId: string }
@@ -59,17 +77,31 @@ export type DraftExercisesAction =
       field: 'weight' | 'reps' | 'duration' | 'distance';
       value: string;
     }
-  | { type: 'UPDATE_SET_META'; exerciseClientId: string; setClientId: string; patch: WorkoutSetMetaPatch }
+  | {
+      type: 'UPDATE_SET_META';
+      exerciseClientId: string;
+      setClientId: string;
+      patch: WorkoutSetMetaPatch;
+    }
   | { type: 'SET_EXERCISE_REST'; exerciseClientId: string; seconds: number }
-  | { type: 'SET_EXERCISE_CALORIES'; exerciseClientId: string; calories: string }
+  | {
+      type: 'SET_EXERCISE_CALORIES';
+      exerciseClientId: string;
+      calories: string;
+    }
   | { type: 'SET_EXERCISE_NOTES'; exerciseClientId: string; notes: string }
+  | {
+      type: 'SET_EXERCISE_PROGRESSION';
+      exerciseClientId: string;
+      patch: ExerciseProgressionPatch;
+    }
   | { type: 'SUPERSET_WITH'; currentClientId: string; pickedClientId: string }
   | { type: 'UNGROUP_EXERCISE'; clientId: string }
   | { type: 'REORDER_EXERCISES'; fromItemIndex: number; toItemIndex: number };
 
 export function draftExercisesReducer(
   exercises: WorkoutDraftExercise[],
-  action: DraftExercisesAction,
+  action: DraftExercisesAction
 ): WorkoutDraftExercise[] {
   switch (action.type) {
     case 'ADD_EXERCISE':
@@ -77,11 +109,18 @@ export function draftExercisesReducer(
         ...exercises,
         {
           clientId: action.exerciseClientId,
+          serverId: action.serverId,
           exerciseId: action.exercise.id,
           exerciseName: action.exercise.name,
           exerciseCategory: action.exercise.category,
           exerciseModality: action.exercise.modality ?? null,
           images: action.exercise.images ?? [],
+          progressionMode: 'rep_goal',
+          repGoal: null,
+          incrementType: 'weight',
+          incrementValue: 5,
+          equipmentBrand: null,
+          rampIncrement: null,
           sets: [
             {
               clientId: action.setClientId,
@@ -96,25 +135,31 @@ export function draftExercisesReducer(
 
     case 'REMOVE_EXERCISE':
       return normalizeDraftSupersetGroups(
-        exercises.filter(e => e.clientId !== action.clientId),
+        exercises.filter((e) => e.clientId !== action.clientId)
       );
 
     // Mirrors the live store's replaceExercise: swap the exercise identity in
-    // place (keeping clientId, position, and superset grouping). Dropping
-    // serverId sends the whole session down the server's delete-and-recreate
-    // path (mixed old/new exercise ids aren't allowed). Sets are only
-    // preserved when the replacement's effective modality matches the
+    // place (keeping clientId, position, and superset grouping). A new
+    // serverId makes this a new occurrence, so watch telemetry from the old
+    // movement is not inherited, while the payload still has an id. Siblings
+    // keep theirs. Sets are only preserved when the replacement's effective modality matches the
     // original's — otherwise a duration set's null reps, or a weight_reps
     // set's stale duration, would carry into a UI that hides those fields
     // but the server would still persist them. When preserveSets isn't
     // requested, there's nothing to preserve, or the modality changed, reset
     // to one default set — the old sets no longer describe the new movement.
     case 'REPLACE_EXERCISE':
-      return exercises.map(exercise => {
+      return exercises.map((exercise) => {
         if (exercise.clientId !== action.clientId) return exercise;
         const modalityUnchanged =
-          resolveExerciseModality(exercise.exerciseModality, exercise.exerciseCategory) ===
-          resolveExerciseModality(action.exercise.modality, action.exercise.category);
+          resolveExerciseModality(
+            exercise.exerciseModality,
+            exercise.exerciseCategory
+          ) ===
+          resolveExerciseModality(
+            action.exercise.modality,
+            action.exercise.category
+          );
         const sets =
           action.preserveSets && exercise.sets.length > 0 && modalityUnchanged
             ? exercise.sets
@@ -129,7 +174,7 @@ export function draftExercisesReducer(
               ];
         return {
           ...exercise,
-          serverId: undefined,
+          serverId: action.serverId,
           snapshot: null,
           exerciseId: action.exercise.id,
           exerciseName: action.exercise.name,
@@ -145,13 +190,13 @@ export function draftExercisesReducer(
     // existing superset's border. The copy starts ungrouped — silently
     // joining the original's superset would change the original's structure.
     case 'DUPLICATE_EXERCISE': {
-      const index = exercises.findIndex(e => e.clientId === action.clientId);
+      const index = exercises.findIndex((e) => e.clientId === action.clientId);
       if (index === -1) return exercises;
       const original = exercises[index];
       const duplicate: WorkoutDraftExercise = {
         ...original,
         clientId: action.newExerciseClientId,
-        serverId: undefined,
+        serverId: action.newServerId,
         snapshot: null,
         supersetGroup: null,
         sets: original.sets.map((set, i) => ({
@@ -159,7 +204,8 @@ export function draftExercisesReducer(
           // setClientIds is precomputed against exercisesRef before dispatch
           // (see useDraftExerciseActions); fall back to a deterministic id if
           // it and the live reducer state ever desync on set count.
-          clientId: action.setClientIds[i] ?? `${action.newExerciseClientId}-${i}`,
+          clientId:
+            action.setClientIds[i] ?? `${action.newExerciseClientId}-${i}`,
           completedAt: null,
           isPr: false,
         })),
@@ -183,21 +229,24 @@ export function draftExercisesReducer(
     // dropping the stale PR flags with the completions. Identity return when
     // nothing is logged.
     case 'CLEAR_EXERCISE_COMPLETIONS': {
-      const target = exercises.find(e => e.clientId === action.clientId);
-      if (target == null || !target.sets.some(s => s.completedAt != null)) return exercises;
-      return exercises.map(exercise => {
+      const target = exercises.find((e) => e.clientId === action.clientId);
+      if (target == null || !target.sets.some((s) => s.completedAt != null))
+        return exercises;
+      return exercises.map((exercise) => {
         if (exercise.clientId !== action.clientId) return exercise;
         return {
           ...exercise,
-          sets: exercise.sets.map(set =>
-            set.completedAt != null ? { ...set, completedAt: null, isPr: false } : set,
+          sets: exercise.sets.map((set) =>
+            set.completedAt != null
+              ? { ...set, completedAt: null, isPr: false }
+              : set
           ),
         };
       });
     }
 
     case 'ADD_SET':
-      return exercises.map(exercise => {
+      return exercises.map((exercise) => {
         if (exercise.clientId !== action.exerciseClientId) return exercise;
         const lastSet = exercise.sets[exercise.sets.length - 1];
         const firstSet = exercise.sets[0];
@@ -215,20 +264,20 @@ export function draftExercisesReducer(
       });
 
     case 'REMOVE_SET':
-      return exercises.map(exercise => {
+      return exercises.map((exercise) => {
         if (exercise.clientId !== action.exerciseClientId) return exercise;
         return {
           ...exercise,
-          sets: exercise.sets.filter(s => s.clientId !== action.setClientId),
+          sets: exercise.sets.filter((s) => s.clientId !== action.setClientId),
         };
       });
 
     case 'UPDATE_SET_FIELD':
-      return exercises.map(exercise => {
+      return exercises.map((exercise) => {
         if (exercise.clientId !== action.exerciseClientId) return exercise;
         return {
           ...exercise,
-          sets: exercise.sets.map(set => {
+          sets: exercise.sets.map((set) => {
             if (set.clientId !== action.setClientId) return set;
             // Drafts hold duration as `number | null` (not a display string),
             // so the seconds text parses here and the persisted draft shape
@@ -243,29 +292,38 @@ export function draftExercisesReducer(
       });
 
     case 'UPDATE_SET_META':
-      return exercises.map(exercise => {
+      return exercises.map((exercise) => {
         if (exercise.clientId !== action.exerciseClientId) return exercise;
         return {
           ...exercise,
-          sets: exercise.sets.map(set =>
-            set.clientId === action.setClientId ? { ...set, ...action.patch } : set,
+          sets: exercise.sets.map((set) =>
+            set.clientId === action.setClientId
+              ? { ...set, ...action.patch }
+              : set
           ),
         };
       });
 
     case 'SET_EXERCISE_REST':
-      return exercises.map(exercise => {
+      return exercises.map((exercise) => {
         if (exercise.clientId !== action.exerciseClientId) return exercise;
         return {
           ...exercise,
-          sets: exercise.sets.map(set => ({ ...set, restTime: action.seconds })),
+          sets: exercise.sets.map((set) => ({
+            ...set,
+            restTime: action.seconds,
+          })),
         };
       });
 
     case 'SET_EXERCISE_CALORIES':
-      return exercises.map(exercise => {
+      return exercises.map((exercise) => {
         if (exercise.clientId !== action.exerciseClientId) return exercise;
-        return { ...exercise, calories: action.calories, caloriesManuallySet: true };
+        return {
+          ...exercise,
+          calories: action.calories,
+          caloriesManuallySet: true,
+        };
       });
 
     // Mirrors the live store's setExerciseNotes: trim, empty → null, identity
@@ -273,17 +331,34 @@ export function draftExercisesReducer(
     case 'SET_EXERCISE_NOTES': {
       const trimmed = action.notes.trim();
       const nextNotes = trimmed.length > 0 ? trimmed : null;
-      const target = exercises.find(e => e.clientId === action.exerciseClientId);
-      if (target == null || (target.notes ?? null) === nextNotes) return exercises;
-      return exercises.map(exercise =>
+      const target = exercises.find(
+        (e) => e.clientId === action.exerciseClientId
+      );
+      if (target == null || (target.notes ?? null) === nextNotes)
+        return exercises;
+      return exercises.map((exercise) =>
         exercise.clientId === action.exerciseClientId
           ? { ...exercise, notes: nextNotes }
-          : exercise,
+          : exercise
       );
     }
 
+    case 'SET_EXERCISE_PROGRESSION': {
+      return exercises.map((exercise) => {
+        if (exercise.clientId !== action.exerciseClientId) return exercise;
+        return {
+          ...exercise,
+          ...action.patch,
+        };
+      });
+    }
+
     case 'SUPERSET_WITH':
-      return supersetDraftExercises(exercises, action.currentClientId, action.pickedClientId);
+      return supersetDraftExercises(
+        exercises,
+        action.currentClientId,
+        action.pickedClientId
+      );
 
     case 'UNGROUP_EXERCISE':
       return ungroupDraftExercise(exercises, action.clientId);
@@ -291,7 +366,11 @@ export function draftExercisesReducer(
     // Runs move atomically and the mover pre-clears stale group values, so no
     // remainders can form — normalizeDraftSupersetGroups is unnecessary here.
     case 'REORDER_EXERCISES':
-      return moveDraftExerciseItem(exercises, action.fromItemIndex, action.toItemIndex);
+      return moveDraftExerciseItem(
+        exercises,
+        action.fromItemIndex,
+        action.toItemIndex
+      );
 
     default:
       return exercises;
@@ -310,14 +389,17 @@ export function useDraftExerciseActions(
   options?: {
     /** See REPLACE_EXERCISE's `preserveSets`. Off by default (workout form). */
     preserveSetsOnReplace?: boolean;
-  },
+  }
 ): {
   exercisesModifiedRef: MutableRefObject<boolean>;
-  addExercise: (exercise: Exercise) => { exerciseClientId: string; setClientId: string };
+  addExercise: (exercise: Exercise) => {
+    exerciseClientId: string;
+    setClientId: string;
+  };
   removeExercise: (clientId: string) => void;
   replaceExercise: (
     clientId: string,
-    exercise: Exercise,
+    exercise: Exercise
   ) => { exerciseClientId: string; setClientId: string | null };
   duplicateExercise: (clientId: string) => { exerciseClientId: string };
   clearExerciseCompletions: (clientId: string) => void;
@@ -327,16 +409,20 @@ export function useDraftExerciseActions(
     exerciseClientId: string,
     setClientId: string,
     field: 'weight' | 'reps' | 'duration' | 'distance',
-    value: string,
+    value: string
   ) => void;
   updateSetMeta: (
     exerciseClientId: string,
     setClientId: string,
-    patch: WorkoutSetMetaPatch,
+    patch: WorkoutSetMetaPatch
   ) => void;
   setExerciseRest: (exerciseClientId: string, seconds: number) => void;
   setExerciseCalories: (exerciseClientId: string, calories: string) => void;
   setExerciseNotes: (exerciseClientId: string, notes: string) => void;
+  setExerciseProgression: (
+    exerciseClientId: string,
+    patch: ExerciseProgressionPatch
+  ) => void;
   supersetWith: (currentClientId: string, pickedClientId: string) => void;
   ungroupExercise: (clientId: string) => void;
   reorderExercises: (fromItemIndex: number, toItemIndex: number) => void;
@@ -361,7 +447,14 @@ export function useDraftExerciseActions(
         exercisesModifiedRef.current = true;
         const exerciseClientId = generateClientId();
         const setClientId = generateClientId();
-        dispatch({ type: 'ADD_EXERCISE', exercise, exerciseClientId, setClientId });
+        const serverId = newUuid();
+        dispatch({
+          type: 'ADD_EXERCISE',
+          exercise,
+          exerciseClientId,
+          setClientId,
+          serverId,
+        });
         return { exerciseClientId, setClientId };
       },
       removeExercise: (clientId: string) => {
@@ -371,24 +464,31 @@ export function useDraftExerciseActions(
       replaceExercise: (clientId: string, exercise: Exercise) => {
         exercisesModifiedRef.current = true;
         const setClientId = generateClientId();
+        const serverId = newUuid();
         dispatch({
           type: 'REPLACE_EXERCISE',
           clientId,
           exercise,
           setClientId,
+          serverId,
           preserveSets: preserveSetsOnReplace,
         });
         // Mirrors REPLACE_EXERCISE's own preserve/reset decision: sets are
         // preserved (nothing new to focus) only when preserving was
         // requested, there was something to preserve, and the modality is
         // unchanged. Otherwise a fresh single set was created; focus it.
-        const target = exercisesRef.current.find(e => e.clientId === clientId);
+        const target = exercisesRef.current.find(
+          (e) => e.clientId === clientId
+        );
         const hadExistingSets = (target?.sets.length ?? 0) > 0;
         const modalityUnchanged =
           target != null &&
-          resolveExerciseModality(target.exerciseModality, target.exerciseCategory) ===
-            resolveExerciseModality(exercise.modality, exercise.category);
-        const setsWerePreserved = preserveSetsOnReplace && hadExistingSets && modalityUnchanged;
+          resolveExerciseModality(
+            target.exerciseModality,
+            target.exerciseCategory
+          ) === resolveExerciseModality(exercise.modality, exercise.category);
+        const setsWerePreserved =
+          preserveSetsOnReplace && hadExistingSets && modalityUnchanged;
         return {
           exerciseClientId: clientId,
           setClientId: setsWerePreserved ? null : setClientId,
@@ -397,9 +497,18 @@ export function useDraftExerciseActions(
       duplicateExercise: (clientId: string) => {
         exercisesModifiedRef.current = true;
         const newExerciseClientId = generateClientId();
-        const target = exercisesRef.current.find(e => e.clientId === clientId);
+        const newServerId = newUuid();
+        const target = exercisesRef.current.find(
+          (e) => e.clientId === clientId
+        );
         const setClientIds = (target?.sets ?? []).map(() => generateClientId());
-        dispatch({ type: 'DUPLICATE_EXERCISE', clientId, newExerciseClientId, setClientIds });
+        dispatch({
+          type: 'DUPLICATE_EXERCISE',
+          clientId,
+          newExerciseClientId,
+          setClientIds,
+          newServerId,
+        });
         return { exerciseClientId: newExerciseClientId };
       },
       clearExerciseCompletions: (clientId: string) => {
@@ -420,18 +529,29 @@ export function useDraftExerciseActions(
         exerciseClientId: string,
         setClientId: string,
         field: 'weight' | 'reps' | 'duration' | 'distance',
-        value: string,
+        value: string
       ) => {
         exercisesModifiedRef.current = true;
-        dispatch({ type: 'UPDATE_SET_FIELD', exerciseClientId, setClientId, field, value });
+        dispatch({
+          type: 'UPDATE_SET_FIELD',
+          exerciseClientId,
+          setClientId,
+          field,
+          value,
+        });
       },
       updateSetMeta: (
         exerciseClientId: string,
         setClientId: string,
-        patch: WorkoutSetMetaPatch,
+        patch: WorkoutSetMetaPatch
       ) => {
         exercisesModifiedRef.current = true;
-        dispatch({ type: 'UPDATE_SET_META', exerciseClientId, setClientId, patch });
+        dispatch({
+          type: 'UPDATE_SET_META',
+          exerciseClientId,
+          setClientId,
+          patch,
+        });
       },
       setExerciseRest: (exerciseClientId: string, seconds: number) => {
         exercisesModifiedRef.current = true;
@@ -444,6 +564,17 @@ export function useDraftExerciseActions(
       setExerciseNotes: (exerciseClientId: string, notes: string) => {
         exercisesModifiedRef.current = true;
         dispatch({ type: 'SET_EXERCISE_NOTES', exerciseClientId, notes });
+      },
+      setExerciseProgression: (
+        exerciseClientId: string,
+        patch: ExerciseProgressionPatch
+      ) => {
+        exercisesModifiedRef.current = true;
+        dispatch({
+          type: 'SET_EXERCISE_PROGRESSION',
+          exerciseClientId,
+          patch,
+        });
       },
       supersetWith: (currentClientId: string, pickedClientId: string) => {
         exercisesModifiedRef.current = true;
@@ -458,6 +589,6 @@ export function useDraftExerciseActions(
         dispatch({ type: 'REORDER_EXERCISES', fromItemIndex, toItemIndex });
       },
     }),
-    [dispatch, preserveSetsOnReplace],
+    [dispatch, preserveSetsOnReplace]
   );
 }

@@ -40,10 +40,18 @@ import type {
   PersonalRecordsMap,
 } from '@/types/reports';
 import {
+  healthMetricLabel,
+  healthMetricUnitLabel,
+} from '@/utils/healthMetricLabels';
+import {
   CheckInMeasurementsResponse,
   CustomMeasurementsResponse,
   CustomCategoriesResponse,
   getPrecision,
+  bodyWeightOnDay,
+  isBodyweightModality,
+  resolveExerciseModality,
+  setVolumeKg,
 } from '@workspace/shared';
 
 /** Timed sets carry no reps, so an entry made only of them has no range. */
@@ -66,27 +74,50 @@ const formatAvgWeight = (
   );
 };
 
-/** Duration-only entries carry no weights, so tonnage shows a dash. */
-const formatTonnage = (
-  sets: DailyExerciseEntry['sets'],
-  weightUnit: string
-) => {
-  if (!sets.some((s) => s.weight != null)) return '-';
-  return formatWeight(
-    sets.reduce(
-      (acc, s) => acc + Number(s.weight ?? 0) * Number(s.reps ?? 0),
-      0
+type BodyWeightReadings = readonly { date: string; weightKg: number }[];
+
+/**
+ * Weight × reps for one set: for a bodyweight exercise, body weight that day
+ * plus the set's added or assisting weight (`setVolumeKg`).
+ */
+const entrySetVolume = (
+  entry: DailyExerciseEntry,
+  set: DailyExerciseEntry['sets'][number],
+  readings: BodyWeightReadings
+) =>
+  setVolumeKg(
+    set,
+    resolveExerciseModality(
+      entry.exercises?.modality,
+      entry.exercises?.category
     ),
+    bodyWeightOnDay(readings, entry.entry_date)
+  );
+
+/**
+ * Duration-only entries carry no weights, so tonnage shows a dash. A
+ * bodyweight entry has tonnage even with no added weight.
+ */
+const formatTonnage = (
+  entry: DailyExerciseEntry,
+  weightUnit: string,
+  readings: BodyWeightReadings
+) => {
+  const bodyweight = isBodyweightModality(
+    resolveExerciseModality(
+      entry.exercises?.modality,
+      entry.exercises?.category
+    )
+  );
+  if (!bodyweight && !entry.sets.some((s) => s.weight != null)) return '-';
+  return formatWeight(
+    entry.sets.reduce((acc, s) => acc + entrySetVolume(entry, s, readings), 0),
     weightUnit
   );
 };
 
 export type TableFilterValue =
-  | 'all'
-  | 'food'
-  | 'exercise'
-  | 'measurements'
-  | `category:${string}`;
+  'all' | 'food' | 'exercise' | 'measurements' | `category:${string}`;
 
 interface ReportsTablesProps {
   tabularData: DailyFoodEntry[];
@@ -253,6 +284,13 @@ const ReportsTables = ({
               calcium:
                 (Number(acc.calcium) || 0) + (Number(entry.calcium) || 0),
               iron: (Number(acc.iron) || 0) + (Number(entry.iron) || 0),
+              caffeine_mg:
+                (Number(acc.caffeine_mg) || 0) +
+                (Number(entry.caffeine_mg) || 0),
+              water_ml:
+                (Number(acc.water_ml) || 0) + (Number(entry.water_ml) || 0),
+              alcohol_g:
+                (Number(acc.alcohol_g) || 0) + (Number(entry.alcohol_g) || 0),
               glycemic_index: 'None',
               ...customNutrientsSum,
             };
@@ -275,6 +313,9 @@ const ReportsTables = ({
             vitamin_c: 0,
             calcium: 0,
             iron: 0,
+            caffeine_mg: 0,
+            water_ml: 0,
+            alcohol_g: 0,
             glycemic_index: 'None',
           } as Partial<DailyFoodEntry>
         ); // Use Partial to allow for initial empty state
@@ -303,6 +344,9 @@ const ReportsTables = ({
           vitamin_c: dailyTotals.vitamin_c,
           calcium: dailyTotals.calcium,
           iron: dailyTotals.iron,
+          caffeine_mg: dailyTotals.caffeine_mg,
+          water_ml: dailyTotals.water_ml,
+          alcohol_g: dailyTotals.alcohol_g,
           glycemic_index: 'None',
           serving_size: 100, // Default value, not used for totals
           ...dailyTotals, // Include custom nutrient totals
@@ -316,6 +360,17 @@ const ReportsTables = ({
 
   // Sort exercise entries by date descending
   debug(loggingLevel, 'ReportsTables: Sorting exercise entries.');
+  // The check-ins in the report's range, for bodyweight exercises' volume.
+  const bodyWeightReadings = useMemo(
+    () =>
+      measurementData.flatMap((m) =>
+        m.weight != null && m.weight > 0
+          ? [{ date: m.entry_date, weightKg: m.weight }]
+          : []
+      ),
+    [measurementData]
+  );
+
   const sortedExerciseEntries = [...(exerciseEntries || [])].sort(
     (a, b) =>
       new Date(b.entry_date).getTime() - new Date(a.entry_date).getTime()
@@ -375,10 +430,16 @@ const ReportsTables = ({
     .filter(
       (measurement) =>
         measurement.weight !== undefined ||
+        measurement.height !== undefined ||
         measurement.neck !== undefined ||
         measurement.waist !== undefined ||
         measurement.hips !== undefined ||
-        measurement.steps !== undefined
+        measurement.body_fat_percentage !== undefined ||
+        measurement.steps !== undefined ||
+        measurement.muscle_mass_kg !== undefined ||
+        measurement.bone_mass_kg !== undefined ||
+        measurement.body_water_percentage !== undefined ||
+        measurement.bmr !== undefined
     )
     .sort(
       (a, b) =>
@@ -424,8 +485,8 @@ const ReportsTables = ({
             </SelectItem>
             {customCategories.map((category) => (
               <SelectItem key={category.id} value={`category:${category.id}`}>
-                {category.display_name || category.name} (
-                {category.measurement_type})
+                {healthMetricLabel(category.name, category.display_name, t)} (
+                {healthMetricUnitLabel(category.measurement_type, t)})
               </SelectItem>
             ))}
           </SelectContent>
@@ -451,7 +512,9 @@ const ReportsTables = ({
                 <TableHeader>
                   <TableRow>
                     <TableHead>{t('reportsTables.date', 'Date')}</TableHead>
-                    <TableHead>{t('reportsTables.meal', 'Meal Type')}</TableHead>
+                    <TableHead>
+                      {t('reportsTables.meal', 'Meal Type')}
+                    </TableHead>
                     <TableHead className="min-w-[250px]">
                       {t('reportsTables.food', 'Food')}
                     </TableHead>
@@ -702,7 +765,11 @@ const ReportsTables = ({
                             {formatAvgWeight(entry.sets, weightUnit)}
                           </TableCell>
                           <TableCell>
-                            {formatTonnage(entry.sets, weightUnit)}
+                            {formatTonnage(
+                              entry,
+                              weightUnit,
+                              bodyWeightReadings
+                            )}
                           </TableCell>
                           <TableCell>
                             {entry.sets.reduce(
@@ -744,9 +811,19 @@ const ReportsTables = ({
                                   : '-'}
                               </TableCell>
                               <TableCell>
-                                {set.weight != null
+                                {set.weight != null ||
+                                isBodyweightModality(
+                                  resolveExerciseModality(
+                                    entry.exercises?.modality,
+                                    entry.exercises?.category
+                                  )
+                                )
                                   ? formatWeight(
-                                      set.weight * Number(set.reps ?? 0),
+                                      entrySetVolume(
+                                        entry,
+                                        set,
+                                        bodyWeightReadings
+                                      ),
                                       weightUnit
                                     )
                                   : '-'}
@@ -813,6 +890,20 @@ const ReportsTables = ({
                     <TableHead>
                       {t('reportsTables.bodyFatPercentage', 'Body Fat %')}
                     </TableHead>
+                    <TableHead>
+                      {t('reportsTables.muscleMass', 'Muscle Mass')} (
+                      {weightUnit})
+                    </TableHead>
+                    <TableHead>
+                      {t('reportsTables.boneMass', 'Bone Mass')} ({weightUnit})
+                    </TableHead>
+                    <TableHead>
+                      {t('reportsTables.bodyWaterPercentage', 'Body Water %')}
+                    </TableHead>
+                    <TableHead>
+                      {t('reportsTables.bmr', 'BMR')} (
+                      {getEnergyUnitString(energyUnit)})
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -842,7 +933,27 @@ const ReportsTables = ({
                       </TableCell>
                       <TableCell>
                         {measurement.body_fat_percentage
-                          ? measurement.body_fat_percentage.toFixed(1)
+                          ? `${measurement.body_fat_percentage.toFixed(1)}%`
+                          : '-'}
+                      </TableCell>
+                      <TableCell>
+                        {measurement.muscle_mass_kg
+                          ? formatWeight(measurement.muscle_mass_kg, weightUnit)
+                          : '-'}
+                      </TableCell>
+                      <TableCell>
+                        {measurement.bone_mass_kg
+                          ? formatWeight(measurement.bone_mass_kg, weightUnit)
+                          : '-'}
+                      </TableCell>
+                      <TableCell>
+                        {measurement.body_water_percentage
+                          ? `${measurement.body_water_percentage.toFixed(1)}%`
+                          : '-'}
+                      </TableCell>
+                      <TableCell>
+                        {measurement.bmr
+                          ? `${Math.round(convertEnergy(Number(measurement.bmr), 'kcal', energyUnit))}`
                           : '-'}
                       </TableCell>
                     </TableRow>
@@ -880,8 +991,8 @@ const ReportsTables = ({
             <CardHeader>
               <div className="flex items-center justify-between">
                 <CardTitle>
-                  {category.display_name || category.name} (
-                  {category.measurement_type})
+                  {healthMetricLabel(category.name, category.display_name, t)} (
+                  {healthMetricUnitLabel(category.measurement_type, t)})
                 </CardTitle>
                 <Button
                   onClick={() => onExportCustomMeasurements(category)}
@@ -918,7 +1029,10 @@ const ReportsTables = ({
                                 category.measurement_type.toLowerCase()
                               )
                             ? measurementUnit
-                            : category.measurement_type}
+                            : healthMetricUnitLabel(
+                                category.measurement_type,
+                                t
+                              )}
                         )
                       </TableHead>
                       <TableHead>{t('reportsTables.notes', 'Notes')}</TableHead>

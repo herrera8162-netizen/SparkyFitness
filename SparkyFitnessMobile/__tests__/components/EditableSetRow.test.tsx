@@ -15,8 +15,9 @@ interface RenderOverrides {
   weight?: string;
   reps?: string;
   duration?: string;
+  distance?: string;
   isActive?: boolean;
-  activeField?: 'weight' | 'reps' | 'duration' | 'rpe';
+  activeField?: 'weight' | 'reps' | 'duration' | 'distance' | 'rpe';
   modality?: ExerciseModality;
   nextSetKey?: string | null;
 }
@@ -36,6 +37,8 @@ function renderRow(overrides?: RenderOverrides) {
       weight={overrides?.weight ?? ''}
       reps={overrides?.reps ?? ''}
       duration={overrides?.duration ?? ''}
+      distance={overrides?.distance ?? ''}
+      distanceUnitLabel="m"
       setNumber={1}
       isActive={overrides?.isActive ?? false}
       activeField={overrides?.activeField}
@@ -43,7 +46,7 @@ function renderRow(overrides?: RenderOverrides) {
       weightUnit="kg"
       nextSetKey={overrides?.nextSetKey}
       {...callbacks}
-    />,
+    />
   );
   return { ...utils, callbacks };
 }
@@ -57,17 +60,89 @@ describe('EditableSetRow', () => {
         reps: '5',
       });
       fireEvent.changeText(getByDisplayValue('100'), '105');
-      expect(callbacks.onUpdateSetField).toHaveBeenCalledWith('ex-1', 'set-1', 'weight', '105');
+      expect(callbacks.onUpdateSetField).toHaveBeenCalledWith(
+        'ex-1',
+        'set-1',
+        'weight',
+        '105'
+      );
       fireEvent.changeText(getByDisplayValue('5'), '6');
-      expect(callbacks.onUpdateSetField).toHaveBeenCalledWith('ex-1', 'set-1', 'reps', '6');
+      expect(callbacks.onUpdateSetField).toHaveBeenCalledWith(
+        'ex-1',
+        'set-1',
+        'reps',
+        '6'
+      );
     });
 
     it('activates the tapped field from the inactive display', () => {
       const { getByText, callbacks } = renderRow({ weight: '100', reps: '5' });
       fireEvent.press(getByText('100 kg'));
-      expect(callbacks.onActivateSet).toHaveBeenCalledWith('ex-1:set-1', 'weight');
+      expect(callbacks.onActivateSet).toHaveBeenCalledWith(
+        'ex-1:set-1',
+        'weight'
+      );
       fireEvent.press(getByText('5'));
-      expect(callbacks.onActivateSet).toHaveBeenCalledWith('ex-1:set-1', 'reps');
+      expect(callbacks.onActivateSet).toHaveBeenCalledWith(
+        'ex-1:set-1',
+        'reps'
+      );
+    });
+  });
+
+  describe('weight_distance', () => {
+    it('edits weight and distance and never offers reps', () => {
+      const { getByDisplayValue, callbacks } = renderRow({
+        modality: 'weight_distance',
+        isActive: true,
+        weight: '40',
+        distance: '30',
+      });
+      fireEvent.changeText(getByDisplayValue('30'), '35');
+      expect(callbacks.onUpdateSetField).toHaveBeenCalledWith(
+        'ex-1',
+        'set-1',
+        'distance',
+        '35'
+      );
+      fireEvent.changeText(getByDisplayValue('40'), '45');
+      expect(callbacks.onUpdateSetField).toHaveBeenCalledWith(
+        'ex-1',
+        'set-1',
+        'weight',
+        '45'
+      );
+    });
+
+    it('shows distance with its unit and activates the distance field', () => {
+      const { getByText, callbacks } = renderRow({
+        modality: 'weight_distance',
+        weight: '40',
+        distance: '30',
+      });
+      fireEvent.press(getByText('30 m'));
+      expect(callbacks.onActivateSet).toHaveBeenCalledWith(
+        'ex-1:set-1',
+        'distance'
+      );
+    });
+  });
+
+  describe('weight_duration', () => {
+    it('edits weight and seconds', () => {
+      const { getByDisplayValue, callbacks } = renderRow({
+        modality: 'weight_duration',
+        isActive: true,
+        weight: '20',
+        duration: '60',
+      });
+      fireEvent.changeText(getByDisplayValue('60'), '75');
+      expect(callbacks.onUpdateSetField).toHaveBeenCalledWith(
+        'ex-1',
+        'set-1',
+        'duration',
+        '75'
+      );
     });
   });
 
@@ -82,45 +157,75 @@ describe('EditableSetRow', () => {
       expect(active.queryByDisplayValue('100')).toBeNull();
       expect(active.getByDisplayValue('12')).toBeTruthy();
 
-      const inactive = renderRow({ modality: 'reps_only', weight: '100', reps: '12' });
+      const inactive = renderRow({
+        modality: 'reps_only',
+        weight: '100',
+        reps: '12',
+      });
       expect(inactive.queryByText('100 kg')).toBeNull();
       expect(inactive.getByText('12')).toBeTruthy();
     });
   });
 
-  describe.each(['duration', 'duration_distance'] as const)('%s', (modality) => {
-    it('renders a single seconds stepper when active', () => {
-      const { getByDisplayValue, queryByDisplayValue, callbacks } = renderRow({
-        modality,
-        isActive: true,
-        weight: '100',
-        reps: '5',
-        duration: '45',
+  describe.each(['duration', 'duration_distance'] as const)(
+    '%s',
+    (modality) => {
+      it('renders a single seconds stepper when active', () => {
+        const { getByDisplayValue, queryByDisplayValue, callbacks } = renderRow(
+          {
+            modality,
+            isActive: true,
+            weight: '100',
+            reps: '5',
+            duration: '45',
+          }
+        );
+        expect(queryByDisplayValue('100')).toBeNull();
+        expect(queryByDisplayValue('5')).toBeNull();
+        fireEvent.changeText(getByDisplayValue('45'), '60');
+        expect(callbacks.onUpdateSetField).toHaveBeenCalledWith(
+          'ex-1',
+          'set-1',
+          'duration',
+          '60'
+        );
       });
-      expect(queryByDisplayValue('100')).toBeNull();
-      expect(queryByDisplayValue('5')).toBeNull();
-      fireEvent.changeText(getByDisplayValue('45'), '60');
-      expect(callbacks.onUpdateSetField).toHaveBeenCalledWith('ex-1', 'set-1', 'duration', '60');
-    });
 
-    it('steps the duration ±5 seconds', () => {
-      const { getByTestId, callbacks } = renderRow({
-        modality,
-        isActive: true,
-        duration: '45',
+      it('steps the duration ±5 seconds', () => {
+        const { getByTestId, callbacks } = renderRow({
+          modality,
+          isActive: true,
+          duration: '45',
+        });
+        fireEvent.press(getByTestId('icon-add'));
+        expect(callbacks.onUpdateSetField).toHaveBeenCalledWith(
+          'ex-1',
+          'set-1',
+          'duration',
+          '50'
+        );
+        fireEvent.press(getByTestId('icon-remove'));
+        expect(callbacks.onUpdateSetField).toHaveBeenCalledWith(
+          'ex-1',
+          'set-1',
+          'duration',
+          '40'
+        );
       });
-      fireEvent.press(getByTestId('icon-add'));
-      expect(callbacks.onUpdateSetField).toHaveBeenCalledWith('ex-1', 'set-1', 'duration', '50');
-      fireEvent.press(getByTestId('icon-remove'));
-      expect(callbacks.onUpdateSetField).toHaveBeenCalledWith('ex-1', 'set-1', 'duration', '40');
-    });
 
-    it('activates the duration field from the inactive display', () => {
-      const { getByText, callbacks } = renderRow({ modality, duration: '45' });
-      fireEvent.press(getByText('45'));
-      expect(callbacks.onActivateSet).toHaveBeenCalledWith('ex-1:set-1', 'duration');
-    });
-  });
+      it('activates the duration field from the inactive display', () => {
+        const { getByText, callbacks } = renderRow({
+          modality,
+          duration: '45',
+        });
+        fireEvent.press(getByText('45'));
+        expect(callbacks.onActivateSet).toHaveBeenCalledWith(
+          'ex-1:set-1',
+          'duration'
+        );
+      });
+    }
+  );
 
   it('advances a duration row straight to the next set (no in-row hop)', () => {
     // The advance handler is exercised through the accessory bar on iOS; here
@@ -131,6 +236,9 @@ describe('EditableSetRow', () => {
       nextSetKey: 'ex-1:set-2',
     });
     fireEvent.press(getByText('45'));
-    expect(callbacks.onActivateSet).toHaveBeenCalledWith('ex-1:set-1', 'duration');
+    expect(callbacks.onActivateSet).toHaveBeenCalledWith(
+      'ex-1:set-1',
+      'duration'
+    );
   });
 });

@@ -5,11 +5,12 @@ export const exerciseEntriesIdSchema = z.string();
 export const exerciseEntriesSchema = z.object({
   id: exerciseEntriesIdSchema,
   user_id: z.string(),
-  exercise_id: z.string(),
+  exercise_id: z.string().nullable(),
   duration_minutes: z.number(),
   calories_burned: z.number(),
   entry_date: z.date().nullable(),
   entry_time: z.string().nullable(),
+  record_timezone: z.string().nullable().optional(),
   notes: z.string().nullable(),
   created_at: z.date().nullable(),
   updated_at: z.date(),
@@ -78,16 +79,21 @@ export const exerciseEntriesSchema = z.object({
   weather_humidity_percentage: z.number().nullable(),
   gear_name: z.string().nullable(),
   gear_external_id: z.string().nullable(),
+  steps: z.number().nullable().optional(),
+  water_estimated: z.number().nullable().optional(),
+  watch_telemetry_observed_at: z.date().nullable().optional(),
+  watch_duration_minutes: z.number().nullable().optional(),
 });
 
 export const exerciseEntriesInitializerSchema = z.object({
   id: exerciseEntriesIdSchema.optional(),
   user_id: z.string(),
-  exercise_id: z.string(),
+  exercise_id: z.string().optional().nullable(),
   duration_minutes: z.number(),
   calories_burned: z.number(),
   entry_date: z.date().optional().nullable(),
   entry_time: z.string().optional().nullable(),
+  record_timezone: z.string().optional().nullable(),
   notes: z.string().optional().nullable(),
   created_at: z.date().optional().nullable(),
   updated_at: z.date().optional(),
@@ -154,10 +160,19 @@ export const exerciseEntriesInitializerSchema = z.object({
   weather_humidity_percentage: z.number().optional().nullable(),
   gear_name: z.string().optional().nullable(),
   gear_external_id: z.string().optional().nullable(),
+  steps: z.number().optional().nullable(),
+  water_estimated: z.number().optional().nullable(),
+  watch_telemetry_observed_at: z.date().optional().nullable(),
+  watch_duration_minutes: z.number().optional().nullable(),
 });
 
-export const exerciseEntriesMutatorSchema = exerciseEntriesInitializerSchema.partial();
+export const exerciseEntriesMutatorSchema =
+  exerciseEntriesInitializerSchema.partial();
 
 export type ExerciseEntries = z.infer<typeof exerciseEntriesSchema>;
-export type ExerciseEntriesInitializer = z.infer<typeof exerciseEntriesInitializerSchema>;
-export type ExerciseEntriesMutator = z.infer<typeof exerciseEntriesMutatorSchema>;
+export type ExerciseEntriesInitializer = z.infer<
+  typeof exerciseEntriesInitializerSchema
+>;
+export type ExerciseEntriesMutator = z.infer<
+  typeof exerciseEntriesMutatorSchema
+>;

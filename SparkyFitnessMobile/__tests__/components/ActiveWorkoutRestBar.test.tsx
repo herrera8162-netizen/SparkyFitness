@@ -1,18 +1,33 @@
 import React from 'react';
-import { StyleSheet } from 'react-native';
+import { AppState, StyleSheet } from 'react-native';
 import { render, fireEvent } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useCSSVariable } from 'uniwind';
 import ActiveWorkoutRestBar from '../../src/components/ActiveWorkoutRestBar';
 import { useNativeIOSTabsActive } from '../../src/services/nativeTabBarPreference';
+import { playIntervalCue } from '../../src/services/sounds';
 
 jest.mock('../../src/services/nativeTabBarPreference', () => ({
   useNativeIOSTabsActive: jest.fn(() => false),
 }));
 
-const mockUseNativeIOSTabsActive = useNativeIOSTabsActive as jest.MockedFunction<
-  typeof useNativeIOSTabsActive
+jest.mock('../../src/services/sounds', () => ({
+  playIntervalCue: jest.fn(),
+}));
+
+const mockPlayIntervalCue = playIntervalCue as jest.MockedFunction<
+  typeof playIntervalCue
 >;
+
+function setAppState(state: string): void {
+  Object.defineProperty(AppState, 'currentState', {
+    get: () => state,
+    configurable: true,
+  });
+}
+
+const mockUseNativeIOSTabsActive =
+  useNativeIOSTabsActive as jest.MockedFunction<typeof useNativeIOSTabsActive>;
 
 // Distinct values per CSS variable so paused-vs-resting color assertions mean
 // something (the global uniwind mock returns the same color for everything).
@@ -29,7 +44,7 @@ const insets = { top: 0, bottom: 0, left: 0, right: 0 };
 const frame = { x: 0, y: 0, width: 390, height: 844 };
 
 function renderBar(
-  overrides?: Partial<React.ComponentProps<typeof ActiveWorkoutRestBar>>,
+  overrides?: Partial<React.ComponentProps<typeof ActiveWorkoutRestBar>>
 ) {
   const props = {
     remainingMs: 45_000,
@@ -47,7 +62,7 @@ function renderBar(
   const utils = render(
     <SafeAreaProvider initialMetrics={{ insets, frame }}>
       <ActiveWorkoutRestBar {...props} />
-    </SafeAreaProvider>,
+    </SafeAreaProvider>
   );
   return { ...utils, props };
 }
@@ -59,10 +74,11 @@ function fillStyle(getByTestId: (id: string) => any) {
 describe('ActiveWorkoutRestBar', () => {
   beforeEach(() => {
     mockUseNativeIOSTabsActive.mockReturnValue(false);
-    (useCSSVariable as jest.Mock).mockImplementation((vars: string | string[]) =>
-      Array.isArray(vars)
-        ? vars.map((v) => COLORS[v] ?? '#888888')
-        : (COLORS[vars] ?? '#888888'),
+    (useCSSVariable as jest.Mock).mockImplementation(
+      (vars: string | string[]) =>
+        Array.isArray(vars)
+          ? vars.map((v) => COLORS[v] ?? '#888888')
+          : (COLORS[vars] ?? '#888888')
     );
   });
 
@@ -85,7 +101,9 @@ describe('ActiveWorkoutRestBar', () => {
   it('uses the accent color while resting', () => {
     const { getByTestId, getByText } = renderBar({ state: 'resting' });
     expect(fillStyle(getByTestId).backgroundColor).toBe(ACCENT);
-    expect(StyleSheet.flatten(getByText('0:45').props.style).color).toBe(ACCENT);
+    expect(StyleSheet.flatten(getByText('0:45').props.style).color).toBe(
+      ACCENT
+    );
   });
 
   it('renders muted colors while paused', () => {
@@ -138,7 +156,9 @@ describe('ActiveWorkoutRestBar', () => {
   });
 
   it('fires onPressBar from the ready-state on-deck row', () => {
-    const { getByTestId, getByLabelText, props } = renderBar({ state: 'ready' });
+    const { getByTestId, getByLabelText, props } = renderBar({
+      state: 'ready',
+    });
     fireEvent.press(getByTestId('rest-bar-body'));
     expect(props.onPressBar).toHaveBeenCalledTimes(1);
     fireEvent.press(getByLabelText('Complete set'));
@@ -169,8 +189,13 @@ describe('ActiveWorkoutRestBar', () => {
 
   describe('ready state', () => {
     it('collapses to the on-deck row: label, target, and a Complete Set button', () => {
-      const { getByText, getByLabelText, queryByText, queryByTestId, queryByLabelText } =
-        renderBar({ state: 'ready', nextSetText: '135 lbs × 8' });
+      const {
+        getByText,
+        getByLabelText,
+        queryByText,
+        queryByTestId,
+        queryByLabelText,
+      } = renderBar({ state: 'ready', nextSetText: '135 lbs × 8' });
       expect(getByText('Incline DB Press · Set 3')).toBeTruthy();
       expect(getByText('Target 135 lbs × 8')).toBeTruthy();
       expect(getByLabelText('Complete set')).toBeTruthy();
@@ -190,10 +215,36 @@ describe('ActiveWorkoutRestBar', () => {
 
     it('renders the on-deck row inside the glass pill when Liquid Glass tabs are active', () => {
       mockUseNativeIOSTabsActive.mockReturnValue(true);
-      const { getByTestId, getByLabelText, props } = renderBar({ state: 'ready' });
+      const { getByTestId, getByLabelText, props } = renderBar({
+        state: 'ready',
+      });
       expect(getByTestId('rest-bar-glass')).toBeTruthy();
       fireEvent.press(getByLabelText('Complete set'));
       expect(props.onCompleteSet).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('countdown lead-in', () => {
+    beforeEach(() => {
+      mockPlayIntervalCue.mockClear();
+      setAppState('active');
+    });
+
+    it('beeps for the last three seconds while the app is on screen', () => {
+      const { rerender, props } = renderBar({ remainingMs: 2_500 });
+      expect(mockPlayIntervalCue).toHaveBeenCalledWith('countdown');
+      rerender(
+        <SafeAreaProvider initialMetrics={{ insets, frame }}>
+          <ActiveWorkoutRestBar {...props} remainingMs={1_500} />
+        </SafeAreaProvider>
+      );
+      expect(mockPlayIntervalCue).toHaveBeenCalledTimes(2);
+    });
+
+    it('stays quiet off screen, leaving the rest-complete chime as the only sound', () => {
+      setAppState('background');
+      renderBar({ remainingMs: 2_500 });
+      expect(mockPlayIntervalCue).not.toHaveBeenCalled();
     });
   });
 });

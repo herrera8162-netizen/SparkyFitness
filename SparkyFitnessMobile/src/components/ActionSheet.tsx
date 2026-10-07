@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   BackHandler,
@@ -17,6 +23,12 @@ import { sheetContainer, useSheetBackdrop } from './ui/sheetChrome';
 export interface ActionSheetItem {
   key: string;
   label: string;
+  /**
+   * Secondary line under the label, for actions whose difference cannot be
+   * carried by a short label alone. Optional: an item without one renders
+   * exactly as before.
+   */
+  description?: string;
   /**
    * Consecutive items sharing a group render as one block, separated from
    * adjacent blocks by a spacer band. Ungrouped items chunk together.
@@ -112,10 +124,11 @@ const ActionSheet = React.forwardRef<ActionSheetRef, ActionSheetProps>(
       modalRef.current?.dismiss();
     }, [clearScheduledPresent]);
 
-    useImperativeHandle(ref, () => ({ present: presentSheet, dismiss: dismissSheet }), [
-      presentSheet,
-      dismissSheet,
-    ]);
+    useImperativeHandle(
+      ref,
+      () => ({ present: presentSheet, dismiss: dismissSheet }),
+      [presentSheet, dismissSheet]
+    );
 
     useEffect(() => {
       const modal = modalRef.current;
@@ -129,10 +142,13 @@ const ActionSheet = React.forwardRef<ActionSheetRef, ActionSheetProps>(
       if (!isOpen || Platform.OS !== 'android') return;
       // Registered while open (after any screen handlers), so the sheet wins
       // Back and the press can't fall through and pop the screen.
-      const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-        dismissSheet();
-        return true;
-      });
+      const subscription = BackHandler.addEventListener(
+        'hardwareBackPress',
+        () => {
+          dismissSheet();
+          return true;
+        }
+      );
       return () => subscription.remove();
     }, [isOpen, dismissSheet]);
 
@@ -154,7 +170,7 @@ const ActionSheet = React.forwardRef<ActionSheetRef, ActionSheetProps>(
           setIsOpen(true);
         }
       },
-      [clearScheduledPresent],
+      [clearScheduledPresent]
     );
 
     const handleDismiss = useCallback(() => {
@@ -228,25 +244,41 @@ const ActionSheet = React.forwardRef<ActionSheetRef, ActionSheetProps>(
           {sections.map((section, sectionIndex) => (
             <React.Fragment key={section[0].key}>
               {sectionIndex > 0 && (
-                <View testID="action-sheet-group-spacer" className="h-3 bg-background" />
+                <View
+                  testID="action-sheet-group-spacer"
+                  className="h-3 bg-background"
+                />
               )}
               {section.map((item) => (
                 <Pressable
                   key={item.key}
                   testID={`action-sheet-item-${item.key}`}
                   onPress={() => handleItemPress(item)}
-                  className="flex-row items-center px-4 py-3.5 border-b border-border-subtle"
+                  className="px-4 py-3.5 border-b border-border-subtle"
                   style={{ borderBottomWidth: StyleSheet.hairlineWidth }}
                   accessibilityRole="button"
-                  accessibilityLabel={item.label}
+                  // Screen readers announce the description with the label, so
+                  // the distinction is not sighted-only.
+                  accessibilityLabel={
+                    item.description
+                      ? `${item.label}. ${item.description}`
+                      : item.label
+                  }
                 >
                   <Text
                     className={`text-base font-medium ${
-                      item.destructive ? 'text-text-danger-subtle' : 'text-text-primary'
+                      item.destructive
+                        ? 'text-text-danger-subtle'
+                        : 'text-text-primary'
                     }`}
                   >
                     {item.label}
                   </Text>
+                  {item.description ? (
+                    <Text className="text-sm text-text-muted mt-0.5">
+                      {item.description}
+                    </Text>
+                  ) : null}
                 </Pressable>
               ))}
             </React.Fragment>
@@ -254,7 +286,7 @@ const ActionSheet = React.forwardRef<ActionSheetRef, ActionSheetProps>(
         </BottomSheetScrollView>
       </BottomSheetModal>
     );
-  },
+  }
 );
 
 ActionSheet.displayName = 'ActionSheet';

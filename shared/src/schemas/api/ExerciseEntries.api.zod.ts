@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { paginationSchema } from "./Pagination.api.zod.ts";
 import { exerciseModalitySchema } from "./Exercises.api.zod.ts";
+import { workoutFormatSchema } from "./WorkoutPresets.api.zod.ts";
 
 // --- Query contracts ---
 
@@ -80,6 +81,15 @@ export const exerciseSnapshotResponseSchema = z
   })
   .strict();
 
+/**
+ * The snapshot as it appears on a diary entry, where the library row may be
+ * gone. Same fields as the base snapshot, but `id` can be null: the base schema
+ * keeps a required id because it is also used for live library and search
+ * results, where one always exists.
+ */
+export const entryExerciseSnapshotResponseSchema =
+  exerciseSnapshotResponseSchema.extend({ id: z.string().nullable() });
+
 /** A single set within an exercise entry */
 export const exerciseEntrySetResponseSchema = z
   .object({
@@ -95,8 +105,18 @@ export const exerciseEntrySetResponseSchema = z
     rpe: z.number().nullable(),
     completed_at: z.string().nullable(),
     is_pr: z.boolean(),
+    rir: z.number().nullable().optional(),
     // Km. Optional: pre-distance servers omit it.
     distance: z.number().nullable().optional(),
+    // Progression & Equipment Fields
+    progression_mode: z
+      .enum(["rep_goal", "fixed", "step_load", "manual"])
+      .nullable()
+      .optional(),
+    rep_goal: z.number().int().nullable().optional(),
+    increment_type: z.enum(["weight", "reps"]).nullable().optional(),
+    increment_value: z.number().nullable().optional(),
+    equipment_brand: z.string().nullable().optional(),
   })
   .strict();
 
@@ -112,6 +132,22 @@ export const activityDetailResponseSchema = z
 
 // --- Request contracts for grouped workout sessions ---
 
+/** exercise_preset_entries.location is varchar(255). */
+export const WORKOUT_LOCATION_MAX_LENGTH = 255;
+
+// Free-text gym name. Blank input clears the location rather than storing ''.
+const workoutLocationRequestSchema = z
+  .string()
+  .trim()
+  .max(WORKOUT_LOCATION_MAX_LENGTH)
+  .transform((value) => (value === "" ? null : value))
+  .nullable()
+  .optional();
+
+/** Reps in reserve: 0 = failure. exercise_entry_sets.rir is numeric(3,1). */
+export const RIR_MIN = 0;
+export const RIR_MAX = 10;
+
 export const exerciseEntrySetRequestSchema = z
   .object({
     id: z.union([z.string(), z.number()]).nullable().optional(),
@@ -124,6 +160,7 @@ export const exerciseEntrySetRequestSchema = z
     rest_time: z.number().nullable().optional(),
     notes: z.string().nullable().optional(),
     rpe: z.number().nullable().optional(),
+    rir: z.number().min(RIR_MIN).max(RIR_MAX).nullable().optional(),
     completed_at: z.iso.datetime().nullable().optional(),
     is_pr: z.boolean().optional(),
     // Km; only meaningful on duration_distance sets.
@@ -134,7 +171,12 @@ export const exerciseEntrySetRequestSchema = z
 export const presetSessionExerciseRequestSchema = z
   .object({
     id: z.string().uuid().optional(),
-    exercise_id: z.string().uuid(),
+    // Null when the library exercise this entry was logged from has since been
+    // deleted (20260912150000_preserve_data_on_user_and_library_deletes.sql).
+    // The entry stands on its own snapshot, so re-saving the workout it belongs
+    // to has to be able to send it back. Creating a *new* entry still requires a
+    // real exercise -- see createExerciseEntryRequestSchema.
+    exercise_id: z.string().uuid().nullable(),
     sort_order: z.number().int().min(0).default(0),
     duration_minutes: z.number().min(0).default(0),
     // Manual per-exercise override; when omitted the server recomputes
@@ -142,20 +184,70 @@ export const presetSessionExerciseRequestSchema = z
     calories_burned: z.number().min(0).optional(),
     notes: z.string().nullable().optional(),
     superset_group: z.number().int().nullable().optional(),
+    // Progression & Equipment Fields
+    progression_mode: z
+      .enum(["rep_goal", "fixed", "step_load", "manual"])
+      .nullable()
+      .optional(),
+    rep_goal: z.number().int().positive().nullable().optional(),
+    increment_type: z.enum(["weight", "reps"]).nullable().optional(),
+    increment_value: z.number().positive().nullable().optional(),
+    equipment_brand: z.string().nullable().optional(),
     sets: z.array(exerciseEntrySetRequestSchema).default([]),
     entry_time: timeStringSchema.nullish(),
+    workout_plan_assignment_id: z
+      .union([z.string(), z.number()])
+      .nullable()
+      .optional(),
   })
   .strict();
 
+export const activityDetailRequestItemSchema = z.object({
+  id: z.string().optional(),
+  provider_name: z.string().optional(),
+  detail_type: z.string().optional(),
+  detail_data: z.unknown().optional(),
+});
+
+export const wodScoreDetailDataSchema = z.object({
+  workout_format: workoutFormatSchema,
+  time_cap_seconds: z.number().int().nullable().optional(),
+  score_type: z.enum(["time", "rounds_reps", "total_reps", "completion"]),
+  rounds_completed: z.number().int().nullable().optional(),
+  reps_completed: z.number().int().nullable().optional(),
+  elapsed_seconds: z.number().int().nullable().optional(),
+  status: z.enum(["rx", "scaled"]).nullable().optional(),
+  scaling_notes: z.string().nullable().optional(),
+  rounds: z
+    .array(
+      z.object({
+        round: z.number().int(),
+        started_at_s: z.number().optional(),
+        completed_at_s: z.number().optional(),
+      }),
+    )
+    .optional(),
+});
+
+// A workout session can be started in two ways:
+// 1. From a stored preset blueprint (workout_preset_id provided; exercises optional)
+// 2. As a freeform workout (no workout_preset_id; non-empty name and at least one exercise required)
+// Both sources can also be provided together (e.g. client starts from a preset with client-supplied sets).
 export const createPresetSessionRequestSchema = z
   .object({
     workout_preset_id: z.number().int().nullable().optional(),
     entry_date: dateStringSchema,
-    name: z.string().min(1).optional(),
+    name: z.string().nullable().optional(),
     description: z.string().nullable().optional(),
     notes: z.string().nullable().optional(),
+    location: workoutLocationRequestSchema,
     source: z.string().default("manual"),
-    exercises: z.array(presetSessionExerciseRequestSchema).min(1).optional(),
+    exercises: z.array(presetSessionExerciseRequestSchema).optional(),
+    workoutPlanAssignmentId: z
+      .union([z.string(), z.number()])
+      .nullable()
+      .optional(),
+    activity_details: z.array(activityDetailRequestItemSchema).optional(),
   })
   .strict()
   .superRefine((data, ctx) => {
@@ -163,35 +255,39 @@ export const createPresetSessionRequestSchema = z
       data.workout_preset_id !== undefined && data.workout_preset_id !== null;
     const hasExercises = data.exercises !== undefined;
 
-    // workout_preset_id alone means "copy this preset's own stored
-    // structure"; exercises alone means a freeform/individual session;
-    // both together means "tag this session as started from a preset, but
-    // use the client-supplied (e.g. live-workout) exercise/set structure
-    // instead of the preset's stored one." Only rule out neither.
-    if (!hasPresetId && !hasExercises) {
+    // Freeform workouts require a non-empty name
+    if (!hasPresetId) {
+      if (!data.name || data.name.trim().length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Name is required when creating a freeform workout",
+          path: ["name"],
+        });
+      }
+    }
+
+    if (hasPresetId && !hasExercises) {
+      return;
+    }
+
+    if (!hasExercises || !data.exercises || data.exercises.length === 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "Provide a workout source: workout_preset_id or exercises.",
+        message:
+          "Workout session must include at least one exercise when not started from a stored preset.",
         path: ["exercises"],
       });
     }
-
-    if (!hasPresetId && !data.name) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "Name is required when creating a freeform workout.",
-        path: ["name"],
-      });
-    }
   });
-
 export const updatePresetSessionRequestSchema = z
   .object({
     name: z.string().min(1).optional(),
     description: z.string().nullable().optional(),
     notes: z.string().nullable().optional(),
+    location: workoutLocationRequestSchema,
     entry_date: dateStringSchema.optional(),
     exercises: z.array(presetSessionExerciseRequestSchema).min(1).optional(),
+    activity_details: z.array(activityDetailRequestItemSchema).optional(),
   })
   .strict()
   .superRefine((data, ctx) => {
@@ -199,8 +295,10 @@ export const updatePresetSessionRequestSchema = z
       data.name !== undefined ||
       data.description !== undefined ||
       data.notes !== undefined ||
+      data.location !== undefined ||
       data.entry_date !== undefined ||
-      data.exercises !== undefined;
+      data.exercises !== undefined ||
+      data.activity_details !== undefined;
 
     if (!hasAnyField) {
       ctx.addIssue({
@@ -210,12 +308,58 @@ export const updatePresetSessionRequestSchema = z
     }
   });
 
-export const activityDetailRequestItemSchema = z.object({
-  id: z.string().optional(),
-  provider_name: z.string().optional(),
-  detail_type: z.string().optional(),
-  detail_data: z.unknown().optional(),
+// One heart-rate sample captured on a paired watch during a live workout.
+export const heartRateSampleRequestSchema = z.object({
+  /** ISO 8601 instant. */
+  t: z.iso.datetime(),
+  bpm: z.number().positive(),
 });
+
+// Attaches what a paired Apple Watch measured during a live workout to an
+// exercise entry that already exists (created by the live-workout
+// start/reconcile flow before any of this was known) rather than creating
+// one, unlike the HealthKit/Health Connect/Garmin sync path.
+//
+// Both fields are optional but at least one must be present: heart rate and
+// active energy come from the same HKLiveWorkoutBuilder, but the wearer can
+// grant one HealthKit permission and refuse the other, so either can be the
+// only thing a workout produced.
+export const attachExerciseEntryWatchTelemetryRequestSchema = z
+  .object({
+    // Two samples minimum: the zone calculator derives each zone's duration
+    // from the gaps between consecutive readings, so a lone sample spans no
+    // time and contributes nothing. Capped well above a long workout (the
+    // watch expands a series at 30s) so one post cannot exhaust the parser
+    // or the zone sort.
+    hrSamples: z
+      .array(heartRateSampleRequestSchema)
+      .min(2)
+      .max(10000)
+      .optional(),
+    /**
+     * Active energy the watch actually measured for this exercise, in kcal.
+     * Replaces the server's duration-and-sets estimate for this entry, which
+     * is a formula rather than a measurement.
+     */
+    activeEnergyKcal: z.number().nonnegative().optional(),
+    /**
+     * Minutes the watch spent showing this exercise, including rest between
+     * its sets. The plan's set timers are often zero, so zone seconds had
+     * nothing on the entry to line up with.
+     */
+    durationMinutes: z.number().nonnegative().optional(),
+  })
+  .strict()
+  .refine(
+    (body) =>
+      body.hrSamples !== undefined ||
+      body.activeEnergyKcal !== undefined ||
+      (body.durationMinutes !== undefined && body.durationMinutes > 0),
+    {
+      message:
+        "At least one of hrSamples, activeEnergyKcal, or durationMinutes is required.",
+    },
+  );
 
 export const createExerciseEntryRequestSchema = z
   .object({
@@ -287,11 +431,16 @@ export const updateExerciseEntryRequestSchema = createExerciseEntryRequestSchema
 export const exerciseEntryResponseSchema = z
   .object({
     id: z.string(),
-    exercise_id: z.string(),
+    // Nulled rather than cascaded when the library exercise is deleted
+    // (20260912150000_preserve_data_on_user_and_library_deletes.sql), so the
+    // entry outlives it. Parsing a preserved entry would throw otherwise.
+    exercise_id: z.string().nullable(),
     duration_minutes: z.number(),
     calories_burned: z.number(),
     entry_date: z.string().nullable(),
     entry_time: z.string().nullish(),
+    /** IANA zone `entry_time` was recorded in; null for older and manual entries. */
+    record_timezone: z.string().nullish(),
     notes: z.string().nullable(),
     distance: z.number().nullable(),
     avg_heart_rate: z.number().nullable(),
@@ -300,11 +449,18 @@ export const exerciseEntryResponseSchema = z
     exercise_preset_entry_id: z.string().nullable().optional(),
     created_at: z.string().nullable().optional(),
     sets: z.array(exerciseEntrySetResponseSchema),
-    exercise_snapshot: exerciseSnapshotResponseSchema.nullable(),
+    // Entry snapshots outlive the library row they were copied from, so their
+    // id can be null. The base schema keeps a required id because it is also
+    // used for live library and search results, where one always exists.
+    exercise_snapshot: entryExerciseSnapshotResponseSchema.nullable(),
     activity_details: z.array(activityDetailResponseSchema),
     steps: z.number().nullable().optional(),
     category: z.string().nullable().optional(),
     superset_group: z.number().int().nullable(),
+    workout_plan_assignment_id: z
+      .union([z.string(), z.number()])
+      .nullable()
+      .optional(),
     max_heart_rate: z.number().nullable().optional(),
     heart_rate_recovery_1min: z.number().nullable().optional(),
     avg_respiration_brpm: z.number().nullable().optional(),
@@ -363,6 +519,10 @@ export const exerciseProgressResponseSchema = z.object({
   exercise_preset_entry_name: z.string().nullable().optional(),
   has_telemetry: z.boolean().nullable().optional(),
   category: z.string().nullable().optional(),
+  /** The entry's modality; `bodyweight_reps` sets add body weight to load. */
+  modality: exerciseModalitySchema.nullable().optional(),
+  /** The lifter's body weight that day (kg), null with no check-ins. */
+  body_weight_kg: z.number().nullable().optional(),
   sets: z.array(exerciseEntrySetRequestSchema),
 });
 
@@ -382,9 +542,14 @@ export const presetSessionResponseSchema = z
     id: z.string(),
     entry_date: z.string().nullable(),
     workout_preset_id: z.number().int().nullable(),
+    workout_plan_assignment_id: z
+      .union([z.string(), z.number()])
+      .nullable()
+      .optional(),
     name: z.string(),
     description: z.string().nullable(),
     notes: z.string().nullable(),
+    location: z.string().nullable().optional(),
     source: z.string(),
     created_at: z.string().nullable().optional(),
     total_duration_minutes: z.number(),
@@ -496,8 +661,17 @@ export type ExerciseStatsQuery = z.infer<typeof exerciseStatsQuerySchema>;
 export type ExerciseSnapshotResponse = z.infer<
   typeof exerciseSnapshotResponseSchema
 >;
+export type EntryExerciseSnapshotResponse = z.infer<
+  typeof entryExerciseSnapshotResponseSchema
+>;
 export type ExerciseEntrySetRequest = z.infer<
   typeof exerciseEntrySetRequestSchema
+>;
+export type HeartRateSampleRequest = z.infer<
+  typeof heartRateSampleRequestSchema
+>;
+export type AttachExerciseEntryWatchTelemetryRequest = z.infer<
+  typeof attachExerciseEntryWatchTelemetryRequestSchema
 >;
 export type PresetSessionExerciseRequest = z.infer<
   typeof presetSessionExerciseRequestSchema
@@ -542,3 +716,4 @@ export type ExerciseRecentSession = z.infer<typeof exerciseRecentSessionSchema>;
 export type ExerciseStatsResponse = z.infer<typeof exerciseStatsResponseSchema>;
 export type ImportFitFileResult = z.infer<typeof importFitFileResultSchema>;
 export type ImportFitResponse = z.infer<typeof importFitResponseSchema>;
+export type WodScoreDetailData = z.infer<typeof wodScoreDetailDataSchema>;

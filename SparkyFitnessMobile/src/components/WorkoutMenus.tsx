@@ -1,11 +1,24 @@
-import AnchoredMenu, { type AnchorRect, type AnchoredMenuItem } from './AnchoredMenu';
+import AnchoredMenu, {
+  type AnchorRect,
+  type AnchoredMenuItem,
+} from './AnchoredMenu';
 import { useTranslation } from 'react-i18next';
+import {
+  DEFAULT_DROP_SET_COUNT,
+  DEFAULT_DROP_SET_PERCENT,
+} from '@workspace/shared';
 import { SET_TYPE_OPTIONS } from '../utils/workoutSession';
 import { useAppPreferencesStore } from '../stores/appPreferencesStore';
 import type { ActiveWorkoutMetricColumn } from '../stores/appPreferencesStore';
 
 /** Options and labels for the metric-column picker menu the header opens. */
-const METRIC_OPTIONS: ActiveWorkoutMetricColumn[] = ['rpe', 'volume', 'e1rm', 'tenrm'];
+const METRIC_OPTIONS: ActiveWorkoutMetricColumn[] = [
+  'rpe',
+  'rir',
+  'volume',
+  'e1rm',
+  'tenrm',
+];
 
 /**
  * The anchored menus shared by every workout card surface (live screen,
@@ -35,22 +48,34 @@ export function MetricColumnMenu({
   includeWeightMetrics?: boolean;
 }) {
   const { t } = useTranslation();
-  const metricColumn = useAppPreferencesStore((s) => s.activeWorkoutMetricColumn);
-  const setMetricColumn = useAppPreferencesStore((s) => s.setActiveWorkoutMetricColumn);
+  const metricColumn = useAppPreferencesStore(
+    (s) => s.activeWorkoutMetricColumn
+  );
+  const setMetricColumn = useAppPreferencesStore(
+    (s) => s.setActiveWorkoutMetricColumn
+  );
   const options = METRIC_OPTIONS.filter(
-    (o) => (includeRpe || o !== 'rpe') && (includeWeightMetrics || o === 'rpe'),
+    (o) =>
+      (includeRpe || (o !== 'rpe' && o !== 'rir')) &&
+      (includeWeightMetrics || o === 'rpe' || o === 'rir')
   );
   const effectiveColumn = !includeWeightMetrics
     ? 'rpe'
-    : !includeRpe && metricColumn === 'rpe'
+    : !includeRpe && (metricColumn === 'rpe' || metricColumn === 'rir')
       ? 'volume'
       : metricColumn;
   const metricLabel = (option: ActiveWorkoutMetricColumn): string => {
     switch (option) {
-      case 'rpe': return t('workout.metricRpe', { defaultValue: 'RPE' });
-      case 'volume': return t('workout.metricVolume', { defaultValue: 'Volume' });
-      case 'e1rm': return t('workout.metricE1rm', { defaultValue: 'Est. 1RM' });
-      case 'tenrm': return t('workout.metricTenrm', { defaultValue: 'Est. 10RM' });
+      case 'rpe':
+        return t('workout.metricRpe', { defaultValue: 'RPE' });
+      case 'rir':
+        return t('workout.metricRir', { defaultValue: 'RIR' });
+      case 'volume':
+        return t('workout.metricVolume', { defaultValue: 'Volume' });
+      case 'e1rm':
+        return t('workout.metricE1rm', { defaultValue: 'Est. 1RM' });
+      case 'tenrm':
+        return t('workout.metricTenrm', { defaultValue: 'Est. 10RM' });
     }
   };
   if (options.length === 0) return null;
@@ -84,6 +109,7 @@ export function SetTypeMenu({
   onClose,
   onSelect,
   onDelete,
+  onGenerateDropSets,
 }: {
   anchor: AnchorRect | null;
   /** The target set's current type; null/undefined reads as 'normal'. */
@@ -91,12 +117,13 @@ export function SetTypeMenu({
   onClose: () => void;
   onSelect: (type: (typeof SET_TYPE_OPTIONS)[number]) => void;
   onDelete?: () => void;
+  onGenerateDropSets?: () => void;
 }) {
   const { t } = useTranslation();
   const typeLabels: Record<string, string> = {
     normal: t('workout.setTypeNormal', { defaultValue: 'Normal' }),
     warmup: t('workout.setTypeWarmup', { defaultValue: 'Warm-up' }),
-    dropset: t('workout.setTypeDropSet', { defaultValue: 'Drop set' }),
+    drop: t('workout.setTypeDropSet', { defaultValue: 'Drop set' }),
     failure: t('workout.setTypeFailure', { defaultValue: 'Failure' }),
   };
   const current = currentType ?? 'normal';
@@ -106,15 +133,32 @@ export function SetTypeMenu({
     label: `${type === current ? '✓ ' : ''}${typeLabels[type] ?? type}`,
     onPress: () => onSelect(type),
   }));
+  if (onGenerateDropSets) {
+    items.push({
+      key: 'generate-dropsets',
+      label: t('workout.addDropSets', {
+        sets: DEFAULT_DROP_SET_COUNT,
+        percent: DEFAULT_DROP_SET_PERCENT,
+        defaultValue: 'Add {{sets}} drop sets (-{{percent}}%)',
+      }),
+      icon: 'add-circle',
+      onPress: onGenerateDropSets,
+    });
+  }
   if (onDelete) {
-    items.push({ key: 'delete', label: t('workout.deleteSet', { defaultValue: 'Delete set' }), icon: 'trash', onPress: onDelete });
+    items.push({
+      key: 'delete',
+      label: t('workout.deleteSet', { defaultValue: 'Delete set' }),
+      icon: 'trash',
+      onPress: onDelete,
+    });
   }
   return (
     <AnchoredMenu
       visible={anchor != null}
       anchor={anchor}
       onClose={onClose}
-      minWidth={180}
+      minWidth={200}
       items={items}
     />
   );

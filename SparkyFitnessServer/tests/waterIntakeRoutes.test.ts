@@ -118,6 +118,21 @@ describe('Water Intake Routes (v2)', () => {
       expect(res.statusCode).toBe(403);
       expect(res.body.error).toMatch(/^Forbidden/);
     });
+    it('passes the food-derived water breakdown through unchanged (#1557, #1629)', async () => {
+      const data = {
+        water_ml: 750,
+        manual_ml: 250,
+        ledger_ml: 250,
+        food_ml: 500,
+      };
+      // @ts-expect-error TS(2339): Property 'mockResolvedValue' does not exist on typ... Remove this comment to see the full error message
+      measurementService.getWaterIntake.mockResolvedValue(data);
+      const res = await request(app).get(
+        '/api/v2/measurements/water-intake/2023-01-01'
+      );
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toEqual(data);
+    });
     it('delegates unexpected service errors to the error handler', async () => {
       // @ts-expect-error TS(2339): Property 'mockRejectedValue' does not exist on typ... Remove this comment to see the full error message
       measurementService.getWaterIntake.mockRejectedValue(
@@ -127,6 +142,20 @@ describe('Water Intake Routes (v2)', () => {
         '/api/v2/measurements/water-intake/2023-01-01'
       );
       expect(res.statusCode).toBe(500);
+    });
+    it('rejects a malformed date with 400 before reaching the service', async () => {
+      const res = await request(app).get(
+        '/api/v2/measurements/water-intake/not-a-date'
+      );
+      expect(res.statusCode).toBe(400);
+      expect(measurementService.getWaterIntake).not.toHaveBeenCalled();
+    });
+    it('rejects a well-formed but impossible date with 400', async () => {
+      const res = await request(app).get(
+        '/api/v2/measurements/water-intake/2026-02-30'
+      );
+      expect(res.statusCode).toBe(400);
+      expect(measurementService.getWaterIntake).not.toHaveBeenCalled();
     });
   });
   // ---------------------------------------------------------------------------
@@ -328,6 +357,14 @@ describe('Water Intake Routes (v2)', () => {
         '/api/v2/measurements/water-intake/2023-01-01/log'
       );
       expect(res.statusCode).toBe(500);
+    });
+
+    it('rejects a malformed date with 400 before reaching the service', async () => {
+      const res = await request(app).get(
+        '/api/v2/measurements/water-intake/not-a-date/log'
+      );
+      expect(res.statusCode).toBe(400);
+      expect(measurementService.getWaterIntakeLog).not.toHaveBeenCalled();
     });
   });
 

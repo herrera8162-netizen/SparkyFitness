@@ -4,6 +4,10 @@ import { checkInKeys } from '@/api/keys/checkin';
 import { reportKeys } from '@/api/keys/reports';
 import {
   getExerciseDashboardData,
+  getTrainingConsistency,
+  getAlcoholWeekReport,
+  getHydrationNutritionRange,
+  getWorkoutDays,
   loadReportsData,
 } from '@/api/Reports/reportsService';
 import { parseStressMeasurement } from '@/utils/reportUtil';
@@ -130,6 +134,93 @@ export const useExerciseDashboardData = (
       errorMessage: t(
         'reports.failedToLoadExerciseDashboard',
         'Failed to load exercise dashboard data.'
+      ),
+    },
+  });
+};
+
+export const useTrainingConsistency = (userId?: string | null) => {
+  const { t } = useTranslation();
+  return useQuery({
+    queryKey: reportKeys.trainingConsistency(userId ?? undefined),
+    queryFn: () => getTrainingConsistency(userId ?? undefined),
+    enabled: !!userId,
+    meta: {
+      errorMessage: t(
+        'trainingConsistency.loadFailed',
+        'Failed to load training consistency.'
+      ),
+    },
+  });
+};
+
+export const useAlcoholWeekReport = (
+  date: string,
+  userId?: string | null,
+  enabled: boolean = true
+) => {
+  const { t } = useTranslation();
+  return useQuery({
+    queryKey: reportKeys.alcoholWeek(date, userId ?? undefined),
+    queryFn: () => getAlcoholWeekReport(date, userId ?? undefined),
+    enabled: Boolean(date) && enabled,
+    meta: {
+      errorMessage: t(
+        'reports.failedToLoadAlcoholWeek',
+        'Failed to load weekly alcohol data.'
+      ),
+    },
+  });
+};
+
+// #2348: water_ml is deliberately absent from the RANGE_COLS-driven nutrition
+// data (design-decisions correction 3), so Trends needs its own range query
+// for the bespoke hydration chart. Caffeine/alcohol already ride the existing
+// nutritionData prop via NutritionChartsGrid.
+/**
+ * Per-day workout counts for the heatmap. Fetched on its own fixed window so
+ * the heatmap shows the last 12 months regardless of the report's date filter,
+ * without loading 12 months of the heavy exercise dashboard (#2461).
+ */
+export const useWorkoutDays = (
+  startDate: string,
+  endDate: string,
+  userId?: string | null
+) => {
+  const { t } = useTranslation();
+  return useQuery({
+    queryKey: reportKeys.workoutDays(startDate, endDate, userId ?? undefined),
+    queryFn: () => getWorkoutDays(startDate, endDate, userId ?? undefined),
+    enabled: Boolean(startDate) && Boolean(endDate),
+    meta: {
+      errorMessage: t(
+        'reports.failedToLoadWorkoutHeatmap',
+        'Failed to load workout heatmap data.'
+      ),
+    },
+  });
+};
+
+export const useHydrationNutritionRange = (
+  startDate: string,
+  endDate: string,
+  userId?: string | null,
+  enabled: boolean = true
+) => {
+  const { t } = useTranslation();
+  return useQuery({
+    queryKey: reportKeys.hydrationNutritionRange(
+      startDate,
+      endDate,
+      userId ?? undefined
+    ),
+    queryFn: () =>
+      getHydrationNutritionRange(startDate, endDate, userId ?? undefined),
+    enabled: Boolean(startDate) && Boolean(endDate) && enabled,
+    meta: {
+      errorMessage: t(
+        'reports.failedToLoadHydrationTrend',
+        'Failed to load hydration trend data.'
       ),
     },
   });

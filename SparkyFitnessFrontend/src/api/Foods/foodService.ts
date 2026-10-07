@@ -4,12 +4,14 @@ import type {
   Food,
   FoodDataForBackend,
   FoodDeletionImpact,
+  FoodDeleteMode,
 } from '@/types/food';
 import { MealFilter } from '@/types/meal';
 
 interface FoodPayload {
   name: string;
   brand?: string;
+  notes?: string | null;
   calories: number;
   protein: number;
   carbs: number;
@@ -35,6 +37,10 @@ interface FoodPayload {
   vitamin_c?: number;
   calcium?: number;
   iron?: number;
+  caffeine_mg?: number;
+  water_ml?: number;
+  alcohol_g?: number;
+  abv_percent?: number;
   custom_nutrients?: Record<string, string | number>;
 }
 
@@ -48,7 +54,8 @@ export const loadFoods = async (
   currentPage: number,
   itemsPerPage: number,
   sortBy: string = 'name:asc', // Default sort by name ascending
-  userId?: string
+  userId?: string,
+  providerType?: string
 ): Promise<LoadFoodsResponse> => {
   const params = new URLSearchParams();
   if (searchTerm) {
@@ -60,6 +67,9 @@ export const loadFoods = async (
   params.append('itemsPerPage', itemsPerPage.toString());
   if (userId) params.append('userId', userId);
   params.append('sortBy', sortBy); // Add sortBy parameter
+  if (providerType && providerType !== 'all') {
+    params.append('providerType', providerType);
+  }
   const response = await apiCall(
     `/foods/foods-paginated?${params.toString()}`,
     {
@@ -81,14 +91,13 @@ export const togglePublicSharing = async (
 
 export const deleteFood = async (
   foodId: string,
-  forceDelete: boolean = false,
-  userId?: string
+  mode: FoodDeleteMode = 'delete',
+  userId?: string,
+  currentClientDate?: string
 ): Promise<{ message: string; status: string }> => {
-  const params = new URLSearchParams();
+  const params = new URLSearchParams({ mode });
   if (userId) params.append('userId', userId);
-  if (forceDelete) {
-    params.append('forceDelete', 'true');
-  }
+  if (currentClientDate) params.append('currentClientDate', currentClientDate);
   return apiCall(`/foods/${foodId}?${params.toString()}`, {
     method: 'DELETE',
   });
@@ -131,6 +140,19 @@ export const updateFoodEntriesSnapshot = async (
   });
 };
 
+/**
+ * Re-fetches a food's details from the external source it was imported from.
+ * Returns the refreshed data without saving anything — the caller applies it
+ * to the open form and persists it on save.
+ */
+export const refreshFoodFromSource = async (
+  foodId: string
+): Promise<{ food: Food }> => {
+  return apiCall(`/foods/${foodId}/refresh-from-source`, {
+    method: 'POST',
+  });
+};
+
 export const getRecentAndTopFoods = async (
   limit: number,
   mealType?: string
@@ -141,17 +163,17 @@ export const getRecentAndTopFoods = async (
   return apiCall(`/foods?${params.toString()}`);
 };
 
-export const searchDatabaseFoods = async (
-  term: string,
-  limit: number,
-  mealType?: string
-) => {
+/**
+ * Name lookup used to match an incoming meal food against an existing food
+ * before creating a duplicate. Not the dialog's user-facing search: that one
+ * paginates through `loadFoods`.
+ */
+export const lookupFoodsByName = async (term: string, limit: number) => {
   const params = new URLSearchParams({
     name: term,
     broadMatch: 'true',
     limit: limit.toString(),
   });
-  if (mealType) params.append('mealType', mealType);
 
   return apiCall(`/foods?${params.toString()}`);
 };

@@ -42,6 +42,8 @@ export const externalDataProvidersSchema = z.object({
   last_sync_at: z.date().nullable(),
   sync_frequency: z.string().nullable(),
   oauth_state: z.string().nullable(),
+  sort_order: z.number().int().nullable().optional(),
+  sync_started_at: z.date().nullable(),
 });
 
 export const externalDataProvidersInitializerSchema = z.object({
@@ -77,6 +79,8 @@ export const externalDataProvidersInitializerSchema = z.object({
   last_sync_at: z.date().optional().nullable(),
   sync_frequency: z.string().optional().nullable(),
   oauth_state: z.string().optional().nullable(),
+  sort_order: z.number().int().optional().nullable(),
+  sync_started_at: z.date().optional().nullable(),
 });
 
 export const externalDataProvidersMutatorSchema = z.object({
@@ -112,8 +116,14 @@ export const externalDataProvidersMutatorSchema = z.object({
   last_sync_at: z.date().optional().nullable(),
   sync_frequency: z.string().optional().nullable(),
   oauth_state: z.string().optional().nullable(),
+  sort_order: z.number().int().optional().nullable(),
+  sync_started_at: z.date().optional().nullable(),
 });
 
 export type ExternalDataProviders = z.infer<typeof externalDataProvidersSchema>;
-export type ExternalDataProvidersInitializer = z.infer<typeof externalDataProvidersInitializerSchema>;
-export type ExternalDataProvidersMutator = z.infer<typeof externalDataProvidersMutatorSchema>;
+export type ExternalDataProvidersInitializer = z.infer<
+  typeof externalDataProvidersInitializerSchema
+>;
+export type ExternalDataProvidersMutator = z.infer<
+  typeof externalDataProvidersMutatorSchema
+>;

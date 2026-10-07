@@ -7,6 +7,7 @@ import DayNavigator from '@/components/DayNavigator';
 import NutritionSummaryCard, { DayTotals } from './NutritionSummaryCard';
 import DailyProgress from './DailyProgress';
 import WaterIntake from './WaterIntake';
+import CaffeineCard from './CaffeineCard';
 import MealCard from './MealCard';
 import ExerciseCard from './ExerciseCard';
 import DiaryWidgetGrid, { type DiaryWidget } from './DiaryWidgetGrid';
@@ -15,12 +16,14 @@ import {
   Flame,
   Salad,
   Droplet,
+  Coffee,
   UtensilsCrossed,
   Dumbbell,
   HeartPulse,
 } from 'lucide-react';
 import { DailyHealthMetricsCard } from '@/components/Health/DailyHealthMetricsCard';
 import { useDailyHealthMetrics } from '@/hooks/useGenericHealth';
+import { selectDisplayableHealthMetrics } from '@/utils/dailyHealthMetrics';
 import EditFoodEntryDialog from './EditFoodEntryDialog';
 import FoodUnitSelector from '@/components/FoodUnitSelector';
 import CopyFoodEntryDialog from '@/pages/Diary/CopyFoodEntryDialog';
@@ -256,7 +259,9 @@ const Diary = () => {
     quantity: number,
     unit: string,
     selectedVariant: FoodVariant,
-    entryTime?: string | null
+    entryTime?: string | null,
+    _mealType?: string | null,
+    notes?: string | null
   ) => {
     if (!currentUserId) {
       return;
@@ -279,6 +284,7 @@ const Diary = () => {
         variant_id: selectedVariant.id,
         entry_date: selectedDate,
         entry_time: entryTime || null,
+        notes: notes || null,
       });
       info(loggingLevel, 'Food entry added successfully.');
     } catch (err) {
@@ -353,15 +359,14 @@ const Diary = () => {
   // card actually displays came back populated (no real wearable, FIT-only
   // import, etc.). Only show the widget when there's something real to show,
   // rather than an empty shell.
-  const todaysHealthMetrics = healthMetricsData?.[0];
-  const hasDisplayableHealthMetrics = Boolean(
-    todaysHealthMetrics &&
-    (todaysHealthMetrics.body_battery_highest != null ||
-      todaysHealthMetrics.avg_stress_level != null ||
-      todaysHealthMetrics.resting_heart_rate != null ||
-      todaysHealthMetrics.vo2_max != null ||
-      todaysHealthMetrics.training_readiness_score != null)
-  );
+  //
+  // daily_health_metrics holds one row per provider per day and the API orders
+  // only by entry_date, so for a multi-provider user the first row is arbitrary
+  // and is often an empty shell from a provider that synced something else that
+  // day. Pick the row that actually has data instead of index 0. The card is
+  // single-provider by design -- it badges metrics.source_provider -- so this
+  // selects one row rather than merging several, which would mislabel the badge.
+  const todaysHealthMetrics = selectDisplayableHealthMetrics(healthMetricsData);
 
   // Build the ordered widget registry: energy, nutrition, water, one card per
   // visible meal type, then exercise. Keys match buildWidgetKeys() so the saved
@@ -398,22 +403,17 @@ const Diary = () => {
       },
     ];
 
-    if (hasDisplayableHealthMetrics) {
-      list.push({
-        key: 'healthMetrics',
-        title: t(
-          'diary.wearableHealthSummary',
-          'Daily Wearable Health Summary'
-        ),
-        icon: HeartPulse,
-        render: () => (
-          <DailyHealthMetricsCard
-            metrics={todaysHealthMetrics}
-            isLoading={loadingHealthMetrics}
-          />
-        ),
-      });
-    }
+    list.push({
+      key: 'healthMetrics',
+      title: t('diary.wearableHealthSummary', 'Daily Wearable Health Summary'),
+      icon: HeartPulse,
+      render: () => (
+        <DailyHealthMetricsCard
+          metrics={todaysHealthMetrics}
+          isLoading={loadingHealthMetrics}
+        />
+      ),
+    });
 
     for (const mealTypeObj of visibleMealTypes) {
       list.push({
@@ -472,6 +472,16 @@ const Diary = () => {
       ),
     });
 
+    // Last in the registry to match its default tile, which sits below
+    // exercise; the grid positions by layout, but keeping the two in the same
+    // order stops the next reader wondering which one is authoritative.
+    list.push({
+      key: 'caffeine',
+      title: t('diary.caffeine.title', 'Caffeine Kinetics'),
+      icon: Coffee,
+      render: () => <CaffeineCard date={selectedDate} userId={activeUserId} />,
+    });
+
     return list;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -485,7 +495,6 @@ const Diary = () => {
     customNutrients,
     exercisesToLogFromPreset,
     openFoodSearchForMealType,
-    hasDisplayableHealthMetrics,
     todaysHealthMetrics,
     loadingHealthMetrics,
     t,
@@ -495,7 +504,7 @@ const Diary = () => {
     (t) => t.name.toLowerCase() === selectedMealType.toLowerCase()
   );
 
-  if (loading) return <div>Loading...</div>;
+  if (loading) return <div>{t('common.loading', 'Loading...')}</div>;
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b">

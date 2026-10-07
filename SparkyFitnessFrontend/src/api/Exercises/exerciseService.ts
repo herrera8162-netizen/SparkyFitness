@@ -3,11 +3,12 @@ import { ExerciseCSVData } from '@/pages/Exercises/ExerciseImportCSV';
 import {
   Exercise,
   ExerciseDeletionImpact,
+  ExerciseDeleteMode,
   ExerciseOwnershipFilter,
   HistoryImportEntry,
 } from '@/types/exercises';
 import { exerciseSnapshotResponseSchema } from '@workspace/shared';
-import type { ImportFitResponse } from '@workspace/shared';
+import type { BodyFigure, ImportFitResponse } from '@workspace/shared';
 import z from 'zod';
 
 // Helper function to safely parse JSON strings that might be arrays
@@ -159,11 +160,12 @@ export const updateExercise = async (
 
 export const deleteExercise = async (
   id: string,
-  forceDelete: boolean = false
+  mode: ExerciseDeleteMode = 'delete',
+  clientDate?: string
 ): Promise<{ message?: string; status?: string } | void> => {
-  const params = new URLSearchParams();
-  if (forceDelete) {
-    params.append('forceDelete', 'true');
+  const params = new URLSearchParams({ mode });
+  if (clientDate) {
+    params.set('clientDate', clientDate);
   }
   return apiCall(`/exercises/${id}?${params.toString()}`, {
     method: 'DELETE',
@@ -197,17 +199,12 @@ export const getExerciseDeletionImpact = async (
     response.otherUserReferences ?? response.otherUserReferencesCount ?? 0;
   return {
     exerciseEntriesCount: response.exerciseEntriesCount ?? 0,
+    workoutPlansCount: response.workoutPlansCount ?? 0,
+    workoutPresetsCount: response.workoutPresetsCount ?? 0,
+    totalReferences: response.totalReferences ?? 0,
     isUsedByOthers: (otherUserRefs || 0) > 0,
     otherUserReferences: otherUserRefs || 0,
   } as ExerciseDeletionImpact;
-};
-
-export const getSuggestedExercises = async (
-  limit: number
-): Promise<{ recentExercises: Exercise[]; topExercises: Exercise[] }> => {
-  return apiCall(`/exercises/suggested?limit=${limit}`, {
-    method: 'GET',
-  });
 };
 
 export const updateExerciseEntriesSnapshot = async (
@@ -234,20 +231,6 @@ export const getExerciseById = async (id: string): Promise<Exercise> => {
   };
 };
 
-export const importExercisesFromCSV = async (
-  formData: FormData
-): Promise<{
-  created: number;
-  updated: number;
-  failed: number;
-  failedRows: unknown[];
-}> => {
-  return apiCall('/exercises/import', {
-    method: 'POST',
-    body: formData,
-    isFormData: true,
-  });
-};
 export const importExercisesFromJson = async (
   exercises: Omit<ExerciseCSVData, 'id'>[]
 ): Promise<unknown> => {
@@ -279,8 +262,19 @@ export const importFitFiles = async (
   }) as Promise<ImportFitResponse>;
 };
 
-export const getBodyMapSvg = async (): Promise<string> => {
-  const response = await fetch('/images/muscle-male.svg');
+// The files live in /public, so the URLs are not content-hashed. Bump a
+// figure's version when its drawing changes or browsers keep the old one.
+export const BODY_MAP_SVG_VERSION: Record<BodyFigure, string> = {
+  male: 'lats1',
+  female: 'f1',
+};
+
+export const getBodyMapSvg = async (
+  figure: BodyFigure = 'male'
+): Promise<string> => {
+  const response = await fetch(
+    `/images/muscle-${figure}.svg?v=${BODY_MAP_SVG_VERSION[figure]}`
+  );
   if (!response.ok) {
     throw new Error('Failed to fetch SVG');
   }

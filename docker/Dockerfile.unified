@@ -1,5 +1,5 @@
 # Stage 1: Build the React Frontend
-FROM node:24-alpine AS frontend_builder
+FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend_builder
 
 WORKDIR /app
 
@@ -57,7 +57,7 @@ COPY SparkyFitnessServer/ SparkyFitnessServer/
 COPY shared/ shared/
 
 # Deploy the server to a standalone directory (flattens node_modules, resolves workspace symlinks)
-RUN pnpm --filter=sparkyfitnessserver deploy --legacy /deploy
+RUN pnpm --filter=sparkyfitnessserver deploy /deploy
 
 
 # Stage 3: Runtime container serving both backend API and static frontend assets

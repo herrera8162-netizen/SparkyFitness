@@ -1,7 +1,10 @@
 import React from 'react';
 import { Text } from 'react-native';
 import { render, fireEvent } from '@testing-library/react-native';
-import ScreenErrorBoundary, { withErrorBoundary, SectionErrorBoundary } from '../../src/components/ScreenErrorBoundary';
+import ScreenErrorBoundary, {
+  withErrorBoundary,
+  SectionErrorBoundary,
+} from '../../src/components/ScreenErrorBoundary';
 import { addLog } from '../../src/services/LogService';
 import { queryClient } from '../../src/hooks/queryClient';
 
@@ -35,12 +38,20 @@ afterEach(() => {
   (console.error as jest.Mock).mockRestore();
 });
 
+let submittingFlag = true;
+function getSubmittingFlag(): boolean {
+  return submittingFlag;
+}
+function setSubmittingFlag(v: boolean): void {
+  submittingFlag = v;
+}
+
 describe('ScreenErrorBoundary', () => {
   it('renders children normally when no error', () => {
     const { getByText } = render(
       <ScreenErrorBoundary screenName="Test">
         <GoodChild />
-      </ScreenErrorBoundary>,
+      </ScreenErrorBoundary>
     );
     expect(getByText('All good')).toBeTruthy();
   });
@@ -49,7 +60,7 @@ describe('ScreenErrorBoundary', () => {
     const { getByText, queryByText } = render(
       <ScreenErrorBoundary screenName="Test">
         <BadChild />
-      </ScreenErrorBoundary>,
+      </ScreenErrorBoundary>
     );
     expect(getByText('Something went wrong')).toBeTruthy();
     expect(getByText(/unexpected error occurred/)).toBeTruthy();
@@ -60,12 +71,12 @@ describe('ScreenErrorBoundary', () => {
     render(
       <ScreenErrorBoundary screenName="Dashboard">
         <BadChild />
-      </ScreenErrorBoundary>,
+      </ScreenErrorBoundary>
     );
     expect(mockAddLog).toHaveBeenCalledWith(
       '[Dashboard] Screen crashed',
       'ERROR',
-      expect.arrayContaining(['Render kaboom']),
+      expect.arrayContaining(['Render kaboom'])
     );
   });
 
@@ -79,7 +90,7 @@ describe('ScreenErrorBoundary', () => {
     const { getByText } = render(
       <ScreenErrorBoundary screenName="Test">
         <ToggleBadChild />
-      </ScreenErrorBoundary>,
+      </ScreenErrorBoundary>
     );
 
     expect(getByText('Something went wrong')).toBeTruthy();
@@ -96,7 +107,7 @@ describe('ScreenErrorBoundary', () => {
     const { getByText } = render(
       <ScreenErrorBoundary screenName="Test" onGoBack={goBack}>
         <BadChild />
-      </ScreenErrorBoundary>,
+      </ScreenErrorBoundary>
     );
     fireEvent.press(getByText('Go Back'));
     expect(goBack).toHaveBeenCalled();
@@ -106,7 +117,7 @@ describe('ScreenErrorBoundary', () => {
     const { queryByText } = render(
       <ScreenErrorBoundary screenName="Test">
         <BadChild />
-      </ScreenErrorBoundary>,
+      </ScreenErrorBoundary>
     );
     expect(queryByText('Go Back')).toBeNull();
   });
@@ -114,7 +125,10 @@ describe('ScreenErrorBoundary', () => {
 
 describe('withErrorBoundary HOC', () => {
   it('forwards all props to the wrapped component', () => {
-    interface TestProps { label: string; count: number }
+    interface TestProps {
+      label: string;
+      count: number;
+    }
     function TestScreen({ label, count }: TestProps) {
       return <Text>{`${label}-${count}`}</Text>;
     }
@@ -131,10 +145,58 @@ describe('withErrorBoundary HOC', () => {
       throw new Error('crash');
     }
 
-    const SafeCrash = withErrorBoundary(CrashScreen, 'Crash', { canGoBack: true });
+    const SafeCrash = withErrorBoundary(CrashScreen, 'Crash', {
+      canGoBack: true,
+    });
     const { getByText } = render(<SafeCrash navigation={{ goBack }} />);
     fireEvent.press(getByText('Go Back'));
     expect(goBack).toHaveBeenCalled();
+  });
+
+  it('a live goBackGuard unblocks Go Back once its condition clears', () => {
+    const goBack = jest.fn();
+
+    function CrashScreen(): React.ReactElement {
+      throw new Error('crash');
+    }
+
+    const SafeCrash = withErrorBoundary(CrashScreen, 'CrashLive', {
+      canGoBack: true,
+      goBackGuard: () => !getSubmittingFlag(),
+    });
+    const { getByText } = render(<SafeCrash navigation={{ goBack }} />);
+
+    fireEvent.press(getByText('Go Back'));
+    expect(goBack).not.toHaveBeenCalled();
+
+    setSubmittingFlag(false);
+    fireEvent.press(getByText('Go Back'));
+    expect(goBack).toHaveBeenCalled();
+  });
+
+  it('a goBackGuard returning false blocks Go Back; true (or unset) allows it', () => {
+    const blockedGoBack = jest.fn();
+    const allowedGoBack = jest.fn();
+
+    function CrashScreen(): React.ReactElement {
+      throw new Error('crash');
+    }
+
+    const Blocked = withErrorBoundary(CrashScreen, 'CrashBlocked', {
+      canGoBack: true,
+      goBackGuard: () => false,
+    });
+    const blocked = render(<Blocked navigation={{ goBack: blockedGoBack }} />);
+    fireEvent.press(blocked.getByText('Go Back'));
+    expect(blockedGoBack).not.toHaveBeenCalled();
+
+    const Allowed = withErrorBoundary(CrashScreen, 'CrashAllowed', {
+      canGoBack: true,
+      goBackGuard: () => true,
+    });
+    const allowed = render(<Allowed navigation={{ goBack: allowedGoBack }} />);
+    fireEvent.press(allowed.getByText('Go Back'));
+    expect(allowedGoBack).toHaveBeenCalled();
   });
 });
 
@@ -143,7 +205,7 @@ describe('SectionErrorBoundary', () => {
     const { getByText } = render(
       <SectionErrorBoundary sectionName="TestSection">
         <GoodChild />
-      </SectionErrorBoundary>,
+      </SectionErrorBoundary>
     );
     expect(getByText('All good')).toBeTruthy();
   });
@@ -152,7 +214,7 @@ describe('SectionErrorBoundary', () => {
     const { getByText, queryByText } = render(
       <SectionErrorBoundary sectionName="TestSection">
         <BadChild />
-      </SectionErrorBoundary>,
+      </SectionErrorBoundary>
     );
     expect(getByText('This section failed to load.')).toBeTruthy();
     expect(getByText('Try Again')).toBeTruthy();
@@ -163,12 +225,12 @@ describe('SectionErrorBoundary', () => {
     render(
       <SectionErrorBoundary sectionName="Settings">
         <BadChild />
-      </SectionErrorBoundary>,
+      </SectionErrorBoundary>
     );
     expect(mockAddLog).toHaveBeenCalledWith(
       '[Settings] Section crashed',
       'ERROR',
-      expect.arrayContaining(['Render kaboom']),
+      expect.arrayContaining(['Render kaboom'])
     );
   });
 
@@ -182,7 +244,7 @@ describe('SectionErrorBoundary', () => {
     const { getByText } = render(
       <SectionErrorBoundary sectionName="TestSection">
         <ToggleBad />
-      </SectionErrorBoundary>,
+      </SectionErrorBoundary>
     );
 
     expect(getByText('This section failed to load.')).toBeTruthy();

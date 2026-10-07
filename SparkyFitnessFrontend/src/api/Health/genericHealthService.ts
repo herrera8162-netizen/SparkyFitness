@@ -1,38 +1,13 @@
 import { apiCall } from '@/api/api';
 import {
   DailyHealthMetrics,
-  HealthMetric,
-  HealthMetricSamples,
-  VitalsEntries,
   ExerciseEntryLaps,
   ExerciseEntryGpsPoints,
   ExerciseEntryHrZones,
+  HealthMetric,
+  HealthMetricSamples,
 } from '@workspace/shared';
 
-export const fetchDailyHealthMetrics = async (
-  startDate: string,
-  endDate?: string,
-  userId?: string
-): Promise<DailyHealthMetrics[]> => {
-  const params = new URLSearchParams({
-    startDate,
-    endDate: endDate || startDate,
-  });
-  if (userId) params.append('userId', userId);
-  const response = await apiCall<{ data: DailyHealthMetrics[] }>(
-    `/generic-health/metrics?${params.toString()}`,
-    {
-      method: 'GET',
-    }
-  );
-  return response?.data || [];
-};
-
-/**
- * Replaces the former fetchHeartRateEntries/fetchHrvEntries/fetchRespirationEntries/
- * fetchSpo2Entries — all four metrics now live in one table (health_metric_samples),
- * one JSONB bucket per day. See PLAN/telemetry_redesign_phase_4_frontend_docs.md.
- */
 export const fetchHealthMetricSamples = async (
   metric: HealthMetric,
   startDate: string,
@@ -54,18 +29,18 @@ export const fetchHealthMetricSamples = async (
   return response?.data || [];
 };
 
-export const fetchVitalsEntries = async (
+export const fetchDailyHealthMetrics = async (
   startDate: string,
   endDate?: string,
   userId?: string
-): Promise<VitalsEntries[]> => {
+): Promise<DailyHealthMetrics[]> => {
   const params = new URLSearchParams({
     startDate,
     endDate: endDate || startDate,
   });
   if (userId) params.append('userId', userId);
-  const response = await apiCall<{ data: VitalsEntries[] }>(
-    `/generic-health/vitals?${params.toString()}`,
+  const response = await apiCall<{ data: DailyHealthMetrics[] }>(
+    `/generic-health/metrics?${params.toString()}`,
     {
       method: 'GET',
     }

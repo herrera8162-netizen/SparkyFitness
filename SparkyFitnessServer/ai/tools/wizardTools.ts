@@ -38,7 +38,7 @@ const STEPS = {
   },
 } as const;
 
-export function buildWizardTools(_userId: string, _actingUserId?: string) {
+export function buildWizardTools(_userId: string) {
   return {
     sparky_daily_checkin_wizard: tool({
       description:

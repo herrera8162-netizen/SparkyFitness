@@ -20,6 +20,14 @@ import type {
   PresetSessionResponse,
 } from '@workspace/shared';
 
+const mockFetchWorkoutHrZones = jest.fn(
+  async (_entryId: string): Promise<unknown[]> => []
+);
+jest.mock('../../src/services/api/exerciseStatsApi', () => ({
+  ...jest.requireActual('../../src/services/api/exerciseStatsApi'),
+  fetchWorkoutHrZones: (entryId: string) => mockFetchWorkoutHrZones(entryId),
+}));
+
 jest.mock('../../src/hooks/usePreferences', () => ({
   usePreferences: jest.fn(),
 }));
@@ -31,7 +39,10 @@ jest.mock('../../src/hooks/useExerciseMutations', () => {
   const updateSession = jest.fn();
   return {
     __mockUpdateSession: updateSession,
-    useDeleteWorkout: jest.fn(() => ({ confirmAndDelete: mockConfirmAndDelete, isPending: mockDeletePending })),
+    useDeleteWorkout: jest.fn(() => ({
+      confirmAndDelete: mockConfirmAndDelete,
+      isPending: mockDeletePending,
+    })),
     useUpdateWorkout: jest.fn(() => ({
       updateSession,
       isPending: false,
@@ -40,8 +51,9 @@ jest.mock('../../src/hooks/useExerciseMutations', () => {
   };
 });
 
-const mockUpdateSession = jest.requireMock('../../src/hooks/useExerciseMutations')
-  .__mockUpdateSession as jest.Mock;
+const mockUpdateSession = jest.requireMock(
+  '../../src/hooks/useExerciseMutations'
+).__mockUpdateSession as jest.Mock;
 
 // Force the screen-owned (custom) header so the Edit/Save header actions are
 // in the tree — on the native path useScreenHeader mirrors them into
@@ -56,7 +68,9 @@ jest.mock('../../src/components/ActiveWorkoutBar', () => ({
 }));
 
 jest.mock('../../src/hooks/useExerciseImageSource', () => ({
-  useExerciseImageSource: jest.fn(() => ({ getImageSource: jest.fn(() => null) })),
+  useExerciseImageSource: jest.fn(() => ({
+    getImageSource: jest.fn(() => null),
+  })),
 }));
 
 // Stub the stats query so no fetch is attempted and the exclusion plumbing
@@ -64,8 +78,9 @@ jest.mock('../../src/hooks/useExerciseImageSource', () => ({
 jest.mock('../../src/hooks/useExerciseStats', () => ({
   useExerciseStats: jest.fn(() => ({ data: null })),
 }));
-const mockUseExerciseStats = jest.requireMock('../../src/hooks/useExerciseStats')
-  .useExerciseStats as jest.Mock;
+const mockUseExerciseStats = jest.requireMock(
+  '../../src/hooks/useExerciseStats'
+).useExerciseStats as jest.Mock;
 
 jest.mock('../../src/components/Icon', () => {
   const { View } = require('react-native');
@@ -132,12 +147,16 @@ jest.mock('@react-navigation/native', () => ({
   useFocusEffect: jest.fn(),
 }));
 
-const mockUsePreferences = usePreferences as jest.MockedFunction<typeof usePreferences>;
+const mockUsePreferences = usePreferences as jest.MockedFunction<
+  typeof usePreferences
+>;
 
 const insets = { top: 0, bottom: 0, left: 0, right: 0 };
 const frame = { x: 0, y: 0, width: 390, height: 844 };
 
-function buildSet(overrides: Partial<ExerciseEntrySetResponse> = {}): ExerciseEntrySetResponse {
+function buildSet(
+  overrides: Partial<ExerciseEntrySetResponse> = {}
+): ExerciseEntrySetResponse {
   return {
     id: 101,
     set_number: 1,
@@ -154,7 +173,7 @@ function buildSet(overrides: Partial<ExerciseEntrySetResponse> = {}): ExerciseEn
 }
 
 function buildExercise(
-  overrides: Partial<ExerciseEntryResponse> = {},
+  overrides: Partial<ExerciseEntryResponse> = {}
 ): ExerciseEntryResponse {
   return {
     id: 'entry-1',
@@ -188,7 +207,7 @@ function buildExercise(
 }
 
 function buildSession(
-  overrides: Partial<PresetSessionResponse> = {},
+  overrides: Partial<PresetSessionResponse> = {}
 ): PresetSessionResponse {
   return {
     type: 'preset',
@@ -219,9 +238,12 @@ describe('WorkoutDetailScreen', () => {
     return render(
       <QueryClientProvider client={queryClient}>
         <SafeAreaProvider initialMetrics={{ insets, frame }}>
-          <WorkoutDetailScreen navigation={mockNavigation} route={route as any} />
+          <WorkoutDetailScreen
+            navigation={mockNavigation}
+            route={route as any}
+          />
         </SafeAreaProvider>
-      </QueryClientProvider>,
+      </QueryClientProvider>
     );
   };
 
@@ -257,12 +279,144 @@ describe('WorkoutDetailScreen', () => {
     expect(screen.queryByLabelText('More options for Bench Press')).toBeNull();
   });
 
+  it("shows the workout's time in each heart-rate zone, summed over its exercises", async () => {
+    const zone = (entry: string, index: number, seconds: number) => ({
+      exercise_entry_id: entry,
+      zone_index: index,
+      zone_lower_bpm: 90 + index * 20,
+      zone_upper_bpm: null,
+      seconds_in_zone: seconds,
+    });
+    mockFetchWorkoutHrZones.mockImplementation(async (entryId) =>
+      entryId === 'entry-1'
+        ? [zone('entry-1', 1, 120), zone('entry-1', 2, 600)]
+        : [zone('entry-2', 2, 300), zone('entry-2', 3, 180)]
+    );
+    const session = buildSession({
+      exercises: [
+        buildExercise({ id: 'entry-1', avg_heart_rate: 120 }),
+        buildExercise({ id: 'entry-2', avg_heart_rate: 150 }),
+        // No heart rate, so no zones to ask for.
+        buildExercise({ id: 'entry-3', avg_heart_rate: null }),
+      ],
+    });
+    const screen = renderScreen(session);
+
+    expect(await screen.findByText('Heart Rate Zones')).toBeTruthy();
+    // Zone 2 is 600 + 300 seconds across the two exercises.
+    expect(screen.getByText(/^Zone 2/)).toBeTruthy();
+    expect(screen.getByText('15 min')).toBeTruthy();
+    expect(screen.getByText('2 min')).toBeTruthy();
+    expect(screen.getByText('3 min')).toBeTruthy();
+    expect(mockFetchWorkoutHrZones).toHaveBeenCalledTimes(2);
+    expect(mockFetchWorkoutHrZones).not.toHaveBeenCalledWith('entry-3');
+  });
+
+  it('shows no zone card when one exercise fails to load its zones', async () => {
+    mockFetchWorkoutHrZones.mockImplementation(async (entryId) => {
+      if (entryId === 'entry-2') throw new Error('network');
+      return [
+        {
+          exercise_entry_id: 'entry-1',
+          zone_index: 2,
+          zone_lower_bpm: 130,
+          zone_upper_bpm: null,
+          seconds_in_zone: 600,
+        },
+      ];
+    });
+    const session = buildSession({
+      exercises: [
+        buildExercise({ id: 'entry-1', avg_heart_rate: 120 }),
+        buildExercise({ id: 'entry-2', avg_heart_rate: 150 }),
+      ],
+    });
+    const screen = renderScreen(session);
+
+    // Both requests settled: one with zones, one failed. Showing entry-1's
+    // alone would pass a partial total off as the whole workout's.
+    await waitFor(() =>
+      expect(mockFetchWorkoutHrZones).toHaveBeenCalledTimes(2)
+    );
+    await act(async () => {});
+    expect(screen.queryByText('Heart Rate Zones')).toBeNull();
+  });
+
+  it('shows no zone card for a workout logged without a watch', async () => {
+    const screen = renderScreen(buildSession());
+
+    await waitFor(() => expect(screen.getByText('Bench Press')).toBeTruthy());
+    expect(screen.queryByText('Heart Rate Zones')).toBeNull();
+    expect(mockFetchWorkoutHrZones).not.toHaveBeenCalled();
+  });
+
+  it('summarises heart rate across the session when a watch reported it', () => {
+    const session = buildSession({
+      exercises: [
+        buildExercise({
+          id: 'entry-1',
+          duration_minutes: 1,
+          avg_heart_rate: 100,
+          max_heart_rate: 110,
+        }),
+        buildExercise({
+          id: 'entry-2',
+          duration_minutes: 60,
+          avg_heart_rate: 160,
+          max_heart_rate: 172,
+        }),
+      ],
+    });
+    const screen = renderScreen(session);
+
+    // Duration-weighted: 1 min at 100 and 60 min at 160 → ~159, not 130.
+    expect(screen.getByText('Avg HR')).toBeTruthy();
+    expect(screen.getByText('159')).toBeTruthy();
+    // Highest of the per-exercise maxima — exact, not an approximation.
+    expect(screen.getByText('Max HR')).toBeTruthy();
+    expect(screen.getByText('172')).toBeTruthy();
+  });
+
+  it('omits the heart-rate summary entirely when no exercise has one', () => {
+    const screen = renderScreen(buildSession());
+    expect(screen.queryByText('Avg HR')).toBeNull();
+    expect(screen.queryByText('Max HR')).toBeNull();
+  });
+
+  it('falls back to an unweighted avg HR when any duration is zero', () => {
+    const session = buildSession({
+      exercises: [
+        buildExercise({
+          id: 'entry-1',
+          duration_minutes: 0,
+          avg_heart_rate: 100,
+          max_heart_rate: 110,
+        }),
+        buildExercise({
+          id: 'entry-2',
+          duration_minutes: 60,
+          avg_heart_rate: 160,
+          max_heart_rate: 172,
+        }),
+      ],
+    });
+    const screen = renderScreen(session);
+
+    // Weighted would ignore the zero-duration 100 bpm and report 160.
+    expect(screen.getByText('Avg HR')).toBeTruthy();
+    expect(screen.getByText('130')).toBeTruthy();
+  });
+
   it('derives done vs upcoming set states from server completed_at timestamps', () => {
     const session = buildSession({
       exercises: [
         buildExercise({
           sets: [
-            buildSet({ id: 101, set_number: 1, completed_at: '2026-07-01T10:00:00.000Z' }),
+            buildSet({
+              id: 101,
+              set_number: 1,
+              completed_at: '2026-07-01T10:00:00.000Z',
+            }),
             buildSet({ id: 102, set_number: 2, completed_at: null }),
           ],
         }),
@@ -286,7 +440,9 @@ describe('WorkoutDetailScreen', () => {
     fireEvent.press(screen.getByLabelText('Change metric column'));
     fireEvent.press(screen.getByLabelText('Volume'));
 
-    expect(useAppPreferencesStore.getState().activeWorkoutMetricColumn).toBe('volume');
+    expect(useAppPreferencesStore.getState().activeWorkoutMetricColumn).toBe(
+      'volume'
+    );
   });
 
   it('hides the rest chip on imported (non-Sparky) workouts', () => {
@@ -307,10 +463,13 @@ describe('WorkoutDetailScreen', () => {
 
       fireEvent.press(screen.getByLabelText('Save as preset'));
 
-      expect(mockNavigation.navigate).toHaveBeenCalledWith('WorkoutPresetForm', {
-        mode: 'create-preset',
-        sourceSession: session,
-      });
+      expect(mockNavigation.navigate).toHaveBeenCalledWith(
+        'WorkoutPresetForm',
+        {
+          mode: 'create-preset',
+          sourceSession: session,
+        }
+      );
     });
 
     it('stays available for imported (non-Sparky) workouts', () => {
@@ -319,10 +478,13 @@ describe('WorkoutDetailScreen', () => {
 
       fireEvent.press(screen.getByLabelText('Save as preset'));
 
-      expect(mockNavigation.navigate).toHaveBeenCalledWith('WorkoutPresetForm', {
-        mode: 'create-preset',
-        sourceSession: session,
-      });
+      expect(mockNavigation.navigate).toHaveBeenCalledWith(
+        'WorkoutPresetForm',
+        {
+          mode: 'create-preset',
+          sourceSession: session,
+        }
+      );
     });
   });
 
@@ -338,7 +500,7 @@ describe('WorkoutDetailScreen', () => {
 
       expect(mockSheet.present).toHaveBeenCalled();
       expect(mockSheet.props?.title).toBe('Push Day');
-      expect(mockSheet.props?.items.map(i => i.label)).toEqual([
+      expect(mockSheet.props?.items.map((i) => i.label)).toEqual([
         'Edit',
         'Start workout here',
       ]);
@@ -348,7 +510,7 @@ describe('WorkoutDetailScreen', () => {
       const screen = renderScreen(buildSession());
       expandAndLongPressSet(screen);
 
-      const edit = mockSheet.props?.items.find(i => i.key === 'edit');
+      const edit = mockSheet.props?.items.find((i) => i.key === 'edit');
       expect(edit).toBeDefined();
       act(() => edit!.onPress());
 
@@ -359,7 +521,7 @@ describe('WorkoutDetailScreen', () => {
       const screen = renderScreen(buildSession());
       expandAndLongPressSet(screen);
 
-      const start = mockSheet.props?.items.find(i => i.key === 'start-here');
+      const start = mockSheet.props?.items.find((i) => i.key === 'start-here');
       expect(start).toBeDefined();
       act(() => start!.onPress());
 
@@ -374,7 +536,7 @@ describe('WorkoutDetailScreen', () => {
       const screen = renderScreen(session);
       expandAndLongPressSet(screen);
 
-      expect(mockSheet.props?.items.map(i => i.key)).toEqual(['edit']);
+      expect(mockSheet.props?.items.map((i) => i.key)).toEqual(['edit']);
     });
 
     it('does not open for imported workouts', () => {
@@ -391,7 +553,11 @@ describe('WorkoutDetailScreen', () => {
 
       // View mode: session.id reaches the stats layer so the workout being
       // viewed can't surface as its own Best.
-      expect(mockUseExerciseStats).toHaveBeenCalledWith('ex-1', 'session-1', undefined);
+      expect(mockUseExerciseStats).toHaveBeenCalledWith(
+        'ex-1',
+        'session-1',
+        undefined
+      );
       expect(mockUseExerciseStats).not.toHaveBeenCalledWith(null, undefined);
       mockUseExerciseStats.mockClear();
 
@@ -399,7 +565,11 @@ describe('WorkoutDetailScreen', () => {
 
       // Edit mode: same exclusion, so the workout being edited can't pollute
       // its own Last/Best/recent-sessions baseline.
-      expect(mockUseExerciseStats).toHaveBeenCalledWith('ex-1', 'session-1', undefined);
+      expect(mockUseExerciseStats).toHaveBeenCalledWith(
+        'ex-1',
+        'session-1',
+        undefined
+      );
     });
 
     it('renders edit cards and saves set_type/rpe edits through the payload', async () => {
@@ -411,7 +581,9 @@ describe('WorkoutDetailScreen', () => {
       // The form list renders the shared card in edit mode with its form
       // affordances.
       expect(screen.getByLabelText('Add set to Bench Press')).toBeTruthy();
-      expect(screen.getByLabelText('More options for Bench Press')).toBeTruthy();
+      expect(
+        screen.getByLabelText('More options for Bench Press')
+      ).toBeTruthy();
 
       // Tap the set number → set-type menu → Warmup.
       fireEvent.press(screen.getByLabelText('Change type for set 1'));
@@ -439,7 +611,7 @@ describe('WorkoutDetailScreen', () => {
               sets: [buildSet({ completed_at: '2026-07-01T10:00:00.000Z' })],
             }),
           ],
-        }),
+        })
       );
 
       fireEvent.press(screen.getByLabelText('Edit workout'));
@@ -461,7 +633,7 @@ describe('WorkoutDetailScreen', () => {
               sets: [buildSet({ completed_at: '2026-07-01T10:00:00.000Z' })],
             }),
           ],
-        }),
+        })
       );
 
       fireEvent.press(screen.getByLabelText('Edit workout'));
@@ -509,7 +681,9 @@ describe('WorkoutDetailScreen', () => {
     const screen = renderScreen(buildSession());
     fireEvent.press(screen.getByLabelText('Edit workout'));
     expect(screen.getByText('Delete Workout')).toBeTruthy();
-    await act(async () => { await i18n.changeLanguage('pl'); });
+    await act(async () => {
+      await i18n.changeLanguage('pl');
+    });
     expect(screen.getByText('Usuń trening')).toBeTruthy();
     expect(screen.queryByText('Delete Workout')).toBeNull();
     screen.unmount();
@@ -519,5 +693,4 @@ describe('WorkoutDetailScreen', () => {
     expect(pending.getByText('Usuwanie…')).toBeTruthy();
     expect(pending.queryByText('Deleting...')).toBeNull();
   });
-
 });

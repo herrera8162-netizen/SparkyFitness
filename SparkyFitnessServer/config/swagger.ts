@@ -3,6 +3,7 @@ import swaggerJsdoc from 'swagger-jsdoc';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
+  CHART_SCALE_MODES,
   MAX_CALORIE_SAFETY_FLOOR,
   MIN_CALORIE_SAFETY_FLOOR,
 } from '@workspace/shared';
@@ -79,6 +80,9 @@ const options = {
               enum: [
                 'weight_reps',
                 'reps_only',
+                'bodyweight_reps',
+                'weight_duration',
+                'weight_distance',
                 'duration',
                 'duration_distance',
               ],
@@ -790,6 +794,19 @@ const options = {
             name: { type: 'string' },
             description: { type: 'string' },
             is_public: { type: 'boolean' },
+            workout_format: {
+              type: 'string',
+              enum: [
+                'standard',
+                'interval',
+                'tabata',
+                'amrap',
+                'emom',
+                'for_time',
+              ],
+              default: 'standard',
+            },
+            time_cap_seconds: { type: 'integer', nullable: true },
             exercises: {
               type: 'array',
               items: {
@@ -800,6 +817,14 @@ const options = {
                   exercise_name: { type: 'string' },
                   image_url: { type: 'string', nullable: true },
                   superset_group: { type: 'integer', nullable: true },
+                  ramp_increment: {
+                    type: 'number',
+                    nullable: true,
+                    minimum: -9999.99,
+                    maximum: 9999.99,
+                    description:
+                      'Kg added to each successive working set within one session (negative ramps down; warm-up and drop sets skipped). Null = off. Separate from the between-session progression increment.',
+                  },
                   sets: {
                     type: 'array',
                     items: { $ref: '#/components/schemas/WorkoutSet' },
@@ -1064,6 +1089,13 @@ const options = {
             muscle_mass_kg: { type: 'number', nullable: true },
             bone_mass_kg: { type: 'number', nullable: true },
             body_water_percentage: { type: 'number', nullable: true },
+            bmr: {
+              type: 'number',
+              nullable: true,
+              minimum: 300,
+              maximum: 10000,
+              description: 'Basal Metabolic Rate in kcal',
+            },
             created_at: { type: 'string', format: 'date-time' },
             updated_at: { type: 'string', format: 'date-time' },
           },
@@ -1171,6 +1203,17 @@ const options = {
               description:
                 'Custom calorie safety floor in kcal/day. Used when calorie_safety_floor_mode is custom.',
             },
+            chart_scale_mode: {
+              type: 'string',
+              enum: [...CHART_SCALE_MODES],
+              description:
+                'Date-axis layout for report charts. Time spaces points by elapsed time so gaps stay visible; point spaces entries evenly.',
+            },
+            food_search_all_providers_default: {
+              type: 'boolean',
+              description:
+                'When true, food search defaults to the aggregated "All Providers" mode rather than a single provider. Held separately from default_food_data_provider_id, which is a uuid and cannot store the aggregated sentinel, so the single-provider choice survives turning this off. Ignored while fewer than two food providers are active.',
+            },
           },
         },
         OnboardingStatus: {
@@ -1227,6 +1270,7 @@ const options = {
           type: 'object',
           properties: {
             enable_email_password_login: { type: 'boolean' },
+            enable_passkey_login: { type: 'boolean' },
             is_oidc_active: { type: 'boolean' },
             is_mfa_mandatory: { type: 'boolean' },
             default_vision_ai_service_id: {

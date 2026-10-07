@@ -7,13 +7,13 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  Legend,
   ResponsiveContainer,
 } from 'recharts';
 import ZoomableChart from '@/components/ZoomableChart';
 import { ChartDataPoint } from '@/types/reports';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import { formatTimeWithPreference } from '@/utils/timeFormatters';
+import { axisLabelValue } from '@/utils/chartUtils';
 
 interface ActivityHeartRateChartProps {
   data: ChartDataPoint[];
@@ -27,7 +27,6 @@ export const ActivityHeartRateChart = ({
   data,
   xAxisMode,
   getXAxisDataKey,
-  getXAxisLabel,
   distanceUnit,
 }: ActivityHeartRateChartProps) => {
   const { t } = useTranslation();
@@ -52,30 +51,39 @@ export const ActivityHeartRateChart = ({
               minHeight={0}
               debounce={100}
             >
-              <LineChart data={data} syncId="activityReportSync">
-                <CartesianGrid strokeDasharray="3 3" />
+              <LineChart
+                data={data}
+                margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis
                   dataKey={getXAxisDataKey()}
-                  label={{
-                    value: getXAxisLabel(),
-                    position: 'insideBottom',
-                    offset: -5,
-                  }}
+                  tick={{ fontSize: 10 }}
+                  minTickGap={24}
                   tickFormatter={(value) => {
                     if (xAxisMode === 'activityDuration')
                       return `${Number(value).toFixed(0)} ${t('common.min', 'min')}`;
                     if (xAxisMode === 'distance')
-                      return `${Number(value).toFixed(2)}`;
+                      return `${Number(value).toFixed(1)} ${distanceUnit === 'km' ? 'km' : 'mi'}`;
                     if (xAxisMode === 'timeOfDay')
                       return formatTimeWithPreference(
-                        new Date(value),
+                        new Date(axisLabelValue(value)),
                         timeFormat
                       );
                     return String(value);
                   }}
                   interval="preserveStartEnd"
                 />
-                <YAxis />
+                <YAxis
+                  width={36}
+                  tick={{ fontSize: 10 }}
+                  allowDecimals={false}
+                  domain={[
+                    (min: number) =>
+                      Math.max(0, Math.floor(min / 10) * 10 - 10),
+                    (max: number) => Math.ceil(max / 10) * 10 + 10,
+                  ]}
+                />
                 <Tooltip
                   contentStyle={{
                     backgroundColor: 'hsl(var(--background))',
@@ -84,7 +92,7 @@ export const ActivityHeartRateChart = ({
                   labelFormatter={(value) => {
                     if (xAxisMode === 'timeOfDay')
                       return formatTimeWithPreference(
-                        new Date(value),
+                        new Date(axisLabelValue(value)),
                         timeFormat
                       );
                     if (xAxisMode === 'activityDuration')
@@ -94,7 +102,6 @@ export const ActivityHeartRateChart = ({
                     return String(value);
                   }}
                 />
-                <Legend />
                 <Line
                   type="monotone"
                   dataKey="heartRate"

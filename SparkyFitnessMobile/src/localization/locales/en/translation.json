@@ -1,8 +1,42 @@
 {
+  "muscles": {
+    "abdominals": "Abdominals",
+    "abductors": "Abductors",
+    "adductors": "Adductors",
+    "biceps": "Biceps",
+    "calves": "Calves",
+    "chest": "Chest",
+    "forearms": "Forearms",
+    "glutes": "Glutes",
+    "hamstrings": "Hamstrings",
+    "lats": "Lats",
+    "lower back": "Lower Back",
+    "middle back": "Middle Back",
+    "neck": "Neck",
+    "quadriceps": "Quadriceps",
+    "shoulders": "Shoulders",
+    "traps": "Traps",
+    "triceps": "Triceps"
+  },
+  "equipment": {
+    "barbell": "Barbell",
+    "dumbbell": "Dumbbell",
+    "kettlebells": "Kettlebells",
+    "cable": "Cable",
+    "machine": "Machine",
+    "bands": "Bands",
+    "body only": "Body Only",
+    "medicine ball": "Medicine Ball",
+    "exercise ball": "Exercise Ball",
+    "foam roll": "Foam Roll",
+    "e-z curl bar": "E-Z Curl Bar",
+    "other": "Other"
+  },
   "common": {
     "save": "Save",
     "saving": "Saving…",
     "back": "Back",
+    "more": "more",
     "showLess": "Show less",
     "learnMore": "Learn more",
     "next": "Next",
@@ -61,7 +95,10 @@
     "selectOption": "Select an option",
     "requestTimedOut": "Request timed out. Check your server connection.",
     "nextStep": "Next step",
-    "notNow": "Not now"
+    "notNow": "Not now",
+    "undo": "Undo",
+    "all": "All",
+    "builtIn": "Built-in"
   },
   "settings": {
     "app": "App Settings",
@@ -70,6 +107,19 @@
       "system": "System",
       "english": "English",
       "polish": "Polski",
+      "spanish": "Español",
+      "simplifiedChinese": "简体中文",
+      "traditionalChinese": "正體中文",
+      "cantoneseTraditional": "正體粵語",
+      "german": "Deutsch",
+      "french": "Français",
+      "hungarian": "Magyar",
+      "italian": "Italiano",
+      "latvian": "Latviešu",
+      "norwegianBokmal": "Norsk bokmål",
+      "dutch": "Nederlands",
+      "brazilianPortuguese": "Português (Brasil)",
+      "russian": "Русский",
       "pickerHint": "Opens language selection menu",
       "changeFailed": "Couldn't change the language",
       "managedByIOS": "Managed by iOS",
@@ -99,7 +149,9 @@
       "whatsNew": "What's New",
       "logs": "View Logs",
       "about": "About",
-      "shareReport": "Share Diagnostic Report"
+      "shareReport": "Share Diagnostic Report",
+      "watch": "Apple Watch",
+      "ai": "AI"
     },
     "theme": {
       "title": "Theme",
@@ -141,17 +193,81 @@
     "add": "Add",
     "mealTypes": "Meal Types"
   },
+  "familyDiary": {
+    "title": "Family Diaries",
+    "openFamilyDiaries": "Open family diaries",
+    "loadingMembers": "Loading family members…",
+    "loadMembersFailed": "Couldn't load family members",
+    "noMembers": "No family members",
+    "manageOnWeb": "Family diary access is managed in the web app.",
+    "canCopy": "Can copy",
+    "viewOnly": "View only",
+    "diary": "Family diary",
+    "loadingDiary": "Loading family diary…",
+    "loadDiaryFailed": "Family diary access unavailable",
+    "back": "Back",
+    "emptyForDate": "No food entries for this date",
+    "diaryForDate": "Family diary · {{date}}",
+    "openMeal": "Open {{meal}} meal",
+    "mealCalories": "{{calories}} kcal",
+    "unnamedFood": "Unnamed food",
+    "selectAll": "Select all",
+    "deselectAll": "Deselect all",
+    "viewingOnly": "Viewing only",
+    "selectFood": "Select {{food}}",
+    "deselectFood": "Deselect {{food}}",
+    "continue": "Continue",
+    "nutritionSummary": "{{calories}} kcal · P {{protein}} g · C {{carbs}} g · F {{fat}} g",
+    "selectedNutrition": "Selected: {{calories}} kcal · P {{protein}} g · C {{carbs}} g · F {{fat}} g",
+    "copyReview": "Review copy",
+    "copyFrom": "Copying from {{name}}",
+    "copyMealTitle": "{{meal}} meal",
+    "quantityForFood": "Quantity for {{food}}",
+    "quantityMustBePositive": "Enter a quantity greater than zero.",
+    "copyNutrition": "Copy nutrition",
+    "copyCalories": "{{calories}} kcal",
+    "copyProtein": "{{protein}} g protein",
+    "copyCarbs": "{{carbs}} g carbs",
+    "copyFat": "{{fat}} g fat",
+    "copyTargetDate": "Copy date",
+    "copyTargetDateHint": "Opens the date picker",
+    "copyTargetMeal": "Copy to meal",
+    "copyTargetMealRequired": "Choose a meal before copying.",
+    "copyToMyDiary": "Copy to my diary",
+    "copyInvalidSelection": "Selected foods are no longer available.",
+    "copyTargetDateLabel": "Copy date: {{date}}",
+    "copySuccess": "Copied to your diary",
+    "copyFailed": "Could not copy foods",
+    "copyFailedGuidance": "Your review is still here. Please try again.",
+    "copyPermissionRevoked": "Copy permission was removed",
+    "copyPermissionRevokedGuidance": "Refresh family diaries to see your current access.",
+    "copyStale": "Family diary changed",
+    "copyStaleGuidance": "The latest family diary is opening for review.",
+    "unnamedMember": "Family member",
+    "previousDay": "Previous day",
+    "previousDayHint": "Shows the previous day",
+    "nextDay": "Next day",
+    "nextDayHint": "Shows the next day",
+    "chooseDate": "Choose date",
+    "chooseDateHint": "Opens the date picker",
+    "goToToday": "Go to today",
+    "goToTodayHint": "Returns to today"
+  },
   "notifications": {
     "title": "Notifications",
     "channels": {
       "medicationReminders": "Medication reminders",
+      "ongoingWorkout": "Ongoing workout",
       "workoutTimer": "Workout timer",
-      "fasting": "Fasting"
+      "fasting": "Fasting",
+      "hydration": "Hydration reminders"
     },
     "actions": {
       "completeSet": "Complete Set",
       "logAsTaken": "Log as taken",
-      "skip": "Skip"
+      "logAllAsTaken": "Log all as taken",
+      "skip": "Skip",
+      "skipAll": "Skip all"
     },
     "permission": {
       "notificationsOff": "Notifications off",
@@ -174,9 +290,43 @@
     "fasting": {
       "title": "Fasting goal reached",
       "body": "You've hit your fasting goal. Great work!"
+    },
+    "fastingPreEnd": {
+      "title": "Fasting goal ending soon",
+      "body": "Your fast will reach its goal in {{minutes}} minutes."
+    },
+    "hydration": {
+      "title": "Time to hydrate 💧",
+      "body": "You haven't logged any water in a while."
     }
   },
   "activeWorkout": {
+    "failedToDeleteWorkout": "Failed to delete discarded workout session from diary.",
+    "progression": {
+      "toggleSettings": "Toggle progression settings",
+      "title": "Progression",
+      "manualOff": "Manual (Off)",
+      "fixedSummary": "Fixed Target · +{{value}} {{unit}}",
+      "stepLoadSummary": "Step-Load · {{reps}} reps · +{{value}} reps",
+      "repGoalSummary": "Rep Goal · {{reps}} reps · +{{value}} {{unit}}",
+      "overloadMode": "Overload Mode",
+      "modeRepGoal": "Rep Goal",
+      "modeFixed": "Fixed",
+      "modeStepLoad": "Step-Load",
+      "modeOff": "Off",
+      "targetRepsPerSet": "Target Reps / Set",
+      "targetRepsTotal": "Target Reps (Total)",
+      "incrementReps": "Increment (Reps)",
+      "incrementWeight": "Increment ({{unit}})",
+      "equipmentBrand": "Equipment / Machine Brand",
+      "equipmentBrandPlaceholder": "e.g. Hammer Strength, Cable Stack",
+      "rampTitle": "Add per set (this workout)",
+      "rampUp": "Up",
+      "rampDown": "Down",
+      "rampAmountLabel": "Weight added per set ({{unit}})",
+      "rampPlaceholder": "Off ({{unit}})",
+      "rampHint": "Each working set after the first pre-fills this much heavier (or lighter) in the same workout. Warm-up and drop sets are skipped."
+    },
     "liveActivity": {
       "rest": "Rest",
       "paused": "Paused",
@@ -224,6 +374,8 @@
       "endWorkout": "End workout",
       "exerciseProgress_one": "{{completed}} / {{count}} exercise",
       "exerciseProgress_other": "{{completed}} / {{count}} exercises",
+      "gymLocation": "Gym / Location",
+      "gymLocationSet": "Gym: {{location}}",
       "renameWorkout": "Rename workout",
       "reorderExercises": "Reorder exercises",
       "menu": "Workout menu",
@@ -280,6 +432,7 @@
     "setRow": {
       "changeType": "Change type for set {{setNumber}}",
       "delete": "Delete set {{setNumber}}",
+      "distance": "Distance",
       "duration": "Duration",
       "log": "Log set {{setNumber}}",
       "reps": "Reps",
@@ -287,7 +440,10 @@
       "incomplete": "Un-complete set {{setNumber}}",
       "weight": "Weight",
       "rpe": "RPE",
-      "fillFromPrevious": "Fill set {{setNumber}} from previous"
+      "rir": "RIR",
+      "fillFromPrevious": "Fill set {{setNumber}} from previous",
+      "startTimer": "Start stopwatch",
+      "stopTimer": "Stop stopwatch"
     },
     "columns": {
       "set": "Set",
@@ -297,6 +453,7 @@
     "exercise": {
       "expand": "Expand {{name}}",
       "viewDetails": "View {{name}} details",
+      "viewImages": "View {{name}} images",
       "collapse": "Collapse {{name}}",
       "moreOptions": "More options for {{name}}",
       "notePlaceholder": "Add a note for this exercise…",
@@ -308,7 +465,10 @@
       "notesForSet": "Notes for set {{number}}",
       "addSet": "Add set to {{name}}",
       "caloriesUnit": "kcal",
-      "addSetLabel": "Add set"
+      "addSetLabel": "Add set",
+      "heartRateFor": "Average heart rate for {{name}}",
+      "liveHeartRateFor": "Current heart rate for {{name}}",
+      "heartRateUnit": "bpm"
     },
     "nextSet": "Next Set"
   },
@@ -324,6 +484,8 @@
     "logWorkout": "Log Workout",
     "pastSets": "Past sets & reps",
     "wellness": "Wellness",
+    "symptoms": "Symptoms",
+    "progressPhotos": "Progress Photos",
     "askSparky": "Ask Sparky",
     "syncHealth": "Sync Health Data",
     "logPregnancyEntry": "Log Pregnancy Entry",
@@ -341,6 +503,7 @@
     "barcodes": "Barcodes",
     "editExercise": "Edit Exercise",
     "newExercise": "New Exercise",
+    "duplicateExercise": "Duplicate Exercise",
     "editPreset": "Edit Preset",
     "newPreset": "New Preset",
     "scanFood": "Scan Food",
@@ -381,6 +544,10 @@
     "pregnancySetup": "Pregnancy Setup",
     "medications": "Medications",
     "medication": "Medication",
+    "symptomLog": "Log Symptom",
+    "symptomHistory": "Symptom History",
+    "manageSymptoms": "Manage Symptoms",
+    "symptomDefinition": "Symptom Details",
     "library": {
       "noServerConfigured": "No server configured",
       "configureServer": "Configure your server connection in Settings to view your library.",
@@ -398,15 +565,30 @@
       "browse": "Browse",
       "foods": "Foods",
       "meals": "Meals",
+      "mealPlans": "Meal plans",
+      "mealPlansSubtitle": "Repeat meals on selected days",
       "exercises": "Exercises",
       "workoutPresets": "Workout presets",
       "medications": "Medications",
+      "waterContainers": "Water containers",
+      "waterContainersSubtitle": "Bottles, glasses, and drinks linked to foods",
       "recentlyLogged": "Recently Logged",
       "loadingRecentItems": "Loading recent items...",
       "failedRecentItems": "Failed to load recent items.",
       "noRecentItems": "No recent items yet",
-      "recentItemsHint": "Foods, meals, and exercises you log will appear here for quick access."
-    }
+      "recentItemsHint": "Foods, meals, and exercises you log will appear here for quick access.",
+      "exerciseStatistics": "Exercise statistics",
+      "exerciseStatisticsSubtitle": "Sets per muscle and a body heat map"
+    },
+    "sleep": "Sleep",
+    "healthTrendsSettings": "Health Trends",
+    "progressPhotos": "Progress Photos",
+    "progressPhotoCompare": "Compare",
+    "progressPhotoTimelapse": "Time-lapse",
+    "exerciseStatistics": "Exercise Statistics",
+    "cardioSession": "Cardio Session",
+    "watchSettings": "Apple Watch",
+    "aiSettings": "AI"
   },
   "healthMetrics": {
     "steps": "Steps",
@@ -438,6 +620,7 @@
     "power": "Power",
     "elevationGained": "Elevation Gained",
     "boneMass": "Bone Mass",
+    "bodyWaterMass": "Body Water Mass",
     "cervicalMucus": "Cervical Mucus",
     "cyclingPedalingCadence": "Cycling Pedaling Cadence",
     "intermenstrualBleeding": "Intermenstrual Bleeding",
@@ -618,7 +801,6 @@
     "hydration": "Hydration",
     "ofVolume": "of {{value}} {{unit}}",
     "perBottle": "{{value}} {{unit}} per bottle",
-    "configureWaterContainer": "Configure water container on server to\nenable quick add/remove buttons",
     "exercise": "Exercise",
     "minutes": "Minutes",
     "calories": "Calories",
@@ -626,7 +808,14 @@
     "removeWater": "Remove water",
     "addWater": "Add water",
     "selectContainer": "Select {{container}}",
-    "perContainer": "{{value}} {{unit}} per container"
+    "perContainer": "{{value}} {{unit}} per container",
+    "waterFromFood": "Includes {{value}} {{unit}} from food",
+    "chooseWaterContainer": "Choose a water container to enable quick add/remove",
+    "quickAddDrinks": "Quick add",
+    "logDrink": "Log {{drink}}",
+    "perPress": "{{value}} {{unit}}",
+    "logDrinkFailed": "Could not log that drink",
+    "exerciseStatistics": "Statistics"
   },
   "syncScreen": {
     "healthConnectSettings": "Health Connect settings",
@@ -694,6 +883,14 @@
       "subtitle": "Export anonymized health data for bug reports",
       "privacy": "Reads the last 4 hours of data from Health Connect for troubleshooting.\nValues are rounded for privacy. Nothing is sent automatically.",
       "error": "Failed to generate health data report: {{error}}"
+    },
+    "syncChoice": {
+      "title": "Sync {{start}} – {{end}}",
+      "titleSingleDay": "Sync {{day}}",
+      "quick": "Quick Sync",
+      "quickDescription": "Sends all your health data. Workouts already synced keep the map and heart rate they have.",
+      "all": "All Sync",
+      "allDescription": "The same, and also re-reads the map and heart rate for workouts already synced. Slower."
     }
   },
   "syncFrequency": {
@@ -729,13 +926,15 @@
     "modeLabel": "Calorie Mode",
     "adjustmentMode": "Adjustment Mode",
     "modeDescription": "Controls how your daily calorie goal adjusts based on activity.",
+    "deviceProjectionDescription": "Current-day Health Connect total calories are projected to midnight; completed days use the recorded total. Goal Mode is applied to that TDEE, with BMR + active calories as a fallback.",
+    "deviceProjectionFallback": "Only used for the BMR + active calories fallback when a device total is unavailable.",
     "exerciseCaloriesApplied": "Exercise Calories Applied",
     "exerciseCaloriesDescription": "How much of your exercise calories are added back to your daily goal.",
     "activityLevel": "Activity Level",
     "activityBaseline": "Used as a baseline for TDEE.",
-    "adaptiveFallback": "Acts as a fallback until you have enough tracking data.",
-    "allowNegative": "Allow Negative Adjustment",
-    "negativeDescription": "Lower your daily goal when you burn less than expected.",
+    "adaptiveFallback": "The fallback estimate until you have enough tracking data — and it keeps setting the plausibility limits afterwards. Your measured TDEE is capped to within ±500 kcal of BMR × this multiplier.",
+    "allowNegative": "Allow Lower Fallback Projection",
+    "negativeDescription": "When a device total is unavailable, let the BMR + active calories fallback lower your target.",
     "includeResting": "Include Resting Calories",
     "includeRestingDescription": "Include your baseline energy (BMR) in net calculations.",
     "howThisWorks": "How this works",
@@ -765,20 +964,38 @@
       "activityWithBmr": "Activity + BMR",
       "activityOnly": "Activity only (exercise + steps)",
       "eatenBurned": "Eaten − Burned",
+      "projectedTotal": "Health Connect total calories (BMR + active calories fallback)",
       "dynamic": "Goal − Net Energy",
       "percentageWithBmr": "Goal − Eaten + BMR + {{percentage}}% of Exercise",
       "percentage": "Goal − Eaten + {{percentage}}% of Exercise",
-      "tdee": "Goal − Eaten + (Projection − TDEE)",
+      "tdee": "Projected TDEE × Goal Mode − Eaten",
       "adaptive": "Goal − Eaten",
       "fixed": "Goal − Eaten"
     },
     "notes": {
       "dynamic": "Goal grows as you move",
-      "tdee": "Projection converges at midnight",
+      "tdee": "The projection converges with the device total at midnight",
       "adaptive": "Goal = Adaptive TDEE",
       "fixed": "Activity does not change your budget"
     },
     "externalFormula": "formula",
+    "goalMode": {
+      "title": "Goal Mode",
+      "description": "Adjusts your calorie target for maintenance, a deficit, or a surplus.",
+      "deviceProjectionDescription": "This percentage is applied directly to the projected device TDEE.",
+      "maintain": "Maintain (0%)",
+      "recomp": "Body Recomposition (-10%)",
+      "cut": "Cut (-15%)",
+      "highCut": "High Cut (-20%)",
+      "leanBulk": "Lean Bulk (+10%)",
+      "bulk": "Bulk (+20%)",
+      "manual": "Manual (Custom %)",
+      "calculationMethod": "Calculation Method",
+      "methodAdaptive": "Adaptive",
+      "methodManual": "Manual",
+      "customPercentage": "Custom percentage",
+      "customPercentageDescription": "Positive adds calories; negative creates a deficit. Limited to ±40%."
+    },
     "safetyFloor": {
       "title": "Safety Floor",
       "standard": "Standard",
@@ -788,15 +1005,25 @@
       "standardDescription": "Uses the higher of your estimated RMR and the clinical minimum.",
       "customDescription": "Replaces the standard floor with your chosen minimum. Health recommendations remain visible.",
       "disabledDescription": "Stops automatic target clamping. Health warnings remain visible."
-    }
+    },
+    "useExternalBmr": "Use measured BMR from check-ins and synced devices",
+    "useExternalBmrHint": "Off by default — your chosen formula is always used until you turn this on. When enabled, a BMR recorded on a check-in or synced from a smart scale or health provider replaces the formula for that day, provided it is physiologically plausible for you.",
+    "useExternalBmrIosNote": "Apple Health’s Resting Energy already includes light daily activity, so consider setting Activity Level to None (×1.0) to avoid counting it twice."
   },
   "dashboardSettings": {
     "updateFailed": "Failed to update setting.",
     "noCustomNutrients": "No custom nutrients",
     "customNutrientsDescription": "Custom nutrients are created in the SparkyFitness web app. Once you add some, they will appear here so you can choose which show on your Dashboard.",
     "title": "Dashboard Settings",
+    "description": "Drag a card by its handle to reorder your Dashboard. Toggle off to hide cards you do not use.",
+    "calorieRing": "Calorie Summary",
+    "calorieRingSubtitle": "Show daily calorie balance and progress ring",
     "askSparky": "Ask Sparky",
     "askSparkySubtitle": "Show the Ask Sparky chat launcher on the Dashboard",
+    "macros": "Nutrients",
+    "macrosSubtitle": "Show macronutrient goals and custom nutrient totals",
+    "exercise": "Exercise Progress",
+    "exerciseSubtitle": "Show exercise minutes and calorie burn targets",
     "hydration": "Hydration",
     "hydrationSubtitle": "Show the hydration card on the Dashboard",
     "fasting": "Fasting",
@@ -805,7 +1032,22 @@
     "cyclePregnancySubtitle": "Show the wellness card on the Dashboard",
     "medications": "Medications",
     "medicationsSubtitle": "Show the medications card on the Dashboard",
-    "customNutrientDisplay": "Custom Nutrient Display"
+    "symptoms": "Symptoms",
+    "symptomsSubtitle": "Show symptom status, active episodes, and quick logging",
+    "healthTrends": "Health Trends",
+    "healthTrendsSubtitle": "Choose which graphs show on the Dashboard and their order",
+    "progressPhotos": "Progress Photos",
+    "progressPhotosSubtitle": "Show the progress photos card on the Dashboard",
+    "customNutrientDisplay": "Custom Nutrient Display",
+    "caffeine": "Caffeine",
+    "caffeineSubtitle": "Show the active caffeine card on the Dashboard",
+    "reorder": "Reorder {{name}}",
+    "reorderHint": "Reorder this card on your Dashboard",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "stateShown": "Shown",
+    "stateHidden": "Hidden",
+    "configureCard": "Configure {{name}}"
   },
   "diarySettings": {
     "updateFailed": "Failed to update setting.",
@@ -852,10 +1094,22 @@
     "repeatRemindersSubtitle": "Repeat each reminder every 10 minutes, up to 3 times, until the dose is logged.",
     "hideMedicationNames": "Hide Medication Names",
     "hideMedicationNamesSubtitle": "Show a generic reminder instead of the medication name and dose.",
+    "consolidateReminders": "Consolidate Reminders",
+    "consolidateRemindersSubtitle": "Group medications scheduled for the same time into a single notification.",
+    "hydration": "Hydration",
+    "waterReminders": "Water Reminders",
+    "waterRemindersSubtitle": "Remind you to drink when you haven't logged water in a while.",
+    "waterReminderInterval": "Remind After",
+    "waterReminderIntervalOption": "{{hours}}h",
+    "waterReminderStart": "Start Time",
+    "waterReminderStartAccessibility": "Start time, {{time}}",
+    "waterReminderEnd": "End Time",
+    "waterReminderEndAccessibility": "End time, {{time}}",
+    "waterReminderInvalidWindow": "End time must be after start time.",
     "enableNotifications": "Enable Notifications",
     "openSettings": "Open Settings",
     "permissionTitle": "Grant permissions",
-    "permissionBody": "SparkyFitness alerts (rest timers, fasting goals, medication reminders) won't fire.",
+    "permissionBody": "SparkyFitness alerts (rest timers, fasting goals, medication and hydration reminders) won't fire.",
     "permissionWarningAccessibility": "{{title}}. {{body}} {{action}}."
   },
   "workoutSettings": {
@@ -868,7 +1122,17 @@
     "keepAwake": "Keep screen awake",
     "keepAwakeSubtitle": "Prevent the screen from sleeping while a workout is active.",
     "restSoundAccessibility": "Rest timer sound",
-    "keepAwakeAccessibility": "Keep screen awake"
+    "restSoundSilent": "Play through silent mode",
+    "restSoundSilentSubtitleIos": "Play the rest chime even when your phone is on silent, including with the app in the background or the screen locked.",
+    "restSoundSilentSubtitle": "Play the rest chime even when your phone is on silent or vibrate.",
+    "restSoundSilentAccessibility": "Play rest timer sound through silent mode",
+    "keepAwakeAccessibility": "Keep screen awake",
+    "adaptiveCoaching": "Adaptive suggestions",
+    "adaptiveCoachingSubtitle": "Adapts upcoming sets and exercise suggestions based on your logged session feedback.",
+    "adaptiveCoachingAccessibility": "Adaptive suggestions",
+    "duckMusic": "Lower music during cues",
+    "duckMusicSubtitle": "Briefly turn down music from other apps while a workout beep or spoken cue plays.",
+    "duckMusicAccessibility": "Lower music during cues"
   },
   "restPeriod": {
     "title": "Rest period",
@@ -1105,6 +1369,11 @@
     },
     "notificationScheduledDose": "You have a scheduled dose",
     "notificationScheduledDoseNamed": "Scheduled dose: {{name}}{{dose}}",
+    "notificationScheduledDoses_one": "You have {{count}} scheduled dose",
+    "notificationScheduledDoses_other": "You have {{count}} scheduled doses",
+    "notificationScheduledDosesNamed": "Scheduled doses: {{names}}",
+    "notificationScheduledDosesOverflow_one": "Scheduled doses: {{names}}, and {{count}} more",
+    "notificationScheduledDosesOverflow_other": "Scheduled doses: {{names}}, and {{count}} more",
     "inactiveA11y_one": "Inactive medication ({{count}})",
     "inactiveA11y_other": "Inactive medications ({{count}})",
     "inactiveCount_one": "Inactive ({{count}})",
@@ -1161,6 +1430,15 @@
       "description": "Manually trigger the background sync process.",
       "trigger": "Trigger Sync",
       "checkPermission": "Check BG Permission"
+    },
+    "watch": {
+      "title": "Apple Watch",
+      "description": "Status of the watch companion link. Check-ins captured on the watch are queued and delivered even when \"reachable\" is off, so a gray dot here does not mean data is lost.",
+      "paired": "Watch paired",
+      "notPaired": "No watch paired",
+      "unsupported": "Not supported on this platform",
+      "reachable": "Watch app reachable now",
+      "notReachable": "Watch app not in foreground"
     },
     "auth": {
       "title": "Auth",
@@ -1229,7 +1507,14 @@
     }
   },
   "workout": {
+    "addDropSets": "Add {{sets}} drop sets (-{{percent}}%)",
     "couldNotSave": "Could not save your workout",
+    "dismissLocation": "Dismiss location",
+    "gymLocation": "Gym / Location",
+    "gymLocationDesc": "Tag this workout with your current gym or training facility",
+    "locationPlaceholder": "e.g. Planet Fitness - Downtown",
+    "metricRir": "RIR",
+    "recentLocations": "Recent Locations",
     "sets": "sets",
     "editActivity": "Edit activity",
     "durationTitle": "Workout duration",
@@ -1332,6 +1617,8 @@
     "commaSeparated": "Comma-separated",
     "commaSeparatedEquipment": "Comma-separated (e.g. dumbbell, bench)",
     "commaSeparatedMuscles": "Comma-separated (e.g. quadriceps, glutes)",
+    "tagPlaceholder": "Type to add or search...",
+    "addCustomTag": "Add \"{{tag}}\"",
     "oneStepPerLine": "One step per line",
     "optionalExerciseNotes": "Optional notes about the exercise",
     "select": "Select {{label}}",
@@ -1432,6 +1719,7 @@
     "trackingType": "Tracking Type",
     "modalityWeightReps": "Weight & Reps",
     "modalityReps": "Reps",
+    "modalityBodyweight": "Bodyweight (+/− weight)",
     "modalityDuration": "Duration",
     "modalityDurationDistance": "Duration & Distance",
     "levelBeginner": "Beginner",
@@ -1511,6 +1799,8 @@
     "workoutPresetCount_other": "{{formattedCount}} exercises",
     "metricVolumeShort": "Vol",
     "metricE1rmShort": "1RM",
+    "bodyweightBanner": "Bodyweight exercise: counts your body weight ({{bodyWeight}} {{unit}}) plus the weight you enter. Use a minus sign for assistance.",
+    "bodyweightBannerNoWeight": "Bodyweight exercise: counts your body weight plus the weight you enter. Use a minus sign for assistance. Log a body weight so volume can be calculated.",
     "metricTenrmShort": "10RM",
     "kg": "kg",
     "lbs": "lbs",
@@ -1527,7 +1817,9 @@
     "setOf_one": "Set {{number}} of {{count}}",
     "setOf_other": "Set {{number}} of {{count}}",
     "repCount_one": "{{formattedCount}} rep",
-    "repCount_other": "{{formattedCount}} reps"
+    "repCount_other": "{{formattedCount}} reps",
+    "modalityWeightDistance": "Weight & Distance (carries)",
+    "modalityWeightDuration": "Weight & Duration (loaded holds)"
   },
   "cycleCard": {
     "mode": {
@@ -1587,10 +1879,17 @@
   },
   "fastingCard": {
     "title": "Fasting",
+    "auto": "Auto",
+    "autoFromMeal": "Auto · {{meal}}",
+    "eatingWindow": "Eating Window",
+    "eatingWindowOpen": "Eating Window",
+    "eatingWindowMeal": "Window · {{meal}}",
+    "eatingWindowProgress": "{{remaining}} remaining in eating window",
     "openDetails": "Open fasting details",
     "viewHistory": "View fasting history",
     "history": "History",
     "viewDetails": "View details",
+    "details": "Details",
     "goalProgress": "{{remaining}} to your {{goal}}h goal",
     "goalReached": "Goal reached · {{goal}}h",
     "elapsed": "{{elapsed}} elapsed",
@@ -1754,7 +2053,9 @@
       "tsp": "tsp",
       "piece": "piece"
     },
-    "unitPickerLabel": "Unit, {{unit}}"
+    "unitPickerLabel": "Unit, {{unit}}",
+    "notes": "Notes (optional)",
+    "notesPlaceholder": "e.g. the recipe, or how you prepare this"
   },
   "nutrition": {
     "protein": "protein",
@@ -1781,7 +2082,15 @@
   "exerciseSummary": {
     "tapToAdd": "Tap to add exercise",
     "addExercise": "Add exercise",
-    "title": "Exercise"
+    "title": "Exercise",
+    "planUpNext": "Plan Up Next",
+    "sessionNumber": "Session {{current}} of {{total}}",
+    "sessionNumberIndex": "Session {{current}}",
+    "startWorkout": "Start",
+    "switchSession": "Switch",
+    "suggestedPlanSession": "Suggested",
+    "scheduledToday": "Scheduled Today",
+    "selectSession": "Select Session"
   },
   "foodRow": {
     "unknownFood": "Unknown food",
@@ -1890,11 +2199,18 @@
       "waist": "Waist",
       "hips": "Hips",
       "steps": "Steps",
+      "muscleMass": "Muscle mass",
+      "boneMass": "Bone mass",
+      "bodyWaterPercentage": "Body water %",
+      "bmr": "BMR",
       "heightWithUnit": "Height ({{unit}})",
       "neckWithUnit": "Neck ({{unit}})",
       "waistWithUnit": "Waist ({{unit}})",
       "hipsWithUnit": "Hips ({{unit}})",
       "weightWithUnit": "Weight ({{unit}})",
+      "muscleMassWithUnit": "Muscle mass ({{unit}})",
+      "boneMassWithUnit": "Bone mass ({{unit}})",
+      "bmrWithUnit": "BMR (kcal)",
       "weightStones": "Weight in stones",
       "weightPounds": "Weight in pounds",
       "heightFeet": "Height in feet",
@@ -1904,13 +2220,16 @@
       "invalid": "Invalid {{label}}",
       "enterNumber": "Enter a number.",
       "wholeNumber": "{{label}} must be a whole number.",
+      "min": "Must be {{min}} or greater.",
       "max": "Must be {{max}} or less.",
       "invalidWeight": "Invalid weight",
       "stonesLbsNumber": "Enter a number for stones and lbs.",
       "nonNegative": "Values must be 0 or greater.",
       "invalidHeight": "Invalid height",
       "feetInchesNumber": "Enter a number for feet and inches.",
-      "bodyFatRange": "Body fat % must be between 0 and 100."
+      "bodyFatRange": "Body fat % must be between 0 and 100.",
+      "bodyWaterRange": "Body water % must be between 0 and 100.",
+      "bmrRange": "BMR must be between 600 and 6000 kcal."
     },
     "nothingToSave": "Nothing to save",
     "enterValue": "Enter or clear at least one value.",
@@ -1918,10 +2237,25 @@
     "partialSave": "Some changes may not have been saved.",
     "date": "Date",
     "willBeCleared": "Will be cleared",
+    "useLast": "Use last",
+    "useLastFor": "Use last {{label}} value",
+    "previousUnavailable": "Couldn't load previous values. Your server may need updating.",
+    "bodyFat": {
+      "calculate": "Calculate",
+      "useRecent": "Use recent",
+      "calculateFailedTitle": "Could not calculate body fat",
+      "calculatedTitle": "Body fat calculated",
+      "calculatedMessage": "Review the value, then save to keep it.",
+      "profileRequired": "Set your gender in your profile to use this calculation.",
+      "bmiRequiredFields": "Weight, height, age, and gender are required for BMI Method.",
+      "navyRequiredFields": "Gender, height, waist, neck, and (if female) hips measurements are required for U.S. Navy Method.",
+      "uncomputable": "These measurements do not produce a valid body fat percentage. Check the waist, neck, height, and hips values."
+    },
     "custom": {
       "title": "Custom Measurements",
       "loadError": "Couldn't load custom measurements.",
       "deleteEntry": "Delete {{label}} entry",
+      "lastValue": "Last: {{value}}",
       "moreCategories": "More categories ▾",
       "hideCategories": "Hide categories ▴",
       "hideCategoriesToggle": "Hide categories ▴",
@@ -1944,6 +2278,8 @@
     "edit": "Edit measurements"
   },
   "foodScan": {
+    "labelReadOnDevice": "Label read on this iPhone",
+    "labelReadByServer": "Label read by the server AI",
     "segment": {
       "barcode": "Barcode",
       "label": "Label",
@@ -1956,7 +2292,8 @@
       "analyzeLabel": "Failed to analyze nutrition label. Please try again.",
       "loadPhoto": "Failed to load photo.",
       "lookupBarcode": "Couldn't look up this barcode. Please try again.",
-      "timeout": "Request timed out. Check your server connection."
+      "timeout": "Request timed out. Check your server connection.",
+      "retryOnDevice": "This iPhone could not read the label."
     },
     "permission": {
       "camera": "We need your permission to show the camera",
@@ -1999,7 +2336,9 @@
       "retakePhoto": "Retake photo",
       "takeLabelPhoto": "Take nutrition label photo",
       "takeMealPhoto": "Take meal photo"
-    }
+    },
+    "retryWithServer": "Read again with the server AI",
+    "retryOnDevice": "Read again on this iPhone"
   },
   "cycleToday": {
     "menstrualFlow": "Menstrual Flow",
@@ -2221,6 +2560,9 @@
     "vitaminC": "Vitamin C",
     "calcium": "Calcium",
     "iron": "Iron",
+    "caffeine": "Caffeine",
+    "waterContent": "Water Content",
+    "alcohol": "Alcohol",
     "glycemicIndex": "Glycemic Index",
     "totalCarbs": "Total Carbs",
     "netCarbs": "Net Carbs",
@@ -2240,6 +2582,11 @@
     "remaining": "remaining",
     "over": "over",
     "title": "Summary",
+    "projectedTdee": "Projected TDEE: {{value}} kcal",
+    "goalModeTarget": "Goal Mode target: {{value}} kcal",
+    "healthConnectProjectionSource": "Health Connect total calories",
+    "fallbackProjectionSource": "BMR + active calories fallback",
+    "legacyProjectionSource": "Device projection",
     "collapse": "Collapse this section",
     "expand": "Expand this section"
   },
@@ -2305,7 +2652,9 @@
     "addFood": "Add Food",
     "saved": "Saved",
     "equivalentUnitsUpdated_one": "Saved · {{formattedCount}} equivalent unit updated",
-    "equivalentUnitsUpdated_other": "Saved · {{formattedCount}} equivalent units updated"
+    "equivalentUnitsUpdated_other": "Saved · {{formattedCount}} equivalent units updated",
+    "notes": "Notes",
+    "notesPlaceholder": "e.g. White rice, double chicken, no beans (supports markdown)"
   },
   "exerciseHistory": {
     "noSetData": "No set data",
@@ -2440,6 +2789,7 @@
     "apiKeyUnsupported": "If you connect via an API Key, passkeys cannot be used.",
     "noneRegistered": "No Passkeys Registered",
     "noneHint": "Add this device or biometric credentials to sign in quickly next time.",
+    "disabledHint": "Passkey sign-in is turned off on this server.",
     "registeredOn": "Registered {{date}}",
     "deleteAccessibility": "Delete passkey",
     "add": "Add Passkey",
@@ -2646,6 +2996,32 @@
   },
   "fastingDetail": {
     "title": "Fasting",
+    "tabs": {
+      "fasting": "Fasting",
+      "history": "History"
+    },
+    "startedAt": "Started {{time}}",
+    "targetAt": "Target {{time}}",
+    "closesAt": "Closes {{time}}",
+    "eatingBands": {
+      "open": {
+        "name": "Window Open",
+        "shortName": "Open"
+      },
+      "fuel": {
+        "name": "Optimal Fuel",
+        "shortName": "Fuel"
+      },
+      "sustain": {
+        "name": "Mid Window",
+        "shortName": "Sustain"
+      },
+      "closing": {
+        "name": "Window Closing",
+        "shortName": "Closing"
+      }
+    },
+    "metabolicState": "Metabolic State",
     "metabolicStages": "Metabolic Stages",
     "now": "now",
     "remaining": "{{percent}}% · {{time}} left",
@@ -2661,6 +3037,12 @@
     "noActiveFast": "No active fast",
     "startDescription": "Start a fast to track your fasting window and metabolic stages.",
     "startFast": "Start Fast",
+    "eatingWindowOpen": "Eating Window Open",
+    "remainingInEatingWindow": "Remaining in your eating window",
+    "eatingWindowHint": "Fasting will automatically resume after your eating window closes.",
+    "startFastEarly": "Start Fasting Now",
+    "eatingWindowOpened": "Window opened",
+    "eatingWindowCloses": "Window closes",
     "range": "{{start}}–{{end}} {{unit}}",
     "rangeOpen": "{{start}} {{unit}}+",
     "stages": {
@@ -2687,6 +3069,9 @@
     }
   },
   "exerciseDetail": {
+    "duplicate": "Duplicate exercise",
+    "viewImages": "View images full screen",
+    "duplicateName": "{{name}} (copy)",
     "sharedPublicly": "Exercise shared publicly",
     "madePrivate": "Exercise made private",
     "makePublicTitle": "Make public?",
@@ -2720,7 +3105,8 @@
     "deleting": "Deleting...",
     "deleteExercise": "Delete Exercise",
     "makePrivate": "Make private",
-    "shareWithPublic": "Share with public"
+    "shareWithPublic": "Share with public",
+    "deleteSheetTitle": "Delete exercise"
   },
   "mealTypeSettings": {
     "reorder": "Reorder {{name}}",
@@ -2744,6 +3130,115 @@
     "empty": "No meal types found",
     "defaultTime": "Default time for {{name}}{{time}}",
     "notSet": "Not set"
+  },
+  "mealPlans": {
+    "title": "Meal plans",
+    "create": "Create meal plan",
+    "createTitle": "Create meal plan",
+    "editTitle": "Edit meal plan",
+    "active": "Active",
+    "inactive": "Inactive",
+    "dateRange": "{{start}} – {{end}}",
+    "starting": "Starting {{date}}",
+    "moreAssignments_one": "+{{count}} more",
+    "moreAssignments_other": "+{{count}} more",
+    "duplicateNamed": "Duplicate {{name}}",
+    "deleteNamed": "Delete {{name}}",
+    "duplicateSuccess": "Meal plan duplicated",
+    "duplicateInactive": "The copy is inactive so you can review it first.",
+    "duplicateFailed": "Failed to duplicate meal plan",
+    "deleteTitle": "Delete meal plan",
+    "deleteMessage": "Delete {{name}}? Future diary entries generated by this plan will be removed.",
+    "deleteFailed": "Failed to delete meal plan",
+    "deleteSuccess": "Meal plan deleted",
+    "noServer": "No server configured",
+    "noServerSubtitle": "Configure your server connection to manage meal plans.",
+    "goToSettings": "Go to Settings",
+    "loading": "Loading meal plans...",
+    "loadFailed": "Failed to load meal plans",
+    "loadFailedSubtitle": "Check your connection and try again.",
+    "futureNotice": "Active plans add entries to future diary days. Editing or deleting a plan updates future generated entries.",
+    "emptyTitle": "No meal plans yet",
+    "emptySubtitle": "Schedule reusable meals on selected weekdays for easier meal prep.",
+    "assignmentUnavailable": "A reusable meal and meal type are required",
+    "loadingPlanningOptions": "Loading planning options...",
+    "planningOptionsFailed": "Failed to load planning options",
+    "planningOptionsFailedSubtitle": "Check your connection and try again.",
+    "planningSetupNeeded": "Meal planning setup needed",
+    "noReusableMeals": "Create a reusable meal before creating a plan.",
+    "noMealTypes": "Add a visible meal type before creating a plan.",
+    "updateSuccess": "Meal plan updated",
+    "createSuccess": "Meal plan created",
+    "updateFailed": "Failed to update meal plan",
+    "createFailed": "Failed to create meal plan",
+    "foodAssignment": "Food assignment",
+    "managedOnWeb": "Managed on web",
+    "foodPreserved": "This food assignment is preserved when you save. Edit it in the web app.",
+    "mealAssignment": "Meal assignment",
+    "removeAssignment": "Remove meal assignment",
+    "weekday": "Weekday",
+    "selectWeekday": "Select weekday",
+    "mealType": "Meal type",
+    "selectMealType": "Select meal type",
+    "reusableMeal": "Reusable meal",
+    "selectMeal": "Select meal",
+    "quantity": "Quantity",
+    "quantityFor": "Quantity for {{name}}",
+    "quantityHint": "Use the meal serving unit. For weighed meal prep, enter the amount placed in one container.",
+    "name": "Plan name",
+    "namePlaceholder": "Meal plan name",
+    "nameRequired": "Plan name is required.",
+    "description": "Description",
+    "descriptionPlaceholder": "Optional notes about this plan",
+    "startDate": "Start date",
+    "endDate": "End date",
+    "noEndDate": "No end date",
+    "clearEndDate": "Clear end date",
+    "endBeforeStart": "End date cannot be before the start date.",
+    "activePlan": "Active plan",
+    "activePlanHint": "Active plans populate matching future diary days.",
+    "assignments": "Weekly assignments",
+    "assignmentsHint": "Choose what amount of a reusable meal should appear on each day.",
+    "addMeal": "Add meal",
+    "weeklyPlan": "Weekly plan",
+    "oneDayHint": "Choose a day, then add foods or reusable meals to each meal type.",
+    "mealBadge": "Meal",
+    "foodBadge": "Food",
+    "replaceAssignmentFor": "Replace {{name}}",
+    "removeAssignmentFor": "Remove {{name}}",
+    "addToMealType": "Add food or meal to {{mealType}}",
+    "addFoodOrMeal": "Add food or meal",
+    "caloriesLabel": "Calories",
+    "proteinLabel": "Protein",
+    "carbsLabel": "Carbs",
+    "fatLabel": "Fat",
+    "nutritionLine": "{{calories}} kcal · {{protein}} g P · {{carbs}} g C · {{fat}} g F",
+    "dailyNutritionAccessibility": "Daily {{nutrient}} {{value}} {{unit}}",
+    "mealTypeNutritionAccessibility": "{{mealType}} total {{calories}} kcal, {{protein}} g protein, {{carbs}} g carbs, {{fat}} g fat",
+    "mealTypeMacros": "{{protein}} g P · {{carbs}} g C · {{fat}} g F",
+    "caloriesValue": "{{value}} kcal",
+    "nutritionLoading": "Loading missing nutrition details. Totals may be incomplete.",
+    "nutritionLoadFailed": "Some nutrition details couldn't be loaded. Totals may be incomplete.",
+    "assignmentRequired": "Add at least one complete meal assignment.",
+    "familyNotice": "You can schedule your own meals plus family or public meals already visible in your meal library. The plan stays private to this account and does not change meal sharing.",
+    "weekdays": {
+      "sunday": "Sunday",
+      "monday": "Monday",
+      "tuesday": "Tuesday",
+      "wednesday": "Wednesday",
+      "thursday": "Thursday",
+      "friday": "Friday",
+      "saturday": "Saturday"
+    },
+    "weekdaysShort": {
+      "sunday": "Sun",
+      "monday": "Mon",
+      "tuesday": "Tue",
+      "wednesday": "Wed",
+      "thursday": "Thu",
+      "friday": "Fri",
+      "saturday": "Sat"
+    }
   },
   "mealDetail": {
     "sharedPublicly": "Meal shared publicly",
@@ -2774,12 +3269,14 @@
     "calories": "cal",
     "viewLinkedMeal": "View linked meal {{name}}",
     "logMeal": "Log Meal",
+    "planMeal": "Plan Meal",
     "deleting": "Deleting...",
     "deleteMeal": "Delete Meal",
     "makesSummary_one": "Makes {{servings}} {{servingLabel}} · {{count}} {{ingredientLabel}}",
     "makesSummary_other": "Makes {{servings}} {{servingLabel}} · {{count}} {{ingredientLabel}}",
     "items_one": "{{formattedCount}} item",
-    "items_other": "{{formattedCount}} items"
+    "items_other": "{{formattedCount}} items",
+    "notes": "Notes"
   },
   "dailyNutritionDetails": {
     "title": "Nutrition Details",
@@ -2832,18 +3329,62 @@
       "serving_one": "serving",
       "serving_other": "servings",
       "mealMakes_one": "meal makes {{formattedCount}} serving",
-      "mealMakes_other": "meal makes {{formattedCount}} servings"
+      "mealMakes_other": "meal makes {{formattedCount}} servings",
+      "aboutThisFood": "About this food",
+      "entryNotes": "Note for this entry",
+      "entryNotesPlaceholder": "Anything specific about this time you ate it"
     },
     "pickers": {
       "selectServing": "Select Serving",
       "selectMeal": "Select Meal"
     }
   },
+  "foodEntryMultiAdd": {
+    "title": "Review",
+    "addingToDate": "Adding to {{date}}",
+    "labels": {
+      "meal": "Meal",
+      "chooseMeal": "Choose meal"
+    },
+    "pickers": {
+      "selectMeal": "Select Meal",
+      "selectServing": "Select Serving"
+    },
+    "accessibility": {
+      "mealForAll": "Meal for all items: {{meal}}",
+      "mealForRow": "Meal for {{food}}: {{meal}}",
+      "increaseQuantity": "Increase quantity",
+      "decreaseQuantity": "Decrease quantity",
+      "changeServing": "Change serving for {{name}}"
+    },
+    "actions": {
+      "addAll_one": "Add all ({{count}})",
+      "addAll_other": "Add all ({{count}})",
+      "remove": "Remove {{name}}",
+      "addAnyway": "Add anyway",
+      "addAnywayFor": "Add {{name}} anyway"
+    },
+    "banners": {
+      "unknownOutcome": "Some items couldn't be added and may already be in your diary"
+    },
+    "errors": {
+      "invalidQuantity": "Enter a quantity greater than zero.",
+      "rowRejected": "Couldn't add this item. Check it and try again."
+    },
+    "states": {
+      "empty": "No foods selected"
+    },
+    "toasts": {
+      "added_one": "Added {{count}} food",
+      "added_other": "Added {{count}} foods"
+    }
+  },
   "exerciseSearch": {
     "title": "Exercises",
     "tabs": {
       "search": "Search",
-      "online": "Online"
+      "online": "Online",
+      "suggested": "Suggested"
     },
     "sections": {
       "recent": "Recent",
@@ -2888,6 +3429,30 @@
     "accessibility": {
       "provider": "Exercise provider {{provider}}",
       "loadingMore": "Loading more exercises"
+    },
+    "replaceTitle": "Replace Exercise",
+    "alternatives": {
+      "heading": "Instead of {{name}}",
+      "modes": {
+        "similar": "Similar",
+        "differentEquipment": "Other equipment"
+      },
+      "reasons": {
+        "sameMuscles": "Same muscles",
+        "sharesMuscle": "Similar muscles",
+        "sameEquipment": "Same equipment",
+        "differentEquipment": "Different equipment",
+        "sameMovement": "Same movement",
+        "recent": "Done recently",
+        "inLibrary": "In your library"
+      },
+      "newBadge": "New",
+      "searchAll": "Search all exercises",
+      "failed": "Could not load alternatives",
+      "noMuscles": "No muscles recorded for {{name}}",
+      "noMusclesHint": "Add its primary muscles in the exercise library to get suggestions.",
+      "empty": "No alternatives found",
+      "catalogUnavailable": "Free Exercise DB is unavailable, so only your library is shown."
     }
   },
   "foodSearch": {
@@ -2895,7 +3460,7 @@
       "newFood": "New Food",
       "newMeal": "New Meal",
       "show": "Show",
-      "allSources": "All Sources"
+      "allProviders": "All Providers"
     },
     "accessibility": {
       "moreFiltered": "More options, filtered to {{filter}}",
@@ -2904,14 +3469,14 @@
       "scanFood": "Scan Food",
       "searchingFoods": "Searching saved foods",
       "searchingFoodsMeals": "Searching saved foods and meals",
-      "sourceChange": "Source {{source}}, tap to change",
       "providerError": "{{provider}}, could not load, tap to retry",
       "providerNoResults": "{{provider}}, no results",
       "favorite": "Favorite",
       "viewPhoto": "View photo",
       "verifiedFood": "Verified food",
       "providerExpand_one": "{{provider}}, {{count}} result, tap to {{action}}",
-      "providerExpand_other": "{{provider}}, {{count}} results, tap to {{action}}"
+      "providerExpand_other": "{{provider}}, {{count}} results, tap to {{action}}",
+      "providerChange": "Provider {{provider}}, tap to change"
     },
     "errors": {
       "detailsUnavailable": "Details unavailable",
@@ -2924,11 +3489,22 @@
       "yourFoods": "Your Foods",
       "yourMeals": "Your Meals",
       "topMatches": "Top Matches",
-      "bySource": "By Source",
-      "onlineResults": "Online Results"
+      "onlineResults": "Online Results",
+      "byProvider": "By Provider"
     },
     "search": {
       "placeholder": "Search foods..."
+    },
+    "multiSelect": {
+      "select": "Select",
+      "cancel": "Cancel",
+      "clear": "Clear",
+      "review": "Review",
+      "selectAll": "Select all",
+      "selected_one": "{{count}} selected",
+      "selected_other": "{{count}} selected",
+      "limitReached": "You can select up to {{limit}} foods",
+      "foodCheckbox": "Select {{name}}"
     },
     "states": {
       "connectToSearch": "Connect to a server to search foods",
@@ -3010,7 +3586,9 @@
       "exercise_other": "Exercises",
       "sets": "Sets",
       "volume": "Volume",
-      "calories": "Calories"
+      "calories": "Calories",
+      "avgHeartRate": "Avg HR",
+      "maxHeartRate": "Max HR"
     },
     "errors": {
       "needsExercise": "Workout needs an exercise",
@@ -3020,7 +3598,8 @@
     "labels": {
       "details": "Details",
       "name": "Name",
-      "notes": "Notes"
+      "notes": "Notes",
+      "location": "Gym / Location"
     },
     "placeholders": {
       "workoutName": "Workout Name",
@@ -3084,7 +3663,7 @@
       "description": "When enabled, carbohydrate summaries display net carbs (total carbs − fiber), and a Total Carbs row is added in nutrient breakdowns."
     },
     "foodSource": {
-      "title": "Default Food Source",
+      "title": "Default Food Provider",
       "pickerTitle": "Search Provider",
       "firstAvailable": "First available",
       "description": "Used when searching for foods by name."
@@ -3109,8 +3688,13 @@
       "volume": "Volume",
       "sets": "Sets",
       "calories": "Calories",
+      "avgHeartRate": "Avg HR",
+      "maxHeartRate": "Max HR",
       "distance": "Distance",
       "averageRpe": "Average RPE"
+    },
+    "units": {
+      "bpm": "bpm"
     },
     "labels": {
       "todayAt": " · Today at ",
@@ -3176,6 +3760,7 @@
       "invalidBarcode": "Invalid barcode",
       "barcodeRequired": "Barcode must be 8-14 digits.",
       "equivalentsSaveFailed": "Some equivalent units could not be saved",
+      "foodSaveFailed": "Failed to save food",
       "invalidAmount": "Invalid amount",
       "amountRequired": "Amount must be greater than zero.",
       "noMealType": "No meal type",
@@ -3201,7 +3786,9 @@
     "servingOptionsError": "Some serving options could not be loaded right now.",
     "barcode": "Barcode",
     "logFood": "Log Food",
-    "deleteFood": "Delete Food"
+    "deleteFood": "Delete Food",
+    "notes": "Notes",
+    "deleteSheetTitle": "Delete food"
   },
   "foodEntryView": {
     "saveChanges": "Save food entry changes",
@@ -3227,7 +3814,8 @@
       "saveFailed": "Failed to save changes",
       "deleteFailed": "Failed to delete"
     },
-    "deleteConfirm": "Are you sure you want to delete this food entry?"
+    "deleteConfirm": "Are you sure you want to delete this food entry?",
+    "entryNotes": "Note for this entry"
   },
   "presetSearch": {
     "title": "Start Workout",
@@ -3263,6 +3851,15 @@
     "description": "Description",
     "descriptionPlaceholder": "Optional notes about this routine",
     "reorderExercises": "Reorder exercises",
+    "format": "Format",
+    "formatStandard": "Standard",
+    "formatInterval": "Interval / HIIT",
+    "formatTabata": "Tabata",
+    "formatEmom": "EMOM",
+    "formatAmrap": "AMRAP",
+    "formatForTime": "For Time",
+    "timeCapMinutes": "Time Cap (minutes)",
+    "timeCapPlaceholder": "e.g. 20",
     "newTitle": "New Preset",
     "editTitle": "Edit Preset",
     "created": "Workout preset created",
@@ -3273,6 +3870,28 @@
       "addExercise": "Add an exercise",
       "addExerciseSet": "Add at least one exercise with a set before saving."
     }
+  },
+  "interval": {
+    "ready": "Ready",
+    "countdown": "Get Ready",
+    "work": "Work",
+    "rest": "Rest",
+    "finished": "Completed",
+    "roundOfTotal": "Round {{current}} of {{total}}",
+    "round": "Round {{current}}",
+    "roundPlusOne": "+1 Round ({{current}})",
+    "resume": "Resume",
+    "pause": "Pause",
+    "timeCap": "Time Cap",
+    "timeCapLabel": "Cap: {{cap}}",
+    "wodScoring": "WOD Scoring",
+    "rx": "Rx",
+    "scaled": "Scaled",
+    "extraReps": "Additional Reps",
+    "wodScore": "WOD Score",
+    "amrapScore": "{{rounds}} rounds + {{reps}} reps",
+    "completed": "Completed",
+    "roundsCompleted": "{{rounds}} rounds completed"
   },
   "logScreen": {
     "title": "Logs",
@@ -3397,7 +4016,9 @@
       "meal": "Meal",
       "selectMeal": "Select Meal",
       "time": "Time",
-      "foodsInMeal": "Foods in this meal"
+      "foodsInMeal": "Foods in this meal",
+      "notes": "Note for this entry",
+      "aboutThisMeal": "About this meal"
     },
     "states": {
       "noFoods": "No foods in this meal yet."
@@ -3440,7 +4061,21 @@
       "deleteActivityTitle": "Delete Activity?",
       "deleteActivityMessage": "This activity will be permanently removed.",
       "deleteExerciseTitle": "Delete Exercise?",
-      "deleteExerciseMessage": "This exercise will be removed from your library. Past logged sessions are preserved."
+      "deleteExerciseMessage": "This exercise will be removed from your library. Past logged sessions are preserved.",
+      "deleteWithHistoryTitle": "Delete workouts too?",
+      "deleteWithHistoryMessage": "This also permanently deletes your logged workouts for this exercise. This cannot be undone."
+    },
+    "hidden": {
+      "title": "Exercise hidden",
+      "usedByOthers": "It is used by other people, so it was hidden instead of deleted. Their history is unaffected."
+    },
+    "options": {
+      "hide": "Hide from search",
+      "hideDescription": "Keeps everything as it is. The exercise just stops showing up when you search.",
+      "delete": "Delete",
+      "deleteDescription": "Removes it from your library, presets and plans. Your logged workouts are kept.",
+      "deleteWithHistory": "Delete including history",
+      "deleteWithHistoryDescription": "Also permanently deletes your logged workouts for this exercise."
     }
   },
   "foodPhotoEstimate": {
@@ -3468,7 +4103,67 @@
       "invalidRequiredNutrition": "Calories, protein, carbs, and fat must be non-negative numbers.",
       "invalidOptionalNutrition": "All nutrition values must be non-negative numbers.",
       "invalidServingSize": "Invalid serving size",
-      "invalidServingSizeMessage": "Serving size must be a positive number."
+      "invalidServingSizeMessage": "Serving size must be a positive number.",
+      "noIngredients": "Keep at least one ingredient, or switch to One food.",
+      "invalidServings": "Invalid servings",
+      "positiveServings": "The dish total, the serving size and the amount eaten must all be greater than zero."
+    },
+    "ingredients": {
+      "editRow": "Edit {{name}}",
+      "remove": "Remove {{name}}",
+      "name": "Name",
+      "grams": "Weight (g)",
+      "calories": "Calories",
+      "protein": "Protein (g)",
+      "carbs": "Carbs (g)",
+      "fat": "Fat (g)",
+      "fiber": "Fiber (g)",
+      "sugar": "Sugar (g)",
+      "recalcFromGrams": "Nutrition was edited by hand, so it no longer follows the weight. Tap to recalculate from the weight.",
+      "heading": "Detected ingredients",
+      "empty": "Every ingredient was removed. Add one back, or switch to One food.",
+      "count_one": "{{count}} ingredient",
+      "count_other": "{{count}} ingredients",
+      "totals": "Total",
+      "rowSummary": "{{grams}} g · {{calories}} kcal",
+      "macroSummary": "{{calories}} kcal · {{protein}}P · {{carbs}}C · {{fat}}F",
+      "addFood": "Add Food",
+      "addedFood": "Food",
+      "pickedRowSummary": "{{quantity}} {{unit}} · {{calories}} kcal",
+      "pickedFoodNote": "Added from your foods. Remove it and add it again to change the amount."
+    },
+    "match": {
+      "useYourFood": "From your foods: {{name}} · tap to use it",
+      "usingYourFood": "Using your food: {{name}} · tap to use the AI estimate",
+      "matchedCount_one": "{{count}} ingredient matched to your foods",
+      "matchedCount_other": "{{count}} ingredients matched to your foods"
+    },
+    "mode": {
+      "ingredients": "Ingredients",
+      "combined": "One food",
+      "explainerIngredients": "Logs one meal you can expand to each ingredient.",
+      "explainerCombined": "Logs the whole plate as a single food.",
+      "label": "Save as",
+      "ingredientsAndMeal": "Ingredients + reusable meal",
+      "ingredientsOnly": "Ingredients only",
+      "oneFood": "One food",
+      "mealName": "Meal name",
+      "hintIngredientsAndMeal": "Each ingredient becomes its own food, and the meal is saved so you can log it again without a photo.",
+      "hintIngredientsOnly": "Each ingredient becomes its own food. No reusable meal is saved.",
+      "hintOneFood": "Saves the whole plate as a single food, with no breakdown."
+    },
+    "servings": {
+      "unit": "Unit",
+      "total": "Total servings",
+      "totalAmount": "Total amount ({{unit}})",
+      "servingSize": "One serving is ({{unit}})",
+      "eatenServings": "Servings eaten",
+      "eatenAmount": "You ate ({{unit}})",
+      "hint": "The ingredients above are the whole dish — say how it divides, and only what you ate goes in your diary.",
+      "derivedYield_one": "Makes about {{count}} serving",
+      "derivedYield_other": "Makes about {{count}} servings",
+      "perServing": "Per serving",
+      "logging": "Logging"
     }
   },
   "mealTypeForm": {
@@ -3665,7 +4360,10 @@
     "meal": "Meal",
     "selectMeal": "Select Meal",
     "date": "Date",
-    "servings": "Servings"
+    "servings": "Servings",
+    "groupedSummary_one": "{{count}} ingredient will be logged as one meal.",
+    "groupedSummary_other": "{{count}} ingredients will be logged as one meal.",
+    "failed": "Failed to log estimate"
   },
   "workoutAdd": {
     "addExercise": "Add an Exercise",
@@ -3717,6 +4415,7 @@
       "kg": "kg",
       "mg": "mg",
       "oz": "oz",
+      "flOz": "fl oz",
       "lb": "lb",
       "lbs": "lbs",
       "ml": "ml",
@@ -3792,7 +4491,8 @@
   "charts": {
     "weight": {
       "title": "Weight",
-      "loadFailed": "Failed to load weight data"
+      "loadFailed": "Failed to load weight data",
+      "empty": "No weight data for this period"
     },
     "steps": {
       "title": "Steps",
@@ -3800,6 +4500,31 @@
       "empty": "No step data for this period",
       "tooltip_one": "{{formattedCount}} step",
       "tooltip_other": "{{formattedCount}} steps"
+    },
+    "sleep": {
+      "title": "Sleep",
+      "loadFailed": "Failed to load sleep data",
+      "empty": "No sleep data for this period",
+      "avgTimeInBed": "Avg time in bed",
+      "avgTimeAsleep": "Avg time asleep",
+      "tooltip": "{{timeInBed}} in bed · {{timeAsleep}} asleep"
+    },
+    "hydration": {
+      "title": "Hydration",
+      "loadFailed": "Failed to load hydration data",
+      "empty": "No hydration data for this period",
+      "tooltip": "{{formattedVolume}} {{unit}} · {{date}}"
+    },
+    "calories": {
+      "title": "Calories",
+      "loadFailed": "Failed to load calorie data",
+      "empty": "No calorie data for this period",
+      "tooltip": "{{formattedCount}} kcal consumed",
+      "tooltipMacro": "{{percent}}% {{macroLabel}}",
+      "otherMacro": "Other",
+      "avgCalories": "Avg",
+      "avgCaloriesValue": "{{formattedCount}} kcal",
+      "noAverage": "—"
     },
     "loading": "Loading chart...",
     "weightLoadFailed": "Failed to load weight data",
@@ -3816,7 +4541,8 @@
     "bbt": {
       "tooltip": "Press the line for details",
       "empty": "Log daily temperature logs to view your BBT chart."
-    }
+    },
+    "allTrendsHidden": "All graphs are hidden. Choose which to show in Dashboard Settings."
   },
   "exerciseLibrary": {
     "title": "Exercises",
@@ -3929,6 +4655,9 @@
     "heartRateZoneModerate": "Moderate",
     "heartRateZoneIntense": "Intense",
     "heartRateZonePeak": "Peak",
+    "wodScoreFormat": "{{format}} Score",
+    "timeCap": "Time Cap",
+    "scalingNotes": "Scaling Notes",
     "durationMinutesSeconds": "{{minutes}}m {{seconds}}s"
   },
   "copyMeal": {
@@ -4018,7 +4747,21 @@
   "foodDelete": {
     "failed": "Failed to delete food",
     "title": "Delete Food",
-    "message": "Are you sure you want to delete this food? Existing logged entries will stay unchanged."
+    "message": "Are you sure you want to delete this food? Existing logged entries will stay unchanged.",
+    "hidden": {
+      "title": "Food hidden",
+      "usedByOthers": "It is used by other people, so it was hidden instead of deleted. Their history is unaffected."
+    },
+    "confirmWithHistoryTitle": "Delete entries too?",
+    "confirmWithHistoryMessage": "This also permanently deletes your logged diary entries for this food. This cannot be undone.",
+    "options": {
+      "hide": "Hide from search",
+      "hideDescription": "Keeps everything as it is. The food just stops showing up when you search.",
+      "delete": "Delete",
+      "deleteDescription": "Removes it from your library, meals and meal plans. Your logged entries are kept.",
+      "deleteWithHistory": "Delete including history",
+      "deleteWithHistoryDescription": "Also permanently deletes your logged diary entries for this food."
+    }
   },
   "exerciseEditing": {
     "removeTitle": "Remove Exercise?",
@@ -4058,8 +4801,148 @@
     "saveMessage": "Could not save measurements. Please try again."
   },
   "symptoms": {
+    "title": "Symptoms",
+    "history": "History",
+    "historyTitle": "Symptom History",
+    "logTitle": "Log Symptom",
+    "editTitle": "Edit Symptom",
+    "manageTitle": "Manage Symptoms",
+    "newDefinitionTitle": "New Symptom Type",
+    "editDefinitionTitle": "Edit Symptom Type",
+    "symptom": "Symptom",
+    "orCustomName": "Or type custom symptom...",
+    "ongoingEpisode": "Track as ongoing episode",
+    "startedWhen": "Started when:",
+    "endEpisodeNow": "End Episode Now",
+    "severityTitle": "Severity",
+    "location": "Location",
+    "qualities": "Pain Qualities",
+    "associated": "Associated Symptoms / Aura",
+    "triggers": "Triggers",
+    "treatments": "Treatments & Relief",
+    "impact": "Impact on Day",
+    "notes": "Notes & Observations",
+    "notesPlaceholder": "Any additional notes or observations...",
+    "logSymptom": "Log Symptom",
+    "logAnother": "Log another symptom",
+    "logShort": "+ Log",
+    "activeEpisode": "Active Episode",
+    "noneToday": "None today",
+    "anySymptomsQuestion": "Did you experience any symptoms or pain today?",
+    "markedSymptomFreeToday": "Marked symptom-free today",
+    "noSymptomsTodayPrompt": "No symptoms today?",
+    "markFree": "Mark Free",
+    "noSymptomsLoggedToday": "No symptoms recorded today",
+    "sparkline7d": "7-Day Trend",
+    "freeDaysShort": "free days",
+    "insights30d": "30-Day Insights",
+    "topTriggers": "Top Triggers",
+    "effectiveRelief": "Effective Relief",
+    "countTimes": "({{times}}x)",
+    "noneRecorded": "None recorded",
+    "activeOngoing": "Active Ongoing Episodes",
+    "noHistory": "No symptom logs found",
+    "noHistoryDesc": "Logs and past episodes for the last 30 days will show here.",
+    "yourCustomSymptoms": "Your Custom Symptoms",
+    "noCustomSymptoms": "No custom symptoms created yet.",
+    "createFirst": "+ Create Custom Symptom",
+    "builtInTemplates": "Standard Templates",
+    "namePlaceholder": "e.g. Migraine, Knee Pain, Acid Reflux",
+    "categories": {
+      "general": "General",
+      "head": "Headache / Head",
+      "pain": "Pain",
+      "gi": "GI / Digestive",
+      "respiratory": "Respiratory",
+      "skin": "Skin",
+      "mental": "Mental",
+      "other": "Other"
+    },
+    "templates": {
+      "generic": "Generic",
+      "headache": "Headache / Migraine",
+      "pain": "Body Pain",
+      "gi": "GI / Digestive",
+      "respiratory": "Respiratory",
+      "skin": "Skin Flare",
+      "mental": "Mental Health"
+    },
+    "scales": {
+      "oneToTen": "1 - 10 Scale",
+      "oneToFive": "1 - 5 Scale",
+      "noneToSevere": "None - Severe (5 levels)",
+      "count": "Count / Frequency",
+      "text": "Text / Notes Only"
+    },
+    "impacts": {
+      "none": "None",
+      "mild": "Mild",
+      "moderate": "Moderate",
+      "severe": "Severe"
+    },
+    "timing": {
+      "now": "Now",
+      "m15": "-15m",
+      "h1": "-1h",
+      "h3": "-3h",
+      "started": "Started",
+      "episode": "Episode"
+    },
+    "name": "Symptom Name",
+    "nameRequired": "Please enter a name for the symptom.",
+    "template": "Template (Pre-configured Sections)",
+    "category": "Category",
+    "scaleType": "Severity Scale",
+    "isEpisodic": "Duration-based episodes",
+    "isEpisodicDesc": "Tracks start time, ongoing banner, and total duration",
+    "isPinned": "Pin to top of list",
+    "isPinnedDesc": "Shows first in the quick logging chips",
+    "deleteTitle": "Delete Symptom Log",
+    "deleteConfirm": "Are you sure you want to delete this entry?",
+    "mapPerspective": "Left and right match your body",
+    "addTreatmentPlaceholder": "Add medicine or relief method...",
     "saveFailed": "Failed to save symptom",
-    "removeFailed": "Failed to remove symptom"
+    "updateFailed": "Could not update the symptom log",
+    "endFailed": "Could not end the episode",
+    "removeFailed": "Failed to remove symptom",
+    "saveDefinitionFailed": "Could not save the symptom",
+    "saveOptionFailed": "Could not save the option",
+    "severityFailed": "Could not update severity",
+    "freeFailed": "Could not update symptom-free status",
+    "photoFailed": "Could not upload the photo",
+    "views": {
+      "front": "Front",
+      "back": "Back"
+    },
+    "severity": {
+      "unset": "Not set",
+      "none": "None",
+      "mild": "Mild",
+      "moderate": "Moderate",
+      "substantial": "Substantial",
+      "severe": "Severe",
+      "unbearable": "Unbearable"
+    },
+    "effectiveness": {
+      "helped": "Helped",
+      "partly": "Partly",
+      "didntHelp": "Didn't help",
+      "unknown": "Unsure"
+    },
+    "kinds": {
+      "relief": "Relief / Non-drug",
+      "medication": "Medication"
+    },
+    "actions": {
+      "endNow": "End now",
+      "stillOngoing": "Still ongoing"
+    },
+    "notification": {
+      "dailyTitle": "Symptom check-in",
+      "dailyBody": "How are you feeling today? Tap to log any symptoms.",
+      "nudgeTitle": "Episode still active?",
+      "nudgeBody": "{{name}} has been running for {{hours}} hours. Is it still ongoing or ended?"
+    }
   },
   "waterIntake": {
     "updateFailed": "Error",
@@ -4067,7 +4950,75 @@
     "noPrimary": "No Primary Container",
     "noContainers": "No Water Containers",
     "multipleNoPrimary": "You have multiple water containers but none is marked as primary. Please set one as primary on the server.",
-    "configure": "Please configure a water container on the server to track hydration."
+    "configure": "Please configure a water container on the server to track hydration.",
+    "multipleNoPrimaryMobile": "You have multiple water containers but none is marked as primary. Tap to choose one.",
+    "configureMobile": "Add a water container to start tracking hydration.",
+    "defaultContainer": "Default"
+  },
+  "waterContainers": {
+    "title": "Water containers",
+    "add": "Add container",
+    "loading": "Loading water containers...",
+    "loadFailed": "Failed to load water containers",
+    "loadFailedSubtitle": "Check your connection and try again.",
+    "noServer": "No server configured",
+    "noServerSubtitle": "Configure your server connection to manage water containers.",
+    "goToSettings": "Go to Settings",
+    "emptyTitle": "No water containers yet",
+    "emptySubtitle": "Add a bottle or glass to track hydration -- optionally linked to a food so a tap logs both.",
+    "linkedTo": "Linked to {{food}}",
+    "deleteTitle": "Delete container",
+    "deleteMessage": "Delete {{name}}?",
+    "deleteNamed": "Delete {{name}}",
+    "deleteSuccess": "Container deleted",
+    "deleteFailed": "Failed to delete container",
+    "setPrimaryNamed": "Set {{name}} as primary",
+    "setPrimaryFailed": "Failed to set primary container",
+    "moveUp": "Move {{name}} up",
+    "moveDown": "Move {{name}} down",
+    "reorderFailed": "Failed to reorder containers",
+    "presets": "Quick-add presets",
+    "addPresetFailed": "Failed to add drink preset"
+  },
+  "waterContainerEdit": {
+    "createTitle": "Add container",
+    "editTitle": "Edit container",
+    "loading": "Loading container...",
+    "name": "Name",
+    "namePlaceholder": "e.g. My Water Bottle",
+    "volume": "Volume",
+    "unit": "Unit",
+    "units": {
+      "ml": "ml",
+      "oz": "oz",
+      "liter": "liter"
+    },
+    "servingsPerContainer": "Servings per container",
+    "primary": "Primary container",
+    "hydrationFactor": "Hydration factor",
+    "hydrationFactorHint": "Scales the water credit only: 1 for water, about 0.9 for coffee or tea, 0 for a drink that should count as no water at all. Calories, caffeine and alcohol always count in full.",
+    "linkedFood": "Linked food",
+    "selectFood": "Select a food (optional)",
+    "unlinkFood": "Unlink food",
+    "linkedMealType": "Meal type",
+    "noMealType": "None (use time of day)",
+    "delete": "Delete container",
+    "saveSuccess": "Water container saved",
+    "saveFailed": "Failed to save water container",
+    "errors": {
+      "title": "Check the form",
+      "nameRequired": "Name is required.",
+      "volumeInvalid": "Volume must be greater than zero.",
+      "servingsInvalid": "Servings per container must be at least 1.",
+      "factorInvalid": "Hydration factor must be between 0 and 2.",
+      "foodRequired": "Pick the food this container holds.",
+      "quantityInvalid": "Quantity must be greater than zero."
+    },
+    "tabWater": "Water",
+    "tabDrink": "Drink (linked food)",
+    "quantity": "Quantity",
+    "hydrationFactorExample": "At {{factor}}, one press adds {{credited}} {{unit}} to your water ring out of the drink’s {{total}} {{unit}}. Calories, caffeine and alcohol always count in full.",
+    "hydrationFactorApplies": "Applies to drinks logged from now on -- past entries keep the factor they were logged with."
   },
   "activeWorkoutAutosave": {
     "failedTitle": "Workout not saved",
@@ -4469,7 +5420,8 @@
     "configure": "Configure your server connection in Settings to view your workout presets."
   },
   "time": {
-    "hoursShort": "h"
+    "hoursShort": "h",
+    "minutesShort": "m"
   },
   "exerciseImage": {
     "playAnimation": "Play exercise animation",
@@ -4515,5 +5467,404 @@
     "workouts_other": "{{count}} workouts",
     "records_one": "{{count}} record",
     "records_other": "{{count}} records"
+  },
+  "sleep": {
+    "wakeUp": "Wake Up",
+    "wakeUpA11y": "Open wake up sleep details",
+    "bedTime": "Bedtime",
+    "bedTimeA11y": "Open bedtime sleep details",
+    "napCount_one": "{{count}} nap",
+    "napCount_other": "{{count}} naps",
+    "napA11y": "Open nap details, {{time}}, {{duration}}",
+    "timeAsleep": "Time asleep",
+    "timeInBed": "Time in bed",
+    "score": "Score",
+    "valueUnavailable": "—",
+    "detailTitle": "Sleep",
+    "loading": "Loading sleep...",
+    "notFound": "Sleep entry not found",
+    "notFoundSubtitle": "This sleep session may have been removed or is no longer synced.",
+    "loadFailed": "Could not load this sleep session",
+    "loadFailedSubtitle": "Please check your connection and try again.",
+    "bedtimeToWake": "{{bedtime}} – {{wakeTime}}",
+    "hypnogram": "Sleep Stages",
+    "hypnogramEmpty": "This source did not record sleep stages.",
+    "stageBreakdown": "Stage Breakdown",
+    "percentValue": "{{percent}}%",
+    "stage": {
+      "awake": "Awake",
+      "rem": "REM",
+      "light": "Light",
+      "deep": "Deep",
+      "other": "Other"
+    },
+    "biometrics": "Overnight Biometrics",
+    "averageSpo2": "Average SpO2",
+    "lowestSpo2": "Lowest SpO2",
+    "highestSpo2": "Highest SpO2",
+    "restingHeartRate": "Resting heart rate",
+    "percentUnit": "%",
+    "bpmUnit": "bpm",
+    "quality": "Sleep Quality"
+  },
+  "foodProvenance": {
+    "aiEstimate": "AI estimate",
+    "aiEstimateAccessibility": "Nutrition estimated by AI"
+  },
+  "notes": {
+    "label": "Notes",
+    "placeholder": "Add a note… (supports markdown)",
+    "write": "Write",
+    "preview": "Preview",
+    "nothingToPreview": "Nothing to preview yet.",
+    "toolbar": {
+      "bold": "Bold",
+      "italic": "Italic",
+      "strikethrough": "Strikethrough",
+      "heading": "Heading",
+      "bulletList": "Bulleted list",
+      "numberedList": "Numbered list",
+      "taskList": "Checklist (display only)",
+      "quote": "Quote",
+      "code": "Code",
+      "link": "Link",
+      "table": "Table",
+      "insertImage": "Insert photo",
+      "photoNumber": "Photo {{number}}"
+    },
+    "photoUnavailable": "Photo unavailable"
+  },
+  "healthTrendsSettings": {
+    "description": "Drag a graph by its handle to reorder it. Toggle off to hide it from your Dashboard.",
+    "reorder": "Reorder {{name}}",
+    "reorderHint": "Reorder this graph in your Dashboard health trends",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "stateShown": "Shown",
+    "stateHidden": "Hidden"
+  },
+  "quickActions": {
+    "scanFood": "Scan food",
+    "searchFood": "Log food",
+    "logWater": "Log water",
+    "fasting": "Fasting",
+    "waterLogged": "Water logged",
+    "waterFailed": "Could not log water"
+  },
+  "watchSettings": {
+    "gesturesTitle": "Gestures",
+    "doubleTapTitle": "Double-tap to log a set",
+    "doubleTapSubtitle": "Double-tap on a supported watch (Series 9, Ultra 2 or later, watchOS 11) logs the set on screen during a workout.",
+    "pagesTitle": "Pages",
+    "description": "Drag a page by its handle to change the order you swipe through them on your watch. Toggle a page off to hide it. The Workout page still appears while a workout is running.",
+    "reorder": "Reorder {{name}}",
+    "reorderHint": "Changes where this page sits on your watch",
+    "pages": {
+      "goals": "Goals",
+      "water": "Water",
+      "entry": "Weight check-in",
+      "trend": "Weight trend",
+      "workout": "Workout"
+    },
+    "nutrientsTitle": "Goals page nutrients",
+    "nutrientsDescription": "Choose the nutrients listed under the calorie ring on your watch, and drag to set their order. Each shows today’s amount against its goal.",
+    "nutrientReorderHint": "Changes where this nutrient sits on your watch",
+    "setInputTitle": "Set input",
+    "setInputDescription": "How you enter weight and reps on the watch during a workout: type them on a keypad, or tap a value and turn the Digital Crown or drag it, 0.5 at a time for weight.",
+    "setInputKeypad": "Keypad",
+    "setInputCrown": "Digital Crown"
+  },
+  "progressPhotos": {
+    "card": {
+      "title": "Progress",
+      "viewAll": "View all",
+      "openA11y": "View progress photos"
+    },
+    "title": "Progress Photos",
+    "angle": {
+      "front": "Front",
+      "back": "Back",
+      "side": "Side"
+    },
+    "noWeight": "No weight logged",
+    "logWeight": "Log weight",
+    "logWeightA11y": "Log your weight for this day",
+    "openPhotoA11y": "View this photo full screen",
+    "sincePrevious": "{{delta}} since previous",
+    "emptyTitle": "No {{angle}} photos yet",
+    "emptyBody": "Add one above and it will show up here with that day’s weight.",
+    "loadError": "Couldn't load your progress photos.",
+    "takePhoto": "Take Photo",
+    "chooseLibrary": "Choose from Library",
+    "remove": "Remove Photo",
+    "cameraPermission": "Camera permission is required",
+    "cameraPermissionHint": "Enable camera access for SparkyFitness in Settings.",
+    "compare": "Compare",
+    "compareTitle": "Compare",
+    "before": "Before",
+    "after": "After",
+    "pickWhich": "Tap either date to compare a different day",
+    "timelapse": "Time-lapse",
+    "timelapseTitle": "Time-lapse",
+    "timelapseEmpty": "Add at least two photos of this angle to play a time-lapse.",
+    "previousFrame": "Previous photo",
+    "nextFrame": "Next photo",
+    "play": "Play",
+    "pause": "Pause",
+    "speedSlow": "Slow",
+    "speedNormal": "Normal",
+    "speedFast": "Fast",
+    "daysApart_one": "{{count}} day apart",
+    "daysApart_other": "{{count}} days apart",
+    "noPhotoOnDay": "No photo for this angle on that day",
+    "pickDayA11y": "Choose the {{side}} day",
+    "range30d": "Last 30 days",
+    "range3m": "Last 3 months",
+    "chooseDayA11y": "Choose the day",
+    "diarySection": "Progress photos",
+    "tapToAdd": "Tap to add photos",
+    "addDayA11y": "Add progress photos for this day",
+    "angleCount": "{{taken}} of {{total}}",
+    "openDayA11y": "Open the progress photos for this day",
+    "missingAngleA11y": "No {{angle}} photo on this day",
+    "historySection": "History",
+    "historyDescription": "Your photos for this angle, newest first.",
+    "historyDescriptionCapped": "Your {{limit}} most recent. Compare or Time-lapse look further back.",
+    "slotSheetTitle": "Progress photo",
+    "removeTitle": "Remove photo?",
+    "removeMessage": "This deletes the photo from this day.",
+    "uploadError": "Could not save that photo",
+    "deleteError": "Could not remove that photo",
+    "viewAngleA11y": "View the {{angle}} photo full screen",
+    "addAngleA11y": "Add the {{angle}} photo",
+    "manageAngleA11y": "Replace or remove the {{angle}} photo",
+    "rangeAll": "All time",
+    "rangeCustom": "Custom range…",
+    "rangeSheetTitle": "Play back a date range",
+    "rangeSheetAction": "Play this range",
+    "rangeSection": "Play back",
+    "rangeA11y": "Choose how far back to play",
+    "deltaBadge": "Δ {{value}}",
+    "frameCountRanged": "{{current}} of {{total}} · {{range}}"
+  },
+  "caffeine": {
+    "title": "Active Caffeine",
+    "activeNow": "Active now",
+    "atBedtime": "At {{time}}",
+    "lastDose": "Last dose by",
+    "cutoffPassed": "Too late",
+    "cutoffOver": "Over",
+    "anytimeSafe": "Any time",
+    "crossingNote": "Back under {{threshold}}mg from {{time}}",
+    "underThreshold": "Stays under {{threshold}}mg tonight",
+    "estimatedTimes": "Some dose times were estimated",
+    "legendCurve": "Active caffeine",
+    "legendThreshold": "{{threshold}}mg threshold",
+    "unitMg": "mg"
+  },
+  "guidedWorkout": {
+    "cue": {
+      "getReady": "Get ready. Starting {{name}}.",
+      "setStartReps_one": "{{name}}. {{count}} rep.",
+      "setStartReps_other": "{{name}}. {{count}} reps.",
+      "setStartSeconds_one": "{{name}}. {{count}} second.",
+      "setStartSeconds_other": "{{name}}. {{count}} seconds.",
+      "setStartOpen": "{{name}}.",
+      "halfway": "Halfway.",
+      "rest_one": "Rest. {{count}} second.",
+      "rest_other": "Rest. {{count}} seconds.",
+      "intervalRest": "Rest.",
+      "nextUp": "Next: {{name}}.",
+      "workoutComplete": "Workout complete."
+    },
+    "card": {
+      "badge": "GUIDED",
+      "getReady": "Get ready",
+      "setOfTotal": "Set {{current}} of {{total}}",
+      "rest": "Rest",
+      "nextUp": "Next up",
+      "targetReps_one": "{{count}} rep",
+      "targetReps_other": "{{count}} reps",
+      "targetSeconds_one": "{{count}} second",
+      "targetSeconds_other": "{{count}} seconds",
+      "done": "All sets done. End the workout to save it.",
+      "paused": "Paused",
+      "pause": "Pause",
+      "resume": "Resume",
+      "mute": "Mute voice",
+      "unmute": "Unmute voice",
+      "replay": "Replay instructions",
+      "doneNext": "DONE — NEXT",
+      "doneHintReps_one": "Tap when you've done {{count}} rep",
+      "doneHintReps_other": "Tap when you've done {{count}} reps",
+      "doneHint": "Tap when you're done"
+    },
+    "settings": {
+      "section": "Guided workouts",
+      "enabled": "Guided mode",
+      "enabledSubtitle": "Speaks each exercise and its target, counts you in, runs timed sets on their own, and moves to the next set. Cues play with the phone on silent, and the screen stays on during the workout.",
+      "voice": "Voice",
+      "voiceDefault": "Device default",
+      "rate": "Speech rate",
+      "rateValue": "{{rate}}×",
+      "countdown": "Get-ready countdown",
+      "countdownSubtitle": "Before the first exercise and before each timed set.",
+      "countdownValue_one": "{{count}} s",
+      "countdownValue_other": "{{count}} s",
+      "sample": "This is how your guided workouts will sound.",
+      "test": "Test voice"
+    }
+  },
+  "workoutFeedback": {
+    "title": "How did it feel?",
+    "subtitle": "Your next suggestions adjust to this.",
+    "difficulty": {
+      "tooEasy": "Too easy",
+      "justRight": "Just right",
+      "tooHard": "Too hard"
+    },
+    "painQuestion": "Any pain or discomfort?",
+    "painWhere": "During which exercises? (optional)",
+    "painNotePlaceholder": "What hurt? (optional)",
+    "painPrivacy": "Suggestions for these exercises get lighter, never heavier.",
+    "rateExercises": "Rate each exercise",
+    "saving": "Saving…",
+    "saved": "Saved",
+    "saveFailed": "Couldn't save your feedback. Tap to retry.",
+    "loadFailed": "Couldn't load your feedback. Tap to try again."
+  },
+  "adaptiveCoaching": {
+    "reasons": {
+      "painReported": "Lighter today: you reported pain here last time.",
+      "painRepeated": "Lighter today: pain here two sessions running. Consider an alternative.",
+      "sessionPain": "Holding weight: you reported discomfort in your last workout.",
+      "tooHard": "Holding weight: last time felt too hard.",
+      "tooHardRepeated": "Lighter today: too hard two sessions running.",
+      "highEffort": "Holding weight: your last sets were near max effort.",
+      "tooEasyRepeated": "A step heavier: too easy two sessions running."
+    },
+    "declined": "Using your usual suggestion.",
+    "variation": "You've done this in most recent workouts. Try a variation?",
+    "useUsual": "Use my usual",
+    "useAdjusted": "Use the adjusted suggestion",
+    "seeAlternatives": "See alternatives"
+  },
+  "exerciseStatistics": {
+    "title": "Exercise Statistics",
+    "sets_one": "{{formattedCount}} set",
+    "sets_other": "{{formattedCount}} sets",
+    "stats": {
+      "workouts": "Workouts",
+      "volume": "Volume",
+      "reps": "Reps"
+    },
+    "setsPerMuscle": {
+      "title": "Sets per Muscle",
+      "subtitle": "Working sets on primary muscles in this range",
+      "none": "No working sets with a primary muscle yet."
+    },
+    "heatMap": {
+      "title": "Muscle Heat Map",
+      "subtitle": "Front and back, tinted by working sets",
+      "a11y": "Body figure tinted by working sets. The same counts are listed under Sets per Muscle, where selecting a muscle highlights it here.",
+      "tap": "Tap a muscle",
+      "fewer": "Fewer",
+      "more": "More",
+      "notOnFigure": "Not on the figure",
+      "male": "Male",
+      "female": "Female"
+    },
+    "analysis": {
+      "title": "More Analysis",
+      "recovery": "Last Trained",
+      "variety": "Exercise Variety",
+      "volume": "Volume by Muscle",
+      "exerciseCount_one": "{{count}} exercise",
+      "exerciseCount_other": "{{count}} exercises"
+    },
+    "recovery": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "daysAgo_one": "{{count}} day ago",
+      "daysAgo_other": "{{count}} days ago"
+    },
+    "states": {
+      "loadFailed": "Failed to load exercise statistics",
+      "empty": "No workouts in this range",
+      "emptyHint": "Log a workout and its sets will show up here by muscle."
+    },
+    "views": {
+      "strength": "Strength",
+      "cardio": "Cardio"
+    },
+    "cardio": {
+      "hint": "Tap a workout for its route and heart rate.",
+      "empty": "No cardio workouts in this range",
+      "loadFailed": "Failed to load cardio sessions",
+      "olderSessions": "Older sessions",
+      "unitKm": "km",
+      "unitMi": "mi",
+      "calories": "{{value}} Cal",
+      "minutes_one": "{{formattedCount}} min",
+      "minutes_other": "{{formattedCount}} min",
+      "bpm": "{{value}} bpm",
+      "distance": "Distance",
+      "duration": "Duration",
+      "pace": "Pace",
+      "avgHeartRate": "Avg heart rate",
+      "caloriesLabel": "Calories",
+      "route": "Route",
+      "routeA11y": "Route of this workout, from the green dot to the red ring",
+      "noRoute": "No GPS route stored. Indoor workouts do not have one. An outdoor walk only has a route if Apple Health shared it when the workout synced.",
+      "heartRate": "Heart Rate",
+      "average": "Avg {{value}}",
+      "peak": "Max {{value}}",
+      "onlyAverage": "Average heart rate {{value}}. Beat-by-beat samples were not stored.",
+      "noHeartRate": "No heart-rate samples for this workout.",
+      "zones": "Heart Rate Zones",
+      "zone": "Zone {{zone}}",
+      "zoneFrom": "from {{bpm}} bpm",
+      "minutesAxis": "Minutes from start",
+      "underOneMinute": "<1 min"
+    },
+    "consistency": {
+      "title": "Training Consistency",
+      "subtitle_one": "Last {{formattedCount}} week, {{first}} to {{last}}",
+      "subtitle_other": "Last {{formattedCount}} weeks, {{first}} to {{last}}",
+      "legendTrained": "Workout day",
+      "legendRest": "No workout",
+      "legendHelp": "Each square is a day and each column is a week.",
+      "streak": "Week streak",
+      "longest": "Longest",
+      "thisWeek": "This week",
+      "lastWeek": "Last week",
+      "weeks_one": "{{formattedCount}} week",
+      "weeks_other": "{{formattedCount}} weeks",
+      "days_one": "{{formattedCount}} day",
+      "days_other": "{{formattedCount}} days",
+      "calendarA11y_one": "Training calendar: {{count}} workout day in the last {{weeks}} weeks",
+      "calendarA11y_other": "Training calendar: {{count}} workout days in the last {{weeks}} weeks",
+      "setsTitle": "Sets per muscle",
+      "noSets": "No sets logged this week or last.",
+      "loadFailed": "Could not load your training consistency."
+    }
+  },
+  "aiSettings": {
+    "server": {
+      "title": "Server AI provider",
+      "loading": "Checking…",
+      "error": "Could not check the AI provider.",
+      "none": "No AI provider is configured",
+      "description": "Used for label scans unless an on-device option below handles them. Providers are set up in the web app."
+    },
+    "onDevice": {
+      "title": "On-device (Apple Intelligence)",
+      "description": "These run on this phone. Anything the on-device model cannot handle falls back to the server provider.",
+      "unavailable": "Not available on this device. It needs iOS 27 or later with Apple Intelligence turned on and ready.",
+      "labelScan": {
+        "title": "Scan Labels On Device",
+        "description": "Read nutrition labels with Apple Intelligence on this device. If it cannot read a label, the server AI provider is used instead."
+      }
+    }
   }
 }

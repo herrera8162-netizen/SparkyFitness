@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
@@ -8,11 +8,12 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
-import { Plus, Camera, Sparkles } from 'lucide-react';
+import { Plus, Camera, RefreshCw, Loader2, Sparkles } from 'lucide-react';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import { useIsMobile } from '@/hooks/use-mobile';
 import ConfirmationDialog from '@/components/ui/ConfirmationDialog';
 import { BarcodeScannerDialog } from './BarcodeScannerDialog';
+import { MarkdownEditor } from '@/components/ui/MarkdownEditor';
 import { ProviderNutrientViewer } from './ProviderNutrientViewer';
 import ProviderVerifiedBadge from './ProviderVerifiedBadge';
 import type { Food, FoodVariant } from '@/types/food';
@@ -20,12 +21,18 @@ import type { Food, FoodVariant } from '@/types/food';
 import { useCustomNutrients } from '@/hooks/Foods/useCustomNutrients';
 import { VariantCard } from './VariantCard';
 import { useCustomFoodForm } from '@/hooks/Foods/useFoodForm';
+import { useRefreshFoodFromSourceMutation } from '@/hooks/Foods/useFoods';
+import { getProviderDisplayName } from '@/utils/foodProviderLabels';
 import { useActiveAIService } from '@/hooks/AI/useAIServiceSettings';
 import { useUserAiConfigAllowed } from '@/hooks/AI/useUserAiConfigAllowed';
 import { UNIT_GROUPS } from '@/constants/foodForm';
 import { deriveSavedAiUnits } from '@/utils/foodAiUnits';
 import { getConversionFactor } from '@workspace/shared';
 import { FoodImagePicker } from './FoodImagePicker';
+import { resolveFoodImageSrc } from '@/utils/foodImages';
+import { useOpenFoodFactsContributionAvailability } from '@/hooks/Foods/useOpenFoodFactsContribution';
+import { isOpenFoodFactsContributionCandidate } from '@/utils/openFoodFactsContribution';
+import OpenFoodFactsContributionDialog from '@/pages/Foods/OpenFoodFactsContributionDialog';
 
 interface CustomFoodFormProps {
   onSave: (foodData: Food) => void;
@@ -50,6 +57,13 @@ const CustomFoodForm = ({
   const isMobile = useIsMobile();
   const platform = isMobile ? 'mobile' : 'desktop';
   const { data: customNutrients } = useCustomNutrients();
+  const { available: contributionsAvailable, userId: contributionUserId } =
+    useOpenFoodFactsContributionAvailability();
+  const [contributionFood, setContributionFood] = useState<Food | null>(null);
+  const previewAfterSave = useRef(false);
+  const canOfferContribution =
+    contributionsAvailable &&
+    (!food || isOpenFoodFactsContributionCandidate(food, contributionUserId));
 
   // AI gate for the per-row Convert-with-AI button: admin allows user AI
   // config + active AI service exists + per-user preference is on. Re-checked
@@ -81,6 +95,7 @@ const CustomFoodForm = ({
     manualUnitConversionPending,
     aiEstimatedUnits,
     updateField,
+    applyProviderRefresh,
     addVariant,
     duplicateVariant,
     removeVariant,
@@ -97,9 +112,51 @@ const CustomFoodForm = ({
   } = useCustomFoodForm({
     food,
     initialVariants,
-    onSave,
+    onSave: (savedFood) => {
+      if (
+        previewAfterSave.current &&
+        contributionsAvailable &&
+        isOpenFoodFactsContributionCandidate(savedFood, contributionUserId)
+      ) {
+        setContributionFood(savedFood);
+      } else {
+        onSave(savedFood);
+      }
+      previewAfterSave.current = false;
+    },
     aiEstimatesAvailable,
   });
+
+  const {
+    mutateAsync: refreshFoodFromSource,
+    isPending: isRefreshingFromSource,
+  } = useRefreshFoodFromSourceMutation();
+
+  const handleRefreshFromSource = async () => {
+    if (!food?.id) return;
+    try {
+      const result = await refreshFoodFromSource(food.id);
+      if (result) {
+        // Applies the fresh data to the open form; nothing lands in the DB
+        // until the user saves (which also offers syncing logged entries).
+        applyProviderRefresh(result.food);
+      }
+    } catch {
+      // Toasted by the global mutation error handler.
+    }
+  };
+
+  // Only already-saved photos can be embedded in a note: a staged file exists
+  // solely in the browser until the food is saved, so it has no path to link.
+  const savedImageOptions = useMemo(
+    () =>
+      imageItems.flatMap((item) => {
+        if (item.kind !== 'saved') return [];
+        const src = resolveFoodImageSrc(item.path);
+        return src ? [{ path: src, src }] : [];
+      }),
+    [imageItems]
+  );
 
   const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
 
@@ -194,16 +251,30 @@ const CustomFoodForm = ({
         <CardHeader>
           <div className="flex flex-wrap items-center gap-2">
             <CardTitle>
-              {food && food.id ? 'Edit Food' : 'Add Custom Food'}
+              {food && food.id
+                ? t('customFoodForm.titleEdit', 'Edit Food')
+                : t('customFoodForm.titleAdd', 'Add Custom Food')}
             </CardTitle>
             {food?.provider_verified ? <ProviderVerifiedBadge /> : null}
           </div>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-6">
+          <form
+            onSubmit={(event) => {
+              const submitter = (event.nativeEvent as SubmitEvent).submitter;
+              previewAfterSave.current =
+                canOfferContribution &&
+                submitter instanceof HTMLButtonElement &&
+                submitter.value === 'openfoodfacts-preview';
+              void handleSubmit(event);
+            }}
+            className="space-y-6"
+          >
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <Label htmlFor="name">Food Name *</Label>
+                <Label htmlFor="name">
+                  {t('customFoodForm.foodNameLabel', 'Food Name *')}
+                </Label>
                 <Input
                   id="name"
                   value={formData.name}
@@ -212,7 +283,9 @@ const CustomFoodForm = ({
                 />
               </div>
               <div>
-                <Label htmlFor="brand">Brand</Label>
+                <Label htmlFor="brand">
+                  {t('customFoodForm.brand', 'Brand')}
+                </Label>
                 <Input
                   id="brand"
                   value={formData.brand}
@@ -223,11 +296,16 @@ const CustomFoodForm = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
               <div>
-                <Label htmlFor="barcode">Barcode</Label>
+                <Label htmlFor="barcode">
+                  {t('customFoodForm.barcode', 'Barcode')}
+                </Label>
                 <div className="flex gap-2 mt-1">
                   <Input
                     id="barcode"
-                    placeholder="e.g. 012345678905"
+                    placeholder={t(
+                      'customFoodForm.barcodePlaceholder',
+                      'e.g. 012345678905'
+                    )}
                     value={formData.barcode}
                     onChange={(e) => updateField('barcode', e.target.value)}
                     maxLength={14}
@@ -239,13 +317,50 @@ const CustomFoodForm = ({
                     className="flex items-center gap-1.5 shrink-0"
                   >
                     <Camera className="w-4 h-4" />
-                    <span>Scan</span>
+                    <span>{t('customFoodForm.scan', 'Scan')}</span>
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Standard barcodes are 8 to 14 digits.
+                  {t(
+                    'customFoodForm.barcodeHelp',
+                    'Standard barcodes are 8 to 14 digits.'
+                  )}
                 </p>
               </div>
+              {food?.provider_type ? (
+                <div>
+                  <Label htmlFor="dataSource">
+                    {t('customFoodForm.dataSource', 'Data source')}
+                  </Label>
+                  <Input
+                    id="dataSource"
+                    readOnly
+                    value={getProviderDisplayName(food.provider_type)}
+                    className="mt-1"
+                  />
+                  {food.provider_external_id && food.id ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleRefreshFromSource}
+                      disabled={isRefreshingFromSource}
+                      className="flex items-center gap-1.5 shrink-0 mt-1 w-full"
+                    >
+                      {isRefreshingFromSource ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <RefreshCw className="w-4 h-4" />
+                      )}
+                      <span>
+                        {t(
+                          'customFoodForm.refreshFromSource',
+                          'Refresh from source'
+                        )}
+                      </span>
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
 
             <div className="pt-2">
@@ -265,7 +380,10 @@ const CustomFoodForm = ({
                 }
               />
               <Label htmlFor="is_quick_food" className="text-sm font-medium">
-                Quick Add (don't save to my food list for future use)
+                {t(
+                  'customFoodForm.quickAddLabel',
+                  "Quick Add (don't save to my food list for future use)"
+                )}
               </Label>
             </div>
 
@@ -276,7 +394,9 @@ const CustomFoodForm = ({
 
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold">Unit Variants</h3>
+                <h3 className="text-lg font-semibold">
+                  {t('customFoodForm.unitVariants', 'Unit Variants')}
+                </h3>
                 <div className="flex items-center gap-2">
                   {showInferMassAction && (
                     <Button
@@ -292,13 +412,15 @@ const CustomFoodForm = ({
                   )}
                   <Button type="button" onClick={addVariant} size="sm">
                     <Plus className="w-4 h-4 mr-1" />
-                    Add Unit
+                    {t('customFoodForm.addUnit', 'Add Unit')}
                   </Button>
                 </div>
               </div>
               <p className="text-sm text-gray-600">
-                Add different unit measurements for this food with specific
-                nutrition values for each unit.
+                {t(
+                  'customFoodForm.unitVariantsHelp',
+                  'Add different unit measurements for this food with specific nutrition values for each unit.'
+                )}
               </p>
 
               <div className="space-y-6">
@@ -376,6 +498,32 @@ const CustomFoodForm = ({
               </div>
             </div>
 
+            {/*
+              Last before the save button: the nutrition rows above are the
+              point of this form, and a long recipe ahead of them would push
+              them off-screen.
+            */}
+            <div className="pt-2 space-y-1.5">
+              <Label htmlFor="food-notes">
+                {t('customFoodForm.notesLabel', 'Notes')}
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  'customFoodForm.notesHelp',
+                  'Details you want to remember every time you log this — how you order it, or a recipe. Supports markdown.'
+                )}
+              </p>
+              <MarkdownEditor
+                id="food-notes"
+                value={formData.notes}
+                onChange={(next) => updateField('notes', next)}
+                placeholder={t(
+                  'customFoodForm.notesPlaceholder',
+                  'e.g. White rice, double chicken, mild salsa, no beans'
+                )}
+                imageOptions={savedImageOptions}
+              />
+            </div>
             {isUserOwnedFood && foodEntriesCount > 0 && (
               <div className="rounded-lg border border-border p-4 bg-muted/30 space-y-3">
                 <div className="flex items-center justify-between gap-4">
@@ -465,14 +613,41 @@ const CustomFoodForm = ({
 
             <Button type="submit" disabled={loading} className="w-full">
               {loading
-                ? 'Saving...'
+                ? t('customFoodForm.saving', 'Saving...')
                 : food && food.id
-                  ? 'Update Food'
-                  : 'Add Food'}
+                  ? t('customFoodForm.updateFood', 'Update Food')
+                  : t('customFoodForm.addFood', 'Add Food')}
             </Button>
+            {canOfferContribution && (
+              <Button
+                type="submit"
+                value="openfoodfacts-preview"
+                variant="outline"
+                disabled={loading}
+                className="w-full"
+              >
+                {t(
+                  'openFoodFactsContribution.saveAndPreview',
+                  'Save and preview contribution'
+                )}
+              </Button>
+            )}
           </form>
         </CardContent>
       </Card>
+      {contributionFood && (
+        <OpenFoodFactsContributionDialog
+          open
+          food={contributionFood}
+          onOpenChange={(open) => {
+            if (!open) {
+              const savedFood = contributionFood;
+              setContributionFood(null);
+              onSave(savedFood);
+            }
+          }}
+        />
+      )}
 
       {showBarcodeConflictConfirmation && (
         <ConfirmationDialog
@@ -483,8 +658,15 @@ const CustomFoodForm = ({
             }
           }}
           onConfirm={handleBarcodeConflictConfirm}
-          title="Barcode already in use"
-          description={`This barcode is already attached to "${barcodeConflictFoodName}". Attach it to "${formData.name}" anyway?`}
+          title={t(
+            'customFoodForm.barcodeConflictTitle',
+            'Barcode already in use'
+          )}
+          description={t('customFoodForm.barcodeConflictDescription', {
+            existing: barcodeConflictFoodName,
+            current: formData.name,
+            defaultValue: `This barcode is already attached to "${barcodeConflictFoodName}". Attach it to "${formData.name}" anyway?`,
+          })}
         />
       )}
 

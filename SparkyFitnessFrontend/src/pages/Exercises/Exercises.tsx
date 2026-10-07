@@ -18,6 +18,7 @@ import {
   CheckSquare,
   X,
   Edit,
+  Copy,
   Trash2,
   Share2,
   Lock,
@@ -37,6 +38,7 @@ import {
 import { usePreferences } from '@/contexts/PreferencesContext';
 import { useAuth } from '@/hooks/useAuth';
 import type { ExerciseOwnershipFilter } from '@/types/exercises';
+import { localizeMuscle, localizeEquipment } from '@/utils/exerciseTaxonomy';
 import WorkoutPresetsManager from './WorkoutPresetsManager';
 import WorkoutPlansManager from '@/pages/Exercises/WorkoutPlansManager';
 import {
@@ -60,8 +62,10 @@ import {
 import { useBulkSelection } from '@/hooks/useBulkSelection';
 import BulkActionToolbar from '@/components/BulkActionToolbar';
 import BulkDeleteDialog from '@/components/BulkDeleteDialog';
+import DeleteExerciseDialog from './DeleteExerciseDialog';
 import { DataTable } from '@/components/ui/DataTable';
 import { ColumnDef, RowSelectionState } from '@tanstack/react-table';
+import { type DataTableFeatures } from '@/components/ui/dataTableFeatures';
 import { Checkbox } from '@/components/ui/checkbox';
 import { getEnergyUnitString } from '@/utils/nutritionCalculations';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -124,6 +128,7 @@ const ExerciseDatabaseManager = () => {
     showDeleteConfirmation,
     setShowDeleteConfirmation,
     deletionImpact,
+    exerciseToDelete,
     handleDeleteRequest,
     confirmDelete,
     deleteExercise,
@@ -190,8 +195,11 @@ const ExerciseDatabaseManager = () => {
   const handleBulkDeleteConfirm = async () => {
     try {
       await Promise.all(
+        // 'delete', never 'delete_with_history': a bulk tidy-up of the library
+        // must not quietly destroy logged workouts. This used to force-delete
+        // every selected exercise with no warning at all.
         Array.from(selectedIds).map((id) =>
-          deleteExercise({ id, forceDelete: true })
+          deleteExercise({ id, mode: 'delete' })
         )
       );
     } catch (err) {
@@ -210,7 +218,7 @@ const ExerciseDatabaseManager = () => {
   const totalExercisesCount = data ? data.totalCount : 0;
   const totalPages = Math.ceil(totalExercisesCount / itemsPerPage);
 
-  const columns = useMemo<ColumnDef<ExerciseInterface>[]>(
+  const columns = useMemo<ColumnDef<DataTableFeatures, ExerciseInterface>[]>(
     () => [
       {
         id: 'select',
@@ -315,13 +323,17 @@ const ExerciseDatabaseManager = () => {
                 exercise.primary_muscles.length > 0 && (
                   <div className="text-[10px] text-gray-500 truncate max-w-[150px]">
                     <span className="font-medium">Muscles: </span>
-                    {exercise.primary_muscles.join(', ')}
+                    {exercise.primary_muscles
+                      .map((m) => localizeMuscle(t, m))
+                      .join(', ')}
                   </div>
                 )}
               {exercise.equipment && exercise.equipment.length > 0 && (
                 <div className="text-[10px] text-gray-500 truncate max-w-[150px]">
                   <span className="font-medium">Equipment: </span>
-                  {exercise.equipment.join(', ')}
+                  {exercise.equipment
+                    .map((eq) => localizeEquipment(t, eq))
+                    .join(', ')}
                 </div>
               )}
             </div>
@@ -353,6 +365,17 @@ const ExerciseDatabaseManager = () => {
                 >
                   <Edit className="mr-2 h-4 w-4" />
                   {t('common.edit', 'Edit')}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() =>
+                    editForm.openDuplicateDialog(
+                      exercise,
+                      t('exercise.databaseManager.copySuffix', '(copy)')
+                    )
+                  }
+                >
+                  <Copy className="mr-2 h-4 w-4" />
+                  {t('exercise.databaseManager.duplicateExercise', 'Duplicate')}
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   disabled={!isOwned}
@@ -644,6 +667,11 @@ const ExerciseDatabaseManager = () => {
         onOpenChange={setShowBulkDeleteDialog}
         selectedCount={selectedCount}
         entityName={t('exercise.databaseManager.exercises', 'exercises')}
+        description={t('exercise.databaseManager.bulkDeleteDescription', {
+          count: selectedCount,
+          selectedCount,
+          defaultValue: `Remove these ${selectedCount} exercises from your library and from any workout presets and plans. Workouts you have already logged are kept in your diary.`,
+        })}
         onConfirm={handleBulkDeleteConfirm}
       />
 
@@ -661,16 +689,11 @@ const ExerciseDatabaseManager = () => {
       />
 
       {showDeleteConfirmation && (
-        <ConfirmationDialog
-          open={showDeleteConfirmation}
-          onOpenChange={setShowDeleteConfirmation}
+        <DeleteExerciseDialog
+          exercise={exerciseToDelete}
+          impact={deletionImpact}
           onConfirm={confirmDelete}
-          title={t('exercise.databaseManager.deleteConfirmationTitle')}
-          description={
-            deletionImpact?.isUsedByOthers
-              ? t('exercise.databaseManager.deleteImpactDescription')
-              : t('exercise.databaseManager.deleteConfirmationDescription')
-          }
+          onCancel={() => setShowDeleteConfirmation(false)}
         />
       )}
 

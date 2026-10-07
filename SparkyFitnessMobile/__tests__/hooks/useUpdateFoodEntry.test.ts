@@ -3,7 +3,11 @@ import Toast from 'react-native-toast-message';
 import { useUpdateFoodEntry } from '../../src/hooks/useUpdateFoodEntry';
 import { updateFoodEntry } from '../../src/services/api/foodEntriesApi';
 import { dailySummaryQueryKey } from '../../src/hooks/queryKeys';
-import { createTestQueryClient, createQueryWrapper, type QueryClient } from './queryTestUtils';
+import {
+  createTestQueryClient,
+  createQueryWrapper,
+  type QueryClient,
+} from './queryTestUtils';
 
 jest.mock('../../src/services/api/foodEntriesApi', () => ({
   updateFoodEntry: jest.fn(),
@@ -13,7 +17,9 @@ jest.mock('../../src/services/LogService', () => ({
   addLog: jest.fn(),
 }));
 
-const mockUpdateFoodEntry = updateFoodEntry as jest.MockedFunction<typeof updateFoodEntry>;
+const mockUpdateFoodEntry = updateFoodEntry as jest.MockedFunction<
+  typeof updateFoodEntry
+>;
 
 describe('useUpdateFoodEntry', () => {
   let queryClient: QueryClient;
@@ -31,8 +37,12 @@ describe('useUpdateFoodEntry', () => {
     mockUpdateFoodEntry.mockResolvedValue({ id: 'entry-1' } as any);
 
     const { result } = renderHook(
-      () => useUpdateFoodEntry({ entryId: 'entry-1', entryDate: '2026-03-01T00:00:00.000Z' }),
-      { wrapper: createQueryWrapper(queryClient) },
+      () =>
+        useUpdateFoodEntry({
+          entryId: 'entry-1',
+          entryDate: '2026-03-01T00:00:00.000Z',
+        }),
+      { wrapper: createQueryWrapper(queryClient) }
     );
 
     await act(async () => {
@@ -40,7 +50,10 @@ describe('useUpdateFoodEntry', () => {
     });
 
     await waitFor(() => {
-      expect(mockUpdateFoodEntry).toHaveBeenCalledWith('entry-1', { quantity: 200, unit: 'g' });
+      expect(mockUpdateFoodEntry).toHaveBeenCalledWith('entry-1', {
+        quantity: 200,
+        unit: 'g',
+      });
     });
   });
 
@@ -49,8 +62,13 @@ describe('useUpdateFoodEntry', () => {
     const onSuccess = jest.fn();
 
     const { result } = renderHook(
-      () => useUpdateFoodEntry({ entryId: 'entry-1', entryDate: '2026-03-01', onSuccess }),
-      { wrapper: createQueryWrapper(queryClient) },
+      () =>
+        useUpdateFoodEntry({
+          entryId: 'entry-1',
+          entryDate: '2026-03-01',
+          onSuccess,
+        }),
+      { wrapper: createQueryWrapper(queryClient) }
     );
 
     await act(async () => {
@@ -67,7 +85,7 @@ describe('useUpdateFoodEntry', () => {
 
     const { result } = renderHook(
       () => useUpdateFoodEntry({ entryId: 'entry-1', entryDate: '2026-03-01' }),
-      { wrapper: createQueryWrapper(queryClient) },
+      { wrapper: createQueryWrapper(queryClient) }
     );
 
     await act(async () => {
@@ -84,11 +102,13 @@ describe('useUpdateFoodEntry', () => {
   });
 
   test('shows permission error on 403', async () => {
-    mockUpdateFoodEntry.mockRejectedValue(new Error('Server error: 403 - Forbidden'));
+    mockUpdateFoodEntry.mockRejectedValue(
+      new Error('Server error: 403 - Forbidden')
+    );
 
     const { result } = renderHook(
       () => useUpdateFoodEntry({ entryId: 'entry-1', entryDate: '2026-03-01' }),
-      { wrapper: createQueryWrapper(queryClient) },
+      { wrapper: createQueryWrapper(queryClient) }
     );
 
     await act(async () => {
@@ -104,12 +124,16 @@ describe('useUpdateFoodEntry', () => {
     });
   });
 
-  test('invalidateCache invalidates dailySummaryQueryKey for entry date', () => {
+  test('invalidateCache invalidates dailySummary and caffeine keys for entry date', () => {
     const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
 
     const { result } = renderHook(
-      () => useUpdateFoodEntry({ entryId: 'entry-1', entryDate: '2026-03-01T00:00:00.000Z' }),
-      { wrapper: createQueryWrapper(queryClient) },
+      () =>
+        useUpdateFoodEntry({
+          entryId: 'entry-1',
+          entryDate: '2026-03-01T00:00:00.000Z',
+        }),
+      { wrapper: createQueryWrapper(queryClient) }
     );
 
     act(() => {
@@ -120,7 +144,17 @@ describe('useUpdateFoodEntry', () => {
       queryKey: dailySummaryQueryKey('2026-03-01'),
       refetchType: 'all',
     });
-    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['caffeineActive', '2026-03-01'],
+      refetchType: 'all',
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['waterIntakeLog', '2026-03-01'],
+      refetchType: 'all',
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['foods'],
+    });
 
     invalidateSpy.mockRestore();
   });
@@ -129,8 +163,12 @@ describe('useUpdateFoodEntry', () => {
     const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
 
     const { result } = renderHook(
-      () => useUpdateFoodEntry({ entryId: 'entry-1', entryDate: '2026-03-01T00:00:00.000Z' }),
-      { wrapper: createQueryWrapper(queryClient) },
+      () =>
+        useUpdateFoodEntry({
+          entryId: 'entry-1',
+          entryDate: '2026-03-01T00:00:00.000Z',
+        }),
+      { wrapper: createQueryWrapper(queryClient) }
     );
 
     act(() => {
@@ -142,10 +180,17 @@ describe('useUpdateFoodEntry', () => {
       refetchType: 'all',
     });
     expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['caffeineActive', '2026-03-01'],
+      refetchType: 'all',
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: dailySummaryQueryKey('2026-03-05'),
       refetchType: 'all',
     });
-    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['caffeineActive', '2026-03-05'],
+      refetchType: 'all',
+    });
 
     invalidateSpy.mockRestore();
   });

@@ -28,6 +28,7 @@ export function loggedMealToFoodEntry(meal: FoodEntryMeal): FoodEntry {
     quantity,
     unit: meal.unit,
     entry_date: meal.entry_date,
+    entry_time: meal.entry_time,
     food_name: meal.name,
     // serving_size === quantity so the consumed-amount scaling
     // (value * quantity / serving_size) returns the meal's own totals.
@@ -50,6 +51,9 @@ export function loggedMealToFoodEntry(meal: FoodEntryMeal): FoodEntry {
     vitamin_c: meal.vitamin_c,
     calcium: meal.calcium,
     iron: meal.iron,
+    caffeine_mg: meal.caffeine_mg,
+    water_ml: meal.water_ml,
+    alcohol_g: meal.alcohol_g,
     glycemic_index: meal.glycemic_index,
     custom_nutrients: meal.custom_nutrients,
   };
@@ -57,7 +61,7 @@ export function loggedMealToFoodEntry(meal: FoodEntryMeal): FoodEntry {
 
 export function collapseLoggedMealComponents(
   foodEntries: FoodEntry[],
-  loggedMeals: FoodEntryMeal[],
+  loggedMeals: FoodEntryMeal[]
 ): FoodEntry[] {
   if (!foodEntries) {
     return [];
@@ -105,7 +109,7 @@ export function collapseLoggedMealComponents(
  */
 export async function resolveCollapsedFoodEntries(
   date: string,
-  rawFoodEntries: FoodEntry[],
+  rawFoodEntries: FoodEntry[]
 ): Promise<FoodEntry[]> {
   if (!rawFoodEntries || !hasLoggedMealComponents(rawFoodEntries)) {
     return rawFoodEntries ?? [];

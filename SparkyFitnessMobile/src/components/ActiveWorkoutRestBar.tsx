@@ -1,12 +1,16 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Pressable, Text, View } from 'react-native';
+import { AppState, Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useCSSVariable } from 'uniwind';
 
 import Icon from './Icon';
-import LiquidGlassSurface, { createLiquidGlassPillStyle } from './LiquidGlassSurface';
+import LiquidGlassSurface, {
+  createLiquidGlassPillStyle,
+} from './LiquidGlassSurface';
+import { fireSelectionHaptic } from '../services/haptics';
 import { useNativeIOSTabsActive } from '../services/nativeTabBarPreference';
+import { playIntervalCue } from '../services/sounds';
 import { formatRestCountdown } from '../utils/workoutSession';
 
 const HIT_SLOP = { top: 8, bottom: 8, left: 8, right: 8 };
@@ -87,134 +91,41 @@ function ActiveWorkoutRestBar({
     '--color-chrome-border',
   ]) as [string, string, string, string];
 
+  const lastCountdownSecRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (state !== 'resting') {
+      lastCountdownSecRef.current = null;
+      return;
+    }
+
+    const remainingSec = Math.ceil(remainingMs / 1000);
+    if (
+      remainingSec >= 1 &&
+      remainingSec <= 3 &&
+      lastCountdownSecRef.current !== remainingSec
+    ) {
+      lastCountdownSecRef.current = remainingSec;
+      // Lead-in beeps are for someone watching the bar. Off screen (the
+      // background rest chime keeps JS running) the single rest-complete
+      // chime is the whole cue, not three beeps and then the chime.
+      if (AppState.currentState === 'active') {
+        playIntervalCue('countdown');
+        fireSelectionHaptic();
+      }
+    }
+  }, [remainingMs, state]);
+
   const paused = state === 'paused';
   const timerColor = paused ? textMuted : accentPrimary;
 
-  const content = state === 'ready' ? (
-    <View className="flex-row items-center py-1">
-      <View className="flex-1 pr-3">
-        <Text
-          numberOfLines={1}
-          className="text-sm font-semibold text-text-primary"
-        >
-          {label}
-        </Text>
-        {nextSetText != null && nextSetText.length > 0 && (
+  const content =
+    state === 'ready' ? (
+      <View className="flex-row items-center py-1">
+        <View className="flex-1 pr-3">
           <Text
             numberOfLines={1}
-            className="text-xs text-text-secondary"
-            style={{ fontVariant: ['tabular-nums'] }}
-          >
-            {t('activeWorkout.rest.targetValue', { defaultValue: 'Target {{value}}', value: nextSetText })}
-          </Text>
-        )}
-      </View>
-      <Pressable
-        onPress={onCompleteSet}
-        hitSlop={HIT_SLOP}
-        accessibilityRole="button"
-        accessibilityLabel={t('activeWorkout.rest.completeSet', { defaultValue: 'Complete set' })}
-        className="flex-row items-center rounded-full px-4 py-2.5"
-        style={{ backgroundColor: accentPrimary, gap: 6 }}
-      >
-        <Icon name="checkmark" size={16} color="#ffffff" weight="bold" />
-        <Text
-          className="text-sm font-semibold"
-          style={{ color: '#ffffff' }}
-        >
-          {t('activeWorkout.rest.completeSetTitle', { defaultValue: 'Complete Set' })}
-        </Text>
-      </Pressable>
-    </View>
-  ) : (
-    <>
-      <View
-        className="h-1 rounded-full overflow-hidden mb-2"
-        style={{ backgroundColor: trackColor }}
-      >
-        <View
-          testID="rest-progress-fill"
-          className="h-full rounded-full"
-          style={{
-            width: `${progress * 100}%`,
-            backgroundColor: timerColor,
-          }}
-        />
-      </View>
-
-      <View className="flex-row items-center">
-        <View className="flex-1 flex-row items-center" style={{ gap: 7 }}>
-          <Pressable
-            onPress={paused ? onResume : onPause}
-            hitSlop={HIT_SLOP}
-            accessibilityRole="button"
-            accessibilityLabel={paused ? t('activeWorkout.rest.resume', { defaultValue: 'Resume rest' }) : t('activeWorkout.rest.pause', { defaultValue: 'Pause rest' })}
-            className="h-9 w-9 rounded-full bg-raised items-center justify-center"
-          >
-            <Icon
-              name={paused ? 'play' : 'pause'}
-              size={18}
-              color={accentPrimary}
-              weight="bold"
-            />
-          </Pressable>
-          <Pressable
-            onPress={() => onAdjust(-15)}
-            accessibilityRole="button"
-            accessibilityLabel={t('activeWorkout.rest.shorten', { defaultValue: 'Shorten rest by 15 seconds' })}
-            className="rounded-full bg-raised px-3 py-2"
-          >
-            <Text
-              className="text-sm font-semibold text-text-primary"
-              style={{ fontVariant: ['tabular-nums'] }}
-            >
-              {t('activeWorkout.rest.subtractSecondsShort', { defaultValue: '−{{seconds}}s', seconds: 15 })}
-            </Text>
-          </Pressable>
-        </View>
-
-        <Text
-          className="px-2 text-3xl font-bold"
-          style={{ color: timerColor, fontVariant: ['tabular-nums'] }}
-        >
-          {formatRestCountdown(remainingMs)}
-        </Text>
-
-        <View
-          className="flex-1 flex-row items-center justify-end"
-          style={{ gap: 7 }}
-        >
-          <Pressable
-            onPress={() => onAdjust(15)}
-            accessibilityRole="button"
-            accessibilityLabel={t('activeWorkout.rest.extend', { defaultValue: 'Extend rest by 15 seconds' })}
-            className="rounded-full bg-raised px-3 py-2"
-          >
-            <Text
-              className="text-sm font-semibold text-text-primary"
-              style={{ fontVariant: ['tabular-nums'] }}
-            >
-              {t('activeWorkout.rest.addSecondsShort', { defaultValue: '+{{seconds}}s', seconds: 15 })}
-            </Text>
-          </Pressable>
-          <Pressable
-            onPress={onSkip}
-            hitSlop={HIT_SLOP}
-            accessibilityRole="button"
-            accessibilityLabel={t('activeWorkout.rest.skip', { defaultValue: 'Skip rest' })}
-            className="h-9 w-9 rounded-full items-center justify-center"
-            style={{ backgroundColor: accentPrimary }}
-          >
-            <Icon name="skip-forward" size={16} color="#ffffff" weight="bold" />
-          </Pressable>
-        </View>
-      </View>
-
-      {label.length > 0 && (
-        <View className="items-center mt-1.5">
-          <Text
-            numberOfLines={1}
-            className="text-sm font-medium text-text-primary"
+            className="text-sm font-semibold text-text-primary"
           >
             {label}
           </Text>
@@ -224,13 +135,164 @@ function ActiveWorkoutRestBar({
               className="text-xs text-text-secondary"
               style={{ fontVariant: ['tabular-nums'] }}
             >
-              {t('activeWorkout.rest.targetValue', { defaultValue: 'Target {{value}}', value: nextSetText })}
+              {t('activeWorkout.rest.targetValue', {
+                defaultValue: 'Target {{value}}',
+                value: nextSetText,
+              })}
             </Text>
           )}
         </View>
-      )}
-    </>
-  );
+        <Pressable
+          onPress={onCompleteSet}
+          hitSlop={HIT_SLOP}
+          accessibilityRole="button"
+          accessibilityLabel={t('activeWorkout.rest.completeSet', {
+            defaultValue: 'Complete set',
+          })}
+          className="flex-row items-center rounded-full px-4 py-2.5"
+          style={{ backgroundColor: accentPrimary, gap: 6 }}
+        >
+          <Icon name="checkmark" size={16} color="#ffffff" weight="bold" />
+          <Text className="text-sm font-semibold" style={{ color: '#ffffff' }}>
+            {t('activeWorkout.rest.completeSetTitle', {
+              defaultValue: 'Complete Set',
+            })}
+          </Text>
+        </Pressable>
+      </View>
+    ) : (
+      <>
+        <View
+          className="h-1 rounded-full overflow-hidden mb-2"
+          style={{ backgroundColor: trackColor }}
+        >
+          <View
+            testID="rest-progress-fill"
+            className="h-full rounded-full"
+            style={{
+              width: `${progress * 100}%`,
+              backgroundColor: timerColor,
+            }}
+          />
+        </View>
+
+        <View className="flex-row items-center">
+          <View className="flex-1 flex-row items-center" style={{ gap: 7 }}>
+            <Pressable
+              onPress={paused ? onResume : onPause}
+              hitSlop={HIT_SLOP}
+              accessibilityRole="button"
+              accessibilityLabel={
+                paused
+                  ? t('activeWorkout.rest.resume', {
+                      defaultValue: 'Resume rest',
+                    })
+                  : t('activeWorkout.rest.pause', {
+                      defaultValue: 'Pause rest',
+                    })
+              }
+              className="h-9 w-9 rounded-full bg-raised items-center justify-center"
+            >
+              <Icon
+                name={paused ? 'play' : 'pause'}
+                size={18}
+                color={accentPrimary}
+                weight="bold"
+              />
+            </Pressable>
+            <Pressable
+              onPress={() => onAdjust(-15)}
+              accessibilityRole="button"
+              accessibilityLabel={t('activeWorkout.rest.shorten', {
+                defaultValue: 'Shorten rest by 15 seconds',
+              })}
+              className="rounded-full bg-raised px-3 py-2"
+            >
+              <Text
+                className="text-sm font-semibold text-text-primary"
+                style={{ fontVariant: ['tabular-nums'] }}
+              >
+                {t('activeWorkout.rest.subtractSecondsShort', {
+                  defaultValue: '−{{seconds}}s',
+                  seconds: 15,
+                })}
+              </Text>
+            </Pressable>
+          </View>
+
+          <Text
+            className="px-2 text-3xl font-bold"
+            style={{ color: timerColor, fontVariant: ['tabular-nums'] }}
+          >
+            {formatRestCountdown(remainingMs)}
+          </Text>
+
+          <View
+            className="flex-1 flex-row items-center justify-end"
+            style={{ gap: 7 }}
+          >
+            <Pressable
+              onPress={() => onAdjust(15)}
+              accessibilityRole="button"
+              accessibilityLabel={t('activeWorkout.rest.extend', {
+                defaultValue: 'Extend rest by 15 seconds',
+              })}
+              className="rounded-full bg-raised px-3 py-2"
+            >
+              <Text
+                className="text-sm font-semibold text-text-primary"
+                style={{ fontVariant: ['tabular-nums'] }}
+              >
+                {t('activeWorkout.rest.addSecondsShort', {
+                  defaultValue: '+{{seconds}}s',
+                  seconds: 15,
+                })}
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={onSkip}
+              hitSlop={HIT_SLOP}
+              accessibilityRole="button"
+              accessibilityLabel={t('activeWorkout.rest.skip', {
+                defaultValue: 'Skip rest',
+              })}
+              className="h-9 w-9 rounded-full items-center justify-center"
+              style={{ backgroundColor: accentPrimary }}
+            >
+              <Icon
+                name="skip-forward"
+                size={16}
+                color="#ffffff"
+                weight="bold"
+              />
+            </Pressable>
+          </View>
+        </View>
+
+        {label.length > 0 && (
+          <View className="items-center mt-1.5">
+            <Text
+              numberOfLines={1}
+              className="text-sm font-medium text-text-primary"
+            >
+              {label}
+            </Text>
+            {nextSetText != null && nextSetText.length > 0 && (
+              <Text
+                numberOfLines={1}
+                className="text-xs text-text-secondary"
+                style={{ fontVariant: ['tabular-nums'] }}
+              >
+                {t('activeWorkout.rest.targetValue', {
+                  defaultValue: 'Target {{value}}',
+                  value: nextSetText,
+                })}
+              </Text>
+            )}
+          </View>
+        )}
+      </>
+    );
 
   // Nested pressables claim their own touches, so this only sees taps on the
   // bar's dead space (label, countdown, gaps). accessible={false} keeps the

@@ -652,7 +652,7 @@ describe('chatService', () => {
       expect(log).toHaveBeenCalledWith(
         'info',
         expect.stringMatching(
-          /Loaded 21\/38 active tools for chatbot \(profile=core/
+          /Loaded 33\/54 active tools for chatbot \(profile=core/
         )
       );
       // The core profile is the mitigation, so no context-window warning.
@@ -734,7 +734,7 @@ describe('chatService', () => {
       expect(log).toHaveBeenCalledWith(
         'info',
         expect.stringMatching(
-          /Loaded 38\/38 active tools for chatbot \(profile=full/
+          /Loaded 54\/54 active tools for chatbot \(profile=full/
         )
       );
       // Ollama + full profile is the risky combo, so warn about the 4096 default.
@@ -767,7 +767,7 @@ describe('chatService', () => {
       expect(log).toHaveBeenCalledWith(
         'info',
         expect.stringMatching(
-          /Loaded 38\/38 active tools for chatbot \(profile=full/
+          /Loaded 54\/54 active tools for chatbot \(profile=full/
         )
       );
     });
@@ -795,7 +795,7 @@ describe('chatService', () => {
       expect(log).toHaveBeenCalledWith(
         'info',
         expect.stringMatching(
-          /Loaded 38\/38 active tools for chatbot \(profile=full/
+          /Loaded 54\/54 active tools for chatbot \(profile=full/
         )
       );
       // The context-window warning is Ollama-only; cloud providers never see it.
@@ -1505,6 +1505,69 @@ describe('chatService', () => {
       expect(textParts(userMessages[0].content).length).toBeGreaterThan(0);
       // Current turn: image preserved for live vision analysis.
       expect(nonTextParts(userMessages[1].content)).toHaveLength(1);
+      expect(
+        (nonTextParts(userMessages[1].content)[0] as { mediaType?: string })
+          .mediaType
+      ).toBe('image/png');
+    });
+
+    it('maps remote image URLs with detected media types based on extension', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = vi
+        .fn()
+        .mockImplementation(async (url: string | URL | Request) => {
+          const urlStr = typeof url === 'string' ? url : url.toString();
+          if (urlStr.includes('example.com/meal.webp')) {
+            return new Response(new Uint8Array([0x52, 0x49, 0x46, 0x46]), {
+              status: 200,
+              headers: { 'content-type': 'image/webp' },
+            });
+          }
+          return originalFetch(url as RequestInfo, undefined);
+        });
+
+      try {
+        const model = streamModel([
+          { type: 'stream-start', warnings: [] },
+          { type: 'text-start', id: 't1' },
+          { type: 'text-delta', id: 't1', delta: 'ok' },
+          { type: 'text-end', id: 't1' },
+          {
+            type: 'finish',
+            finishReason: { unified: 'stop', raw: undefined },
+            usage,
+          },
+        ]);
+
+        const { stream } = await chatService.processChatMessageStream(
+          [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: 'Analyze this photo' },
+                {
+                  type: 'image_url',
+                  image_url: { url: 'https://example.com/meal.webp' },
+                },
+              ],
+            },
+          ],
+          'svc-1',
+          activeUserId,
+          actorUserId
+        );
+        await drainStream(stream);
+
+        const prompt = model.doStreamCalls[0].prompt;
+        const userMessage = prompt.find((m) => m.role === 'user');
+        const filePart = (
+          userMessage?.content as Array<{ type: string; mediaType?: string }>
+        ).find((p) => p.type === 'file');
+        expect(filePart).toBeDefined();
+        expect(filePart?.mediaType).toBe('image/webp');
+      } finally {
+        global.fetch = originalFetch;
+      }
     });
 
     it('trims old history to a token budget but always keeps the current turn', async () => {
@@ -1597,6 +1660,229 @@ describe('chatService', () => {
         totalTokens: 15,
         cachedInputTokens: undefined,
       });
+    });
+  });
+
+  describe('createPerplexityFetch', () => {
+    it('rewrites /chat/completions to /responses and populates input from messages', async () => {
+      let capturedUrl = '';
+      let capturedBody: Record<string, unknown> = {};
+
+      const mockBaseFetch = vi.fn(async (url: string, init?: RequestInit) => {
+        capturedUrl = url;
+        if (typeof init?.body === 'string') {
+          capturedBody = JSON.parse(init.body);
+        }
+        return new Response(
+          JSON.stringify({ output_text: 'Hello from Sonar' }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      });
+
+      const perplexityFetch = chatService.createPerplexityFetch(
+        mockBaseFetch as typeof fetch
+      );
+      const messages = [
+        { role: 'system', content: 'You are helpful.' },
+        { role: 'user', content: 'What is protein?' },
+      ];
+      const res = await perplexityFetch(
+        'https://api.perplexity.ai/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'sonar',
+            messages,
+          }),
+        }
+      );
+
+      expect(capturedUrl).toBe('https://api.perplexity.ai/v1/responses');
+      expect(capturedBody.input).toEqual(messages);
+      expect(capturedBody.messages).toBeUndefined();
+      expect(capturedBody.preset).toBe('fast');
+      expect(capturedBody.model).toBeUndefined();
+      expect(res.ok).toBe(true);
+
+      const json = await res.json();
+      expect(json.choices[0].message.content).toBe('Hello from Sonar');
+    });
+
+    it('converts multi-part messages with image_url and text to input_image and input_text', async () => {
+      let capturedBody: Record<string, unknown> = {};
+
+      const mockBaseFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+        capturedBody = JSON.parse((init?.body as string) || '{}');
+        return new Response(
+          JSON.stringify({
+            output_text: 'I see a banana.',
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      });
+
+      const perplexityFetch = chatService.createPerplexityFetch(
+        mockBaseFetch as typeof fetch
+      );
+      const res = await perplexityFetch(
+        'https://api.perplexity.ai/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'sonar',
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'image_url',
+                    image_url: { url: 'https://example.com/food.jpg' },
+                  },
+                  {
+                    type: 'text',
+                    text: 'Identify this food',
+                  },
+                ],
+              },
+            ],
+          }),
+        }
+      );
+
+      expect(capturedBody.messages).toBeUndefined();
+      expect(capturedBody.input).toEqual([
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'input_image',
+              image_url: 'https://example.com/food.jpg',
+            },
+            {
+              type: 'input_text',
+              text: 'Identify this food',
+            },
+          ],
+        },
+      ]);
+      expect(res.ok).toBe(true);
+    });
+
+    it('extracts text from nested output message content blocks in JSON responses', async () => {
+      const mockBaseFetch = vi.fn(async () => {
+        return new Response(
+          JSON.stringify({
+            output: [
+              {
+                type: 'message',
+                content: [
+                  {
+                    type: 'output_text',
+                    text: 'Extracted message from output block',
+                  },
+                ],
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      });
+
+      const perplexityFetch = chatService.createPerplexityFetch(
+        mockBaseFetch as typeof fetch
+      );
+      const res = await perplexityFetch(
+        'https://api.perplexity.ai/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'sonar',
+            messages: [{ role: 'user', content: 'Hi' }],
+          }),
+        }
+      );
+
+      expect(res.ok).toBe(true);
+      const json = await res.json();
+      expect(json.choices[0].message.content).toBe(
+        'Extracted message from output block'
+      );
+    });
+
+    it('transforms SSE output_text and function_call events into OpenAI chunks with stable indices', async () => {
+      const ssePayload = [
+        'data: {"type":"response.output_text.delta","delta":"Hello "}\n\n',
+        'data: {"type":"response.function_call_arguments.delta","call_id":"call_1","name":"tool_a","delta":"{\\"a\\":1}"}\n\n',
+        'data: {"type":"response.function_call_arguments.delta","call_id":"call_2","name":"tool_b","delta":"{\\"b\\":2}"}\n\n',
+        'data: {"type":"response.function_call_arguments.delta","call_id":"call_1","delta":""}\n\n',
+        'data: {"type":"response.completed","response":{"usage":{"input_tokens":10,"output_tokens":5}}}\n\n',
+      ].join('');
+
+      const mockBaseFetch = vi.fn(async () => {
+        return new Response(ssePayload, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      });
+
+      const perplexityFetch = chatService.createPerplexityFetch(
+        mockBaseFetch as typeof fetch
+      );
+      const res = await perplexityFetch(
+        'https://api.perplexity.ai/v1/chat/completions',
+        { method: 'POST' }
+      );
+
+      expect(res.ok).toBe(true);
+      const text = await res.text();
+      expect(text).toContain('Hello ');
+      expect(text).toContain('"id":"call_1"');
+      expect(text).toContain('"index":0');
+      expect(text).toContain('"id":"call_2"');
+      expect(text).toContain('"index":1');
+      expect(text).toContain('"finish_reason":"tool_calls"');
+      expect(text).toContain('[DONE]');
+    });
+
+    it('ignores plain message output_item.added events from triggering tool calls', async () => {
+      const ssePayload = [
+        'data: {"type":"response.output_item.added","item":{"type":"message","id":"msg_1"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"Just text"}\n\n',
+        'data: {"type":"response.completed"}\n\n',
+      ].join('');
+
+      const mockBaseFetch = vi.fn(async () => {
+        return new Response(ssePayload, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' },
+        });
+      });
+
+      const perplexityFetch = chatService.createPerplexityFetch(
+        mockBaseFetch as typeof fetch
+      );
+      const res = await perplexityFetch(
+        'https://api.perplexity.ai/v1/chat/completions',
+        { method: 'POST' }
+      );
+
+      expect(res.ok).toBe(true);
+      const text = await res.text();
+      expect(text).toContain('Just text');
+      expect(text).not.toContain('tool_calls');
+      expect(text).toContain('"finish_reason":"stop"');
     });
   });
 });

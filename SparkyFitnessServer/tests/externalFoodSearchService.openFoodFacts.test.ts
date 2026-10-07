@@ -42,7 +42,10 @@ vi.mock('../integrations/swissfood/swissFoodService.js', () => ({
 
 import externalProviderService from '../services/externalProviderService.js';
 import preferenceService from '../services/preferenceService.js';
-import { searchOpenFoodFacts } from '../integrations/openfoodfacts/openFoodFactsService.js';
+import {
+  searchOpenFoodFacts,
+  mapOpenFoodFactsProduct,
+} from '../integrations/openfoodfacts/openFoodFactsService.js';
 import {
   resolveOpenFoodFactsProviderId,
   searchProviderFoods,
@@ -73,10 +76,23 @@ describe('resolveOpenFoodFactsProviderId', () => {
       base_url: 'http://sparkyfitness-foodfacts:8080',
     });
 
-    const id = await resolveOpenFoodFactsProviderId(USER_ID, PROVIDER_ID);
+    const provider = await resolveOpenFoodFactsProviderId(USER_ID, PROVIDER_ID);
 
-    expect(id).toBe(PROVIDER_ID);
+    expect(provider).toEqual({ id: PROVIDER_ID, scope: 'personal' });
     expect(mockGetActiveId).not.toHaveBeenCalled();
+  });
+
+  it('marks an explicit public provider as global', async () => {
+    // @ts-expect-error test doubles only need the fields the code under test reads
+    mockGetDetails.mockResolvedValue({
+      is_active: true,
+      is_public: true,
+      provider_type: 'openfoodfacts',
+    });
+
+    const provider = await resolveOpenFoodFactsProviderId(USER_ID, PROVIDER_ID);
+
+    expect(provider).toEqual({ id: PROVIDER_ID, scope: 'global' });
   });
 
   it('rejects an explicit providerId that is inactive', async () => {
@@ -86,9 +102,9 @@ describe('resolveOpenFoodFactsProviderId', () => {
       provider_type: 'openfoodfacts',
     });
 
-    const id = await resolveOpenFoodFactsProviderId(USER_ID, PROVIDER_ID);
+    const provider = await resolveOpenFoodFactsProviderId(USER_ID, PROVIDER_ID);
 
-    expect(id).toBe(null);
+    expect(provider).toBe(null);
   });
 
   it('rejects an explicit providerId of the wrong provider type', async () => {
@@ -98,24 +114,29 @@ describe('resolveOpenFoodFactsProviderId', () => {
       provider_type: 'fatsecret',
     });
 
-    const id = await resolveOpenFoodFactsProviderId(USER_ID, PROVIDER_ID);
+    const provider = await resolveOpenFoodFactsProviderId(USER_ID, PROVIDER_ID);
 
-    expect(id).toBe(null);
+    expect(provider).toBe(null);
   });
 
   it('falls back to getActiveOpenFoodFactsProviderId when no providerId is given', async () => {
     mockGetActiveId.mockResolvedValue('active-id');
 
-    const id = await resolveOpenFoodFactsProviderId(USER_ID, undefined);
+    const provider = await resolveOpenFoodFactsProviderId(USER_ID, undefined);
 
-    expect(id).toBe('active-id');
+    expect(provider).toEqual({ id: 'active-id', scope: 'personal' });
     expect(mockGetDetails).not.toHaveBeenCalled();
   });
 });
 
 describe('searchProviderFoods OpenFoodFacts pagination', () => {
   it('forwards the requested page size to the OpenFoodFacts search adapter', async () => {
-    mockGetActiveId.mockResolvedValue(PROVIDER_ID);
+    // @ts-expect-error test doubles only need the fields the code under test reads
+    mockGetDetails.mockResolvedValue({
+      is_active: true,
+      is_public: true,
+      provider_type: 'openfoodfacts',
+    });
     vi.mocked(preferenceService.getUserPreferences).mockResolvedValue({
       language: 'de',
     });
@@ -138,6 +159,7 @@ describe('searchProviderFoods OpenFoodFacts pagination', () => {
     await searchProviderFoods(USER_ID, 'openfoodfacts', 'nutella', {
       page: 3,
       pageSize: 7,
+      providerId: PROVIDER_ID,
     });
 
     expect(searchOpenFoodFacts).toHaveBeenCalledWith(
@@ -146,7 +168,55 @@ describe('searchProviderFoods OpenFoodFacts pagination', () => {
       'de',
       USER_ID,
       PROVIDER_ID,
-      7
+      7,
+      'global'
     );
+  });
+});
+
+describe('searchProviderFoods ranking', () => {
+  it('ranks a plain whole food ahead of a branded product for the same query', async () => {
+    vi.mocked(preferenceService.getUserPreferences).mockResolvedValue({
+      language: 'en',
+    });
+    // OpenFoodFacts itself returns the branded item first -- this is the raw,
+    // unranked provider order that reaches the UI today.
+    vi.mocked(searchOpenFoodFacts).mockResolvedValue({
+      products: [
+        {
+          code: '1',
+          product_name: 'Chicken Breast (Value Pack)',
+          brands: 'Acme Foods',
+          nutriments: {},
+        },
+        {
+          code: '2',
+          product_name: 'Chicken Breast',
+          brands: '',
+          nutriments: {},
+        },
+      ],
+      pagination: { page: 1, pageSize: 20, totalCount: 2, hasMore: false },
+    });
+    vi.mocked(mapOpenFoodFactsProduct).mockImplementation(
+      // @ts-expect-error test double only needs the fields the code under test reads
+      (p: { product_name?: string; brands?: string }) => ({
+        name: p.product_name ?? '',
+        brand: p.brands || '',
+        provider_type: 'openfoodfacts',
+      })
+    );
+
+    const result = await searchProviderFoods(
+      USER_ID,
+      'openfoodfacts',
+      'chicken breast',
+      {}
+    );
+
+    expect(result.foods.map((f) => (f as { name: string }).name)).toEqual([
+      'Chicken Breast',
+      'Chicken Breast (Value Pack)',
+    ]);
   });
 });

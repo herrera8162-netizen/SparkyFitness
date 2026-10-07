@@ -4,12 +4,16 @@ import { getActiveServerConfig, proxyHeadersToRecord } from '../storage';
 import { getAuthHeaders, notifySessionExpired } from './authService';
 import { addLog } from '../LogService';
 import { UPLOAD_TIMEOUT_MS, fetchWithTimeout } from '../../utils/concurrency';
-import type { Exercise, SuggestedExercisesResponse } from '../../types/exercise';
+import type {
+  Exercise,
+  SuggestedExercisesResponse,
+} from '../../types/exercise';
 import { isExerciseModality } from '@workspace/shared';
 import type {
+  ExerciseAlternativeMode,
+  ExerciseAlternativesResponse,
   ExerciseHistoryResponse,
   ExerciseModality,
-  ExerciseSessionResponse,
   ExerciseStatsResponse,
   CreatePresetSessionRequest,
   UpdatePresetSessionRequest,
@@ -18,18 +22,20 @@ import type {
   Pagination,
 } from '@workspace/shared';
 
-export const fetchExerciseEntries = async (date: string): Promise<ExerciseSessionResponse[]> => {
-  return apiFetch<ExerciseSessionResponse[]>({
-    endpoint: `/api/v2/exercise-entries/by-date?selectedDate=${encodeURIComponent(date)}`,
+/** The user's own previously logged workout locations, most recent first. */
+export const fetchWorkoutLocations = async (): Promise<string[]> => {
+  const data = await apiFetch<string[]>({
+    endpoint: '/api/exercise-preset-entries/locations',
     serviceName: 'Exercise API',
-    operation: 'fetch exercise entries',
+    operation: 'fetch workout locations',
   });
+  return Array.isArray(data) ? data : [];
 };
 
 export const fetchExerciseHistory = async (
   page: number = 1,
   pageSize: number = 20,
-  exerciseId?: string,
+  exerciseId?: string
 ): Promise<ExerciseHistoryResponse> => {
   const exerciseFilter = exerciseId
     ? `&exerciseId=${encodeURIComponent(exerciseId)}`
@@ -44,7 +50,7 @@ export const fetchExerciseHistory = async (
 export const fetchExerciseStats = async (
   exerciseId: string,
   excludePresetEntryId?: string,
-  presetId?: number,
+  presetId?: number
 ): Promise<ExerciseStatsResponse> => {
   // The live active-workout card passes its session id so today's in-progress
   // (or pre-persisted planned) sets are excluded from the historical baseline.
@@ -52,7 +58,8 @@ export const fetchExerciseStats = async (
   // recentSessions to that preset's own history instead of this exercise's
   // history from every preset/freeform workout.
   const params = new URLSearchParams();
-  if (excludePresetEntryId) params.set('excludePresetEntryId', excludePresetEntryId);
+  if (excludePresetEntryId)
+    params.set('excludePresetEntryId', excludePresetEntryId);
   if (presetId != null) params.set('presetId', String(presetId));
   const query = params.toString() ? `?${params.toString()}` : '';
   return apiFetch<ExerciseStatsResponse>({
@@ -62,9 +69,27 @@ export const fetchExerciseStats = async (
   });
 };
 
+/**
+ * Ranked substitutes for an exercise (issue #1560). `excludeIds` keeps
+ * exercises already in the workout out of the list.
+ */
+export const fetchExerciseAlternatives = async (
+  exerciseId: string,
+  mode: ExerciseAlternativeMode,
+  excludeIds: readonly string[] = []
+): Promise<ExerciseAlternativesResponse> => {
+  const params = new URLSearchParams({ mode });
+  if (excludeIds.length > 0) params.set('excludeIds', excludeIds.join(','));
+  return apiFetch<ExerciseAlternativesResponse>({
+    endpoint: `/api/v2/exercises/${encodeURIComponent(exerciseId)}/alternatives?${params.toString()}`,
+    serviceName: 'Exercise API',
+    operation: 'fetch exercise alternatives',
+  });
+};
+
 /** Returns recent + popular exercises. */
 export const fetchSuggestedExercises = async (
-  limit: number = 10,
+  limit: number = 10
 ): Promise<SuggestedExercisesResponse> => {
   const response = await apiFetch<{
     recentExercises: Record<string, unknown>[];
@@ -80,7 +105,9 @@ export const fetchSuggestedExercises = async (
   };
 };
 
-export const searchExercises = async (searchTerm: string): Promise<Exercise[]> => {
+export const searchExercises = async (
+  searchTerm: string
+): Promise<Exercise[]> => {
   const response = await apiFetch<Record<string, unknown>[]>({
     endpoint: `/api/exercises/search?searchTerm=${encodeURIComponent(searchTerm)}`,
     serviceName: 'Exercise API',
@@ -127,7 +154,10 @@ export const fetchExercisesPage = async ({
 };
 
 export const fetchExercisesCount = async (): Promise<number> => {
-  const response = await apiFetch<{ exercises: Exercise[]; totalCount: number }>({
+  const response = await apiFetch<{
+    exercises: Exercise[];
+    totalCount: number;
+  }>({
     endpoint: `/api/exercises/?currentPage=1&itemsPerPage=1`,
     serviceName: 'Exercise API',
     operation: 'fetch exercises count',
@@ -150,6 +180,8 @@ export interface CreateExercisePayload {
   level?: string;
   force?: string;
   mechanic?: string;
+  /** Image references carried over when duplicating an exercise. */
+  images?: string[];
 }
 
 export interface UpdateExercisePayload {
@@ -219,7 +251,9 @@ const parseJsonArray = (raw: unknown): string[] => {
   return [];
 };
 
-export const transformExerciseRow = (row: Record<string, unknown>): Exercise => ({
+export const transformExerciseRow = (
+  row: Record<string, unknown>
+): Exercise => ({
   id: String(row.id),
   name: String(row.name),
   category: (row.category as string | null) ?? null,
@@ -269,7 +303,9 @@ export const fetchExerciseById = async (id: string): Promise<Exercise> => {
  * fetch with FormData, mirroring the auth/proxy header injection pattern in
  * {@link healthDataApi}.
  */
-export async function createExercise(payload: CreateExercisePayload): Promise<Exercise> {
+export async function createExercise(
+  payload: CreateExercisePayload
+): Promise<Exercise> {
   const config = await getActiveServerConfig();
   if (!config) throw new Error('Server configuration not found.');
   const baseUrl = normalizeUrl(config.url);
@@ -284,15 +320,19 @@ export async function createExercise(payload: CreateExercisePayload): Promise<Ex
   const form = new FormData();
   form.append('exerciseData', JSON.stringify(exerciseData));
 
-  const response = await fetchWithTimeout(`${baseUrl}/api/exercises/`, {
-    method: 'POST',
-    headers: {
-      ...proxyHeadersToRecord(config.proxyHeaders),
-      ...getAuthHeaders(config),
-      // Do NOT set Content-Type — fetch will add the multipart boundary.
+  const response = await fetchWithTimeout(
+    `${baseUrl}/api/exercises/`,
+    {
+      method: 'POST',
+      headers: {
+        ...proxyHeadersToRecord(config.proxyHeaders),
+        ...getAuthHeaders(config),
+        // Do NOT set Content-Type — fetch will add the multipart boundary.
+      },
+      body: form,
     },
-    body: form,
-  }, UPLOAD_TIMEOUT_MS);
+    UPLOAD_TIMEOUT_MS
+  );
 
   if (!response.ok) {
     if (response.status === 401 && config.authType === 'session') {
@@ -300,7 +340,11 @@ export async function createExercise(payload: CreateExercisePayload): Promise<Ex
     }
     const text = await response.text();
     addLog('[Exercise API] Failed to create exercise', 'ERROR', [text]);
-    throw new ApiError(`Server error: ${response.status} - ${text}`, response.status, text);
+    throw new ApiError(
+      `Server error: ${response.status} - ${text}`,
+      response.status,
+      text
+    );
   }
 
   const raw = await response.json();
@@ -312,7 +356,7 @@ export async function createExercise(payload: CreateExercisePayload): Promise<Ex
 }
 
 export const createWorkout = async (
-  payload: CreatePresetSessionRequest,
+  payload: CreatePresetSessionRequest
 ): Promise<PresetSessionResponse> => {
   return apiFetch<PresetSessionResponse>({
     endpoint: '/api/exercise-preset-entries/',
@@ -349,7 +393,7 @@ export interface CreateExerciseEntryPayload {
 }
 
 export const createExerciseEntry = async (
-  payload: CreateExerciseEntryPayload,
+  payload: CreateExerciseEntryPayload
 ): Promise<ExerciseEntryResponse> => {
   return apiFetch<ExerciseEntryResponse>({
     endpoint: '/api/exercise-entries/',
@@ -362,7 +406,7 @@ export const createExerciseEntry = async (
 
 export const updateExerciseEntry = async (
   id: string,
-  payload: CreateExerciseEntryPayload,
+  payload: CreateExerciseEntryPayload
 ): Promise<ExerciseEntryResponse> => {
   return apiFetch<ExerciseEntryResponse>({
     endpoint: `/api/exercise-entries/${id}`,
@@ -373,7 +417,9 @@ export const updateExerciseEntry = async (
   });
 };
 
-export const getWorkout = async (id: string): Promise<PresetSessionResponse> => {
+export const getWorkout = async (
+  id: string
+): Promise<PresetSessionResponse> => {
   return apiFetch<PresetSessionResponse>({
     endpoint: `/api/exercise-preset-entries/${id}`,
     serviceName: 'Exercise API',
@@ -383,7 +429,7 @@ export const getWorkout = async (id: string): Promise<PresetSessionResponse> => 
 
 export const updateWorkout = async (
   id: string,
-  payload: UpdatePresetSessionRequest,
+  payload: UpdatePresetSessionRequest
 ): Promise<PresetSessionResponse> => {
   return apiFetch<PresetSessionResponse>({
     endpoint: `/api/exercise-preset-entries/${id}`,
@@ -400,6 +446,40 @@ export const deleteWorkout = async (id: string): Promise<void> => {
     serviceName: 'Exercise API',
     operation: 'delete workout',
     method: 'DELETE',
+  });
+};
+
+/** One heart-rate reading, as captured on a paired Apple Watch. */
+export interface HeartRateSamplePayload {
+  /** ISO 8601 instant. */
+  t: string;
+  bpm: number;
+}
+
+/**
+ * Fills in what a paired Apple Watch measured during a live workout on an
+ * exercise entry that already exists: avg/max heart rate, the HR-zone
+ * breakdown, and active energy. See `useWatchWorkoutBridge`.
+ *
+ * `activeEnergyKcal` replaces the server's duration-and-sets calorie
+ * estimate for that entry. Both fields are optional individually, but the
+ * server rejects a body carrying neither.
+ */
+export const attachExerciseEntryWatchTelemetry = async (
+  exerciseEntryId: string,
+  telemetry: {
+    hrSamples?: HeartRateSamplePayload[];
+    activeEnergyKcal?: number;
+    /** Minutes the watch spent on this exercise. Replaces a zero duration. */
+    durationMinutes?: number;
+  }
+): Promise<void> => {
+  return apiFetch<void>({
+    endpoint: `/api/exercise-entries/${exerciseEntryId}/watch-telemetry`,
+    serviceName: 'Exercise API',
+    operation: 'attach exercise entry watch telemetry',
+    method: 'POST',
+    body: telemetry,
   });
 };
 
@@ -420,7 +500,7 @@ export const deleteExerciseEntry = async (id: string): Promise<void> => {
  */
 export async function updateExercise(
   id: string,
-  payload: UpdateExercisePayload,
+  payload: UpdateExercisePayload
 ): Promise<Exercise> {
   const config = await getActiveServerConfig();
   if (!config) throw new Error('Server configuration not found.');
@@ -429,14 +509,18 @@ export async function updateExercise(
   const form = new FormData();
   form.append('exerciseData', JSON.stringify(payload));
 
-  const response = await fetchWithTimeout(`${baseUrl}/api/exercises/${id}`, {
-    method: 'PUT',
-    headers: {
-      ...proxyHeadersToRecord(config.proxyHeaders),
-      ...getAuthHeaders(config),
+  const response = await fetchWithTimeout(
+    `${baseUrl}/api/exercises/${id}`,
+    {
+      method: 'PUT',
+      headers: {
+        ...proxyHeadersToRecord(config.proxyHeaders),
+        ...getAuthHeaders(config),
+      },
+      body: form,
     },
-    body: form,
-  }, UPLOAD_TIMEOUT_MS);
+    UPLOAD_TIMEOUT_MS
+  );
 
   if (!response.ok) {
     if (response.status === 401 && config.authType === 'session') {
@@ -444,7 +528,11 @@ export async function updateExercise(
     }
     const text = await response.text();
     addLog('[Exercise API] Failed to update exercise', 'ERROR', [text]);
-    throw new ApiError(`Server error: ${response.status} - ${text}`, response.status, text);
+    throw new ApiError(
+      `Server error: ${response.status} - ${text}`,
+      response.status,
+      text
+    );
   }
 
   const raw = await response.json();
@@ -452,9 +540,50 @@ export async function updateExercise(
   return transformExerciseRow(raw);
 }
 
-export const deleteExerciseFromLibrary = async (id: string): Promise<void> => {
-  return apiFetch<void>({
-    endpoint: `/api/exercises/${id}`,
+/**
+ * What a delete should do to everything pointing at the exercise.
+ *
+ * - `hide` stops it appearing in search and changes nothing else.
+ * - `delete` removes it from the library and from presets/plans, keeping diary
+ *   history (entries carry their own snapshot).
+ * - `delete_with_history` also removes this user's own diary entries.
+ *
+ * Another user's diary is never affected; if anyone else still references the
+ * exercise the server hides it instead and reports `status: 'hidden'`.
+ */
+export type ExerciseDeleteMode = 'hide' | 'delete' | 'delete_with_history';
+
+export interface ExerciseDeletionImpact {
+  exerciseEntriesCount: number;
+  workoutPlansCount: number;
+  workoutPresetsCount: number;
+  totalReferences: number;
+  otherUserReferences: number;
+}
+
+export const getExerciseDeletionImpact = async (
+  id: string
+): Promise<ExerciseDeletionImpact> => {
+  const raw = await apiFetch<Partial<ExerciseDeletionImpact>>({
+    endpoint: `/api/exercises/${id}/deletion-impact`,
+    serviceName: 'Exercise API',
+    operation: 'get exercise deletion impact',
+  });
+  return {
+    exerciseEntriesCount: raw.exerciseEntriesCount ?? 0,
+    workoutPlansCount: raw.workoutPlansCount ?? 0,
+    workoutPresetsCount: raw.workoutPresetsCount ?? 0,
+    totalReferences: raw.totalReferences ?? 0,
+    otherUserReferences: raw.otherUserReferences ?? 0,
+  };
+};
+
+export const deleteExerciseFromLibrary = async (
+  id: string,
+  mode: ExerciseDeleteMode = 'delete'
+): Promise<{ message?: string; status?: string }> => {
+  return apiFetch<{ message?: string; status?: string }>({
+    endpoint: `/api/exercises/${id}?mode=${mode}`,
     serviceName: 'Exercise API',
     operation: 'delete exercise',
     method: 'DELETE',

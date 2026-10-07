@@ -32,13 +32,16 @@
  * a database is up.
  */
 import pg from 'pg';
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import exerciseDb from '../models/exercise.js';
+import exerciseEntryDb from '../models/exerciseEntry.js';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { getClient, getSystemClient, endPool } from '../db/poolManager.js';
 
 // Probe the app role RLS actually needs, with a short timeout, using a
-// standalone client (NOT the shared pools, whose error handler calls
-// process.exit). Returns false on any failure so the suite skips rather than
-// erroring when no DB is reachable.
+// standalone client. Returns false on any failure so the suite skips rather
+// than erroring when no DB is reachable.
 async function rlsTestDbReachable(): Promise<boolean> {
   if (process.env.SKIP_RLS_MATRIX === '1') return false;
   if (
@@ -78,6 +81,7 @@ const D = {
   foodlib: '00000000-0000-4000-a000-000000000005',
   exlib: '00000000-0000-4000-a000-000000000006',
   none: '00000000-0000-4000-a000-000000000007',
+  symptoms: '00000000-0000-4000-a000-000000000008',
 } as const;
 
 type DelegateKey = keyof typeof D;
@@ -90,6 +94,7 @@ const PERMS: Record<DelegateKey, Record<string, boolean>> = {
   foodlib: { can_view_food_library: true },
   exlib: { can_view_exercise_library: true },
   none: {},
+  symptoms: { can_manage_symptoms: true },
 };
 
 const ALL_IDS = [OWNER, ...Object.values(D)];
@@ -157,6 +162,7 @@ describe.runIf(RUN)('RLS permission matrix', () => {
     | 'diary'
     | 'checkin'
     | 'medication'
+    | 'symptom'
     | 'library'
     | 'custom';
 
@@ -171,16 +177,19 @@ describe.runIf(RUN)('RLS permission matrix', () => {
     cycle_test_entries: 'owner',
     cycles: 'owner',
     health_appointments: 'owner',
+    openfoodfacts_sync_queue: 'owner',
     pregnancies: 'owner',
     pregnancy_checklist_state: 'owner',
     pregnancy_contractions: 'owner',
     pregnancy_kick_sessions: 'owner',
     pregnancy_photos: 'owner',
     user_cycle_display_preferences: 'owner',
+    user_fasting_preferences: 'owner',
     user_mood_display_preferences: 'owner',
     // diary
     exercise_entries: 'diary',
     exercise_preset_entries: 'diary',
+    workout_feedback: 'diary',
     food_entry_meals: 'diary',
     food_favorites: 'diary',
     goal_presets: 'diary',
@@ -217,9 +226,13 @@ describe.runIf(RUN)('RLS permission matrix', () => {
     medication_schedules: 'medication',
     medication_titration_steps: 'medication',
     medications: 'medication',
-    symptom_entries: 'medication',
-    user_custom_symptom_locations: 'medication',
-    user_custom_symptoms: 'medication',
+    // symptom (own permission; see the symptom_entries pins below for the
+    // cycle-row carve-out)
+    symptom_entry_photos: 'symptom',
+    symptom_entry_treatments: 'symptom',
+    symptom_free_days: 'symptom',
+    user_custom_symptoms: 'symptom',
+    user_symptom_options: 'symptom',
     // library (read shared, write owner-only)
     exercises: 'library',
     foods: 'library',
@@ -245,6 +258,9 @@ describe.runIf(RUN)('RLS permission matrix', () => {
     onboarding_data: 'custom',
     onboarding_status: 'custom',
     profiles: 'custom',
+    // symptom_entries: symptom helpers plus a cycle-source carve-out, so it has
+    // bespoke (pinned) policies rather than the generic generator's.
+    symptom_entries: 'custom',
     user_dashboard_layouts: 'custom',
     user_medication_display_preferences: 'custom',
     user_nutrient_display_preferences: 'custom',
@@ -255,12 +271,14 @@ describe.runIf(RUN)('RLS permission matrix', () => {
     workout_preset_exercises: 'custom',
     // system/internal: RLS-enabled with an explicit deny-all policy; only
     // getSystemClient (which bypasses RLS) touches it.
+    openfoodfacts_product_read_rate_limit: 'custom',
     passkey_registration_tickets: 'custom',
+    rate_limit: 'custom',
   };
 
   // Expected helper substrings for the generic-policy domains.
   const HELPER: Record<
-    'diary' | 'checkin' | 'medication' | 'library',
+    'diary' | 'checkin' | 'medication' | 'symptom' | 'library',
     { read: string; write: string }
   > = {
     diary: { read: 'has_diary_read_access', write: 'has_diary_access' },
@@ -268,6 +286,10 @@ describe.runIf(RUN)('RLS permission matrix', () => {
     medication: {
       read: 'has_medication_read_access',
       write: 'has_medication_access',
+    },
+    symptom: {
+      read: 'has_symptom_read_access',
+      write: 'has_symptom_access',
     },
     library: {
       read: 'has_library_access_with_public',
@@ -327,7 +349,7 @@ describe.runIf(RUN)('RLS permission matrix', () => {
 
     // Generic helper-policy tables: select_policy uses the read helper,
     // modify_policy's WITH CHECK uses the write helper.
-    it.each(tablesIn('diary', 'checkin', 'medication', 'library'))(
+    it.each(tablesIn('diary', 'checkin', 'medication', 'symptom', 'library'))(
       'helper table "%s" wires select+modify to its domain helper',
       async (table) => {
         const exp = HELPER[DOMAIN[table] as keyof typeof HELPER];
@@ -425,6 +447,32 @@ describe.runIf(RUN)('RLS permission matrix', () => {
         policy: 'select_policy',
         col: 'qual',
         mustContain: 'has_medication_read_access',
+      },
+      // Symptom entries: symptom helpers, and cycle-hub rows stay owner-only
+      // (Tier 1) even for a delegate that holds the symptoms permission.
+      {
+        table: 'symptom_entries',
+        policy: 'select_policy',
+        col: 'qual',
+        mustContain: 'has_symptom_read_access',
+      },
+      {
+        table: 'symptom_entries',
+        policy: 'select_policy',
+        col: 'qual',
+        mustContain: "'cycle'::text",
+      },
+      {
+        table: 'symptom_entries',
+        policy: 'modify_policy',
+        col: 'with_check',
+        mustContain: 'has_symptom_access',
+      },
+      {
+        table: 'symptom_entries',
+        policy: 'modify_policy',
+        col: 'with_check',
+        mustContain: "'cycle'::text",
       },
       // Delegate-readable (any meaningful perm), owner-only write — profile-style.
       {
@@ -542,16 +590,114 @@ describe.runIf(RUN)('RLS permission matrix', () => {
   // ---------------------------------------------------------------------------
   describe('helper behavior (as delegate, switched to owner)', () => {
     // columns: [diaryWrite, diaryRead, checkinRead, checkinWrite, medWrite,
-    //           medRead, profileRead, libFood, libExercise]
+    //           medRead, profileRead, libFood, libExercise, symptomWrite,
+    //           symptomRead]
     const EXPECTED: Record<DelegateKey, boolean[]> = {
-      //          d_w   d_r   c_r   c_w   m_w   m_r   p_r   lib_f lib_e
-      diary: [true, true, false, false, false, false, true, true, true],
-      checkin: [false, false, true, true, false, false, true, false, false],
-      meds: [false, false, false, false, true, true, true, false, false],
-      reports: [false, true, true, false, false, true, true, true, true],
-      foodlib: [false, false, false, false, false, false, false, true, false],
-      exlib: [false, false, false, false, false, false, false, false, true],
-      none: [false, false, false, false, false, false, false, false, false],
+      //          d_w   d_r   c_r   c_w   m_w   m_r   p_r   lib_f lib_e s_w   s_r
+      diary: [
+        true,
+        true,
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+        false,
+        false,
+      ],
+      checkin: [
+        false,
+        false,
+        true,
+        true,
+        false,
+        false,
+        true,
+        false,
+        false,
+        false,
+        false,
+      ],
+      meds: [
+        false,
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+        false,
+        false,
+        false,
+        false,
+      ],
+      reports: [
+        false,
+        true,
+        true,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true,
+        false,
+        true,
+      ],
+      foodlib: [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+        false,
+      ],
+      exlib: [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+      ],
+      none: [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+      ],
+      symptoms: [
+        false,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        false,
+        false,
+        true,
+        true,
+      ],
     };
 
     it.each(Object.keys(D) as DelegateKey[])(
@@ -571,7 +717,9 @@ describe.runIf(RUN)('RLS permission matrix', () => {
                has_medication_read_access($1)                                                             AS m_r,
                has_profile_read_access($1)                                                                AS p_r,
                has_library_access_with_public($1, false, ARRAY['can_view_food_library','can_manage_diary'])     AS lib_f,
-               has_library_access_with_public($1, false, ARRAY['can_view_exercise_library','can_manage_diary']) AS lib_e`,
+               has_library_access_with_public($1, false, ARRAY['can_view_exercise_library','can_manage_diary']) AS lib_e,
+               has_symptom_access($1)                                                                     AS s_w,
+               has_symptom_read_access($1)                                                                AS s_r`,
             [OWNER]
           );
           const r = rows[0];
@@ -585,6 +733,8 @@ describe.runIf(RUN)('RLS permission matrix', () => {
             r.p_r,
             r.lib_f,
             r.lib_e,
+            r.s_w,
+            r.s_r,
           ];
           expect(actual).toEqual(EXPECTED[key]);
         } finally {
@@ -795,6 +945,87 @@ describe.runIf(RUN)('RLS permission matrix', () => {
       });
     });
 
+    // -- symptom domain: its own permission, and cycle rows are owner-only ----
+    describe('symptom_entries (symptom domain, cycle rows owner-only)', () => {
+      let manualId = '';
+      let cycleId = '';
+      beforeAll(async () => {
+        const sys = await getSystemClient();
+        try {
+          const manual = await sys.query(
+            "INSERT INTO public.symptom_entries (user_id, symptom_name_snapshot, source) VALUES ($1, 'rls-matrix', 'manual') RETURNING id",
+            [OWNER]
+          );
+          manualId = manual.rows[0].id;
+          const cycle = await sys.query(
+            "INSERT INTO public.symptom_entries (user_id, symptom_name_snapshot, source) VALUES ($1, 'rls-matrix-cycle', 'cycle') RETURNING id",
+            [OWNER]
+          );
+          cycleId = cycle.rows[0].id;
+        } finally {
+          sys.release();
+        }
+      });
+      afterAll(async () => {
+        const sys = await getSystemClient();
+        try {
+          await sys.query(
+            'DELETE FROM public.symptom_entries WHERE id = ANY($1::uuid[])',
+            [[manualId, cycleId]]
+          );
+        } finally {
+          sys.release();
+        }
+      });
+
+      // Manual rows: the symptoms delegate reads + writes; a reports delegate is
+      // read-only; medications and every other domain get nothing.
+      crudSuite({
+        table: 'symptom_entries',
+        read: ['symptoms', 'reports'],
+        write: ['symptoms'],
+        insert: () => ({
+          sql: "INSERT INTO public.symptom_entries (user_id, symptom_name_snapshot, source) VALUES ($1, 'rls-matrix-w', 'manual')",
+          params: [OWNER],
+        }),
+        touchColumn: 'symptom_name_snapshot',
+        rowId: () => manualId,
+      });
+
+      // Cycle-hub rows are reproductive-health data: no delegate may read,
+      // change, delete or create them, whatever permissions they hold.
+      it.each(KEYS)('cycle row SELECT is denied to "%s"', async (key) => {
+        expect(await canSelect(key, 'symptom_entries', cycleId)).toBe(false);
+      });
+      it.each(KEYS)('cycle row UPDATE is denied to "%s"', async (key) => {
+        expect(
+          await canAffect(
+            key,
+            'UPDATE public.symptom_entries SET symptom_name_snapshot = symptom_name_snapshot WHERE id = $1',
+            [cycleId]
+          )
+        ).toBe(false);
+      });
+      it.each(KEYS)('cycle row DELETE is denied to "%s"', async (key) => {
+        expect(
+          await canAffect(
+            key,
+            'DELETE FROM public.symptom_entries WHERE id = $1',
+            [cycleId]
+          )
+        ).toBe(false);
+      });
+      it.each(KEYS)('cycle row INSERT is denied to "%s"', async (key) => {
+        expect(
+          await canInsert(
+            key,
+            "INSERT INTO public.symptom_entries (user_id, symptom_name_snapshot, source) VALUES ($1, 'rls-matrix-cycle-w', 'cycle')",
+            [OWNER]
+          )
+        ).toBe(false);
+      });
+    });
+
     // -- custom/library: delegates read when entitled, only owner writes (F1) -
     describe('food_variants (custom, owner-only write)', () => {
       let foodId = '';
@@ -835,6 +1066,418 @@ describe.runIf(RUN)('RLS permission matrix', () => {
         touchColumn: 'serving_size',
         rowId: () => variantId,
       });
+    });
+  });
+});
+
+describe.runIf(RUN)('Active calorie imports with shared exercises', () => {
+  const users = [
+    '00000000-0000-4000-b300-000000000001',
+    '00000000-0000-4000-b300-000000000002',
+  ];
+  let sys: pg.PoolClient;
+
+  beforeAll(async () => {
+    sys = await getSystemClient();
+    for (const id of users) {
+      await sys.query(
+        'INSERT INTO public."user" (id, email, email_verified) VALUES ($1, $2, true)',
+        [id, `active-calories-${id}@example.test`]
+      );
+    }
+  });
+
+  beforeEach(async () => {
+    await sys.query(
+      'DELETE FROM exercise_entries WHERE user_id = ANY($1::uuid[])',
+      [users]
+    );
+    await sys.query(
+      'DELETE FROM exercise_preset_entries WHERE user_id = ANY($1::uuid[])',
+      [users]
+    );
+    await sys.query('DELETE FROM exercises WHERE user_id = ANY($1::uuid[])', [
+      users,
+    ]);
+    await sys.query('DELETE FROM family_access WHERE owner_user_id = $1', [
+      users[0],
+    ]);
+  });
+
+  afterAll(async () => {
+    try {
+      await sys.query(
+        'DELETE FROM exercise_entries WHERE user_id = ANY($1::uuid[])',
+        [users]
+      );
+      await sys.query('DELETE FROM exercises WHERE user_id = ANY($1::uuid[])', [
+        users,
+      ]);
+      await sys.query('DELETE FROM public."user" WHERE id = ANY($1::uuid[])', [
+        users,
+      ]);
+    } finally {
+      sys.release();
+      await endPool();
+    }
+  });
+
+  /** Imports the same daily HealthKit total through the production repositories. */
+  async function sync(calories: number) {
+    const exerciseId = await exerciseDb.getOrCreateActiveCaloriesExercise(
+      users[1],
+      'HealthKit'
+    );
+    return exerciseEntryDb.upsertExerciseEntryData(
+      users[1],
+      users[1],
+      exerciseId,
+      calories,
+      '2026-09-10',
+      'HealthKit'
+    );
+  }
+
+  it.each(['family', 'public'])(
+    'keeps one owned entry when %s sharing changes',
+    async (sharing) => {
+      await sys.query('DELETE FROM exercises WHERE user_id = ANY($1::uuid[])', [
+        users,
+      ]);
+      const sharedId = await exerciseDb.getOrCreateActiveCaloriesExercise(
+        users[0],
+        'HealthKit'
+      );
+      if (sharing === 'public') {
+        await sys.query(
+          'UPDATE exercises SET shared_with_public = true WHERE id = $1',
+          [sharedId]
+        );
+      } else {
+        await sys.query(
+          `INSERT INTO family_access (owner_user_id, family_user_id, family_email, access_permissions, is_active, status)
+         VALUES ($1, $2, $3, '{"can_view_exercise_library":true}', true, 'active')`,
+          [users[0], users[1], `active-calories-${users[1]}@example.test`]
+        );
+      }
+      expect((await exerciseDb.getExerciseById(sharedId, users[1])).id).toBe(
+        sharedId
+      );
+      const first = await sync(300);
+      const firstExercise = await exerciseDb.getExerciseById(
+        first.exercise_id,
+        users[1]
+      );
+      await sys.query(
+        'UPDATE family_access SET is_active = false WHERE owner_user_id = $1',
+        [users[0]]
+      );
+      await sys.query(
+        'UPDATE exercises SET shared_with_public = false WHERE id = $1',
+        [sharedId]
+      );
+      const second = await sync(350);
+      const rows = await sys.query(
+        `SELECT ee.id, ee.calories_burned, e.user_id AS exercise_owner
+       FROM exercise_entries ee JOIN exercises e ON e.id = ee.exercise_id
+       WHERE ee.user_id = $1`,
+        [users[1]]
+      );
+      expect(second.id).toBe(first.id);
+      expect(firstExercise.user_id).toBe(users[1]);
+      expect(rows.rows).toEqual([
+        { id: first.id, calories_burned: 350, exercise_owner: users[1] },
+      ]);
+    }
+  );
+
+  it('reuses an old import after its shared exercise becomes inaccessible', async () => {
+    const sharedId = await exerciseDb.getOrCreateActiveCaloriesExercise(
+      users[0],
+      'HealthKit'
+    );
+    const oldId = randomUUID();
+    await sys.query(
+      `INSERT INTO exercise_entries (id, user_id, exercise_id, entry_date, calories_burned, duration_minutes, exercise_name, source)
+       VALUES ($1, $2, $3, '2026-09-10', 300, 0, 'Active Calories', 'HealthKit')`,
+      [oldId, users[1], sharedId]
+    );
+    expect(
+      await exerciseDb.getExerciseById(sharedId, users[1])
+    ).toBeUndefined();
+    const updated = await sync(350);
+    const repeated = await sync(400);
+    expect(updated.id).toBe(oldId);
+    expect(repeated.id).toBe(oldId);
+    expect(repeated.exercise_id).not.toBe(sharedId);
+    expect(repeated.calories_burned).toBe(400);
+    expect(repeated.updated_by_user_id).toBe(users[1]);
+    expect(repeated.notes).toBe(
+      'Active calories logged from Apple Health (updated).'
+    );
+    const rows = await sys.query(
+      'SELECT id FROM exercise_entries WHERE user_id = $1',
+      [users[1]]
+    );
+    expect(rows.rows).toEqual([{ id: oldId }]);
+  });
+
+  it('updates the exact exercise match without altering an existing legacy duplicate', async () => {
+    const sharedId = await exerciseDb.getOrCreateActiveCaloriesExercise(
+      users[0],
+      'HealthKit'
+    );
+    const ownedId = await exerciseDb.getOrCreateActiveCaloriesExercise(
+      users[1],
+      'HealthKit'
+    );
+    const legacyId = randomUUID();
+    const exactId = randomUUID();
+    await sys.query(
+      `INSERT INTO exercise_entries (id, user_id, exercise_id, entry_date, calories_burned, duration_minutes, exercise_name, source, created_at)
+       VALUES ($1, $3, $4, '2026-09-10', 100, 0, 'Active Calories', 'HealthKit', '2026-09-09'),
+              ($2, $3, $5, '2026-09-10', 200, 0, 'Active Calories', 'HealthKit', '2026-09-10')`,
+      [legacyId, exactId, users[1], sharedId, ownedId]
+    );
+    const before = await sys.query(
+      'SELECT * FROM exercise_entries WHERE id = $1',
+      [legacyId]
+    );
+    const updated = await sync(350);
+    expect(updated.id).toBe(exactId);
+    expect(updated.calories_burned).toBe(350);
+    const after = await sys.query(
+      'SELECT * FROM exercise_entries WHERE id = $1',
+      [legacyId]
+    );
+    expect(after.rows).toEqual(before.rows);
+  });
+
+  it.each([
+    ['another user', { otherUser: true }],
+    ['another source', { source: 'Health Connect' }],
+    ['another date', { date: '2026-09-09' }],
+    ['a workout', { duration: 30 }],
+    ['a preset exercise', { preset: true }],
+    ['a provider activity', { sourceId: 'activity-1' }],
+    ['another exercise name', { name: 'Running' }],
+  ])('preserves %s when finding a legacy import', async (_label, change) => {
+    const sharedId = await exerciseDb.getOrCreateActiveCaloriesExercise(
+      users[0],
+      'HealthKit'
+    );
+    const untouchedId = randomUUID();
+    const values = {
+      otherUser: false,
+      preset: false,
+      source: 'HealthKit',
+      date: '2026-09-10',
+      duration: 0,
+      sourceId: null,
+      name: 'Active Calories',
+      ...change,
+    };
+    const presetId = values.preset ? randomUUID() : null;
+    if (presetId) {
+      await sys.query(
+        "INSERT INTO exercise_preset_entries (id, user_id, name, entry_date) VALUES ($1, $2, 'Active calorie fixture', '2026-09-10')",
+        [presetId, users[1]]
+      );
+    }
+    await sys.query(
+      `INSERT INTO exercise_entries (id, user_id, exercise_id, entry_date, calories_burned, duration_minutes, exercise_name, source, source_id, exercise_preset_entry_id)
+       VALUES ($1, $2, $3, $4, 123, $5, $6, $7, $8, $9)`,
+      [
+        untouchedId,
+        values.otherUser ? users[0] : users[1],
+        sharedId,
+        values.date,
+        values.duration,
+        values.name,
+        values.source,
+        values.sourceId,
+        presetId,
+      ]
+    );
+    const before = await sys.query(
+      'SELECT * FROM exercise_entries WHERE id = $1',
+      [untouchedId]
+    );
+    const imported = await sync(350);
+    expect(imported.id).not.toBe(untouchedId);
+    const after = await sys.query(
+      'SELECT * FROM exercise_entries WHERE id = $1',
+      [untouchedId]
+    );
+    expect(after.rows).toEqual(before.rows);
+  });
+
+  // This migration is unscoped; namespaced fixture IDs alone cannot protect a normal DB.
+  describe.runIf(
+    /(^|[_-])test([_-]|$)/i.test(process.env.SPARKY_FITNESS_DB_NAME ?? '')
+  )('historical cleanup', () => {
+    const migration = readFileSync(
+      new URL(
+        '../db/migrations/20260910180000_deduplicate_shared_active_calories.sql',
+        import.meta.url
+      ),
+      'utf8'
+    );
+    let legacyId: string;
+    let ownedId: string;
+
+    beforeEach(async () => {
+      const sharedExercise = await exerciseDb.getOrCreateActiveCaloriesExercise(
+        users[0],
+        'HealthKit'
+      );
+      const owned = await sync(300);
+      ownedId = owned.id;
+      legacyId = randomUUID();
+      await sys.query(
+        `INSERT INTO exercise_entries (id, user_id, exercise_id, entry_date, calories_burned, duration_minutes, notes, created_by_user_id, exercise_name, source)
+         VALUES ($1, $2, $3, '2026-09-10', 350, 0, 'Active calories logged from Apple Health.', $2, 'Active Calories', 'HealthKit')`,
+        [legacyId, users[1], sharedExercise]
+      );
+    });
+
+    /** Reads complete fixture rows so preservation checks include all metadata. */
+    async function entries() {
+      return (
+        await sys.query(
+          'SELECT * FROM exercise_entries WHERE user_id = ANY($1::uuid[]) ORDER BY id',
+          [users]
+        )
+      ).rows;
+    }
+
+    it.each([
+      ['a newer shared import', 400, '2026-09-09', '2026-09-10', false],
+      ['a newer lower owned import', 250, '2026-09-11', '2026-09-10', true],
+      [
+        'the higher total on tied timestamps',
+        300,
+        '2026-09-10',
+        '2026-09-10',
+        false,
+      ],
+      [
+        'the owned exercise on tied timestamps and totals',
+        350,
+        '2026-09-10',
+        '2026-09-10',
+        true,
+      ],
+    ] as const)(
+      'keeps %s',
+      async (_label, calories, ownedUpdated, legacyUpdated, keepOwned) => {
+        await sys.query(
+          'UPDATE exercise_entries SET calories_burned = $1, updated_at = $2 WHERE id = $3',
+          [calories, ownedUpdated, ownedId]
+        );
+        await sys.query(
+          'UPDATE exercise_entries SET updated_at = $1 WHERE id = $2',
+          [legacyUpdated, legacyId]
+        );
+        const before = await entries();
+        const survivor = before.find(
+          (row) => row.id === (keepOwned ? ownedId : legacyId)
+        );
+        await sys.query(migration);
+        expect(await entries()).toEqual([survivor]);
+        await sys.query(migration);
+        expect(await entries()).toEqual([survivor]);
+        const corrected = await sync(200);
+        expect(corrected.id).toBe(survivor.id);
+        expect(corrected.calories_burned).toBe(200);
+        expect((await entries()).map((row) => row.id)).toEqual([survivor.id]);
+      }
+    );
+
+    it.each([
+      ['manual notes', "notes = 'Evening walk'"],
+      ['missing creator', 'created_by_user_id = NULL'],
+      ['different creator', 'created_by_user_id = $2'],
+      ['different editor', 'updated_by_user_id = $2'],
+      ['workout duration', 'duration_minutes = 30'],
+      ['provider identity', "source_id = 'activity-1'"],
+      ['entry time', "entry_time = '12:00'"],
+      ['snapshot metadata', "image_url = 'https://example.test/workout.png'"],
+      ['telemetry', 'steps = 100'],
+      ['sort order', 'sort_order = 2'],
+      ['negative calories', 'calories_burned = -1'],
+      ['nonfinite calories', "calories_burned = 'NaN'::numeric"],
+      ['infinite calories', "calories_burned = 'Infinity'::numeric"],
+      ['another date', "entry_date = '2026-09-09'"],
+      [
+        'another source',
+        "source = 'Health Connect', notes = 'Active calories logged from Health Connect.'",
+      ],
+      ['another user', 'user_id = $2, created_by_user_id = $2'],
+    ])('preserves groups containing %s', async (_label, change) => {
+      await sys.query(
+        `UPDATE exercise_entries SET ${change} WHERE id = $1`,
+        change.includes('$2') ? [legacyId, users[0]] : [legacyId]
+      );
+      const before = await entries();
+      await sys.query(migration);
+      expect(await entries()).toEqual(before);
+    });
+
+    it.each([
+      [
+        'activity_details',
+        "INSERT INTO exercise_entry_activity_details (exercise_entry_id, provider_name, detail_type, detail_data) VALUES ($1, 'HealthKit', 'workout', '{}')",
+      ],
+      [
+        'sets',
+        'INSERT INTO exercise_entry_sets (exercise_entry_id, set_number) VALUES ($1, 1)',
+      ],
+      [
+        'laps',
+        "INSERT INTO exercise_entry_laps (exercise_entry_id, user_id, entry_date, lap_index, start_time, end_time, duration_seconds) VALUES ($1, $2, '2026-09-10', 1, now(), now(), 0)",
+      ],
+      [
+        'gps_points',
+        "INSERT INTO exercise_entry_gps_points (exercise_entry_id, user_id, entry_date) VALUES ($1, $2, '2026-09-10')",
+      ],
+      [
+        'hr_zones',
+        "INSERT INTO exercise_entry_hr_zones (exercise_entry_id, user_id, entry_date, zone_index, seconds_in_zone) VALUES ($1, $2, '2026-09-10', 1, 60)",
+      ],
+    ])(
+      'preserves attached %s even when its owner differs',
+      async (table, insert) => {
+        await sys.query(
+          insert,
+          insert.includes('$2') ? [ownedId, users[0]] : [ownedId]
+        );
+        const before = await entries();
+        const children = await sys.query(
+          `SELECT * FROM exercise_entry_${table} WHERE exercise_entry_id = $1`,
+          [ownedId]
+        );
+        await sys.query(migration);
+        expect(await entries()).toEqual(before);
+        expect(
+          (
+            await sys.query(
+              `SELECT * FROM exercise_entry_${table} WHERE exercise_entry_id = $1`,
+              [ownedId]
+            )
+          ).rows
+        ).toEqual(children.rows);
+      }
+    );
+
+    it('preserves duplicates without evidence of a shared exercise', async () => {
+      await sys.query(
+        'UPDATE exercise_entries SET exercise_id = (SELECT exercise_id FROM exercise_entries WHERE id = $1) WHERE id = $2',
+        [ownedId, legacyId]
+      );
+      const before = await entries();
+      await sys.query(migration);
+      expect(await entries()).toEqual(before);
     });
   });
 });

@@ -1,11 +1,11 @@
 import goalRepository from '../models/goalRepository.js';
 import weeklyGoalPlanRepository from '../models/weeklyGoalPlanRepository.js';
-import goalPresetRepository from '../models/goalPresetRepository.js';
 import userRepository from '../models/userRepository.js';
 import preferenceRepository from '../models/preferenceRepository.js';
 import measurementRepository from '../models/measurementRepository.js';
 import exerciseEntryRepository from '../models/exerciseEntry.js';
 import bmrService from './bmrService.js';
+import goalPresetService from './goalPresetService.js';
 import adaptiveTdeeService from './AdaptiveTdeeService.js';
 import { userAge } from '../utils/dateHelpers.js';
 import { log } from '../config/logging.js';
@@ -20,6 +20,7 @@ import {
   resolveCalorieSafetyFloor,
   DEFAULT_CUSTOM_CALORIE_SAFETY_FLOOR,
   ACTIVITY_MULTIPLIERS,
+  isUsableMeasuredBmr,
 } from '@workspace/shared';
 import customNutrientService from './customNutrientService.js';
 import { DEFAULT_GOALS } from '../constants/goals.js';
@@ -71,7 +72,9 @@ async function getUserGoalsForRange(
   const presetCache: Record<string, unknown> = {};
   const getPreset = async (presetId: string) => {
     if (!presetCache[presetId]) {
-      presetCache[presetId] = await goalPresetRepository.getGoalPresetById(
+      // Go through the service so the preset's `water_goal` column is mapped to
+      // the `water_goal_ml` field every other goal source uses.
+      presetCache[presetId] = await goalPresetService.getGoalPreset(
         presetId,
         userId
       );
@@ -178,6 +181,26 @@ async function getUserGoalsForRange(
     return found ? parseFloat(String(found[field])) : null;
   };
 
+  // Same lookup, without carry-forward. Used for measured BMR, which is only valid
+  // on the day it was recorded — carrying it forward would keep a stale reading
+  // driving the goal long after syncing stopped (issue #2395).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const getMeasurementFieldOnDate = (dateStr: string, field: string) => {
+    const found = allMeasurements.find((m: any) => {
+      const mDateStr =
+        m.entry_date instanceof Date
+          ? localDateToDay(m.entry_date)
+          : String(m.entry_date).slice(0, 10);
+      return (
+        mDateStr === dateStr &&
+        m[field] !== null &&
+        m[field] !== undefined &&
+        m[field] !== ''
+      );
+    });
+    return found ? parseFloat(String(found[field])) : null;
+  };
+
   while (!isAfter(cursor, end)) {
     const dateStr = format(cursor, 'yyyy-MM-dd');
     let goals = explicitByDate[dateStr] ?? null;
@@ -197,6 +220,15 @@ async function getUserGoalsForRange(
 
     // Clone to avoid mutating the source in the cache or repository
     let processedGoals = { ...goals };
+    // A preset may omit the water goal; keep the one already in effect before
+    // falling back to the default.
+    if (
+      processedGoals.water_goal_ml === null ||
+      processedGoals.water_goal_ml === undefined
+    ) {
+      processedGoals.water_goal_ml =
+        currentFallback.water_goal_ml ?? DEFAULT_GOALS.water_goal_ml;
+    }
 
     if (adjust) {
       let goalCalories =
@@ -220,13 +252,15 @@ async function getUserGoalsForRange(
         CALORIE_CALCULATION_CONSTANTS.DEFAULT_HEIGHT_CM;
       const bodyFat =
         getMeasurementFieldForDate(dateStr, 'body_fat_percentage') || undefined;
+      // Exact date, not carry-forward: a measured BMR only counts on its own day.
+      const measuredBmr = getMeasurementFieldOnDate(dateStr, 'bmr');
 
-      let bmr = 0;
+      let formulaBmr = 0;
       if (userProfile && userPreferences) {
         const tz = userPreferences.timezone || 'UTC';
         const age = userAge(userProfile.date_of_birth ?? '', tz) ?? 30;
         try {
-          bmr = bmrService.calculateBmr(
+          formulaBmr = bmrService.calculateBmr(
             bmrAlgorithm,
             weightKg,
             heightCm,
@@ -241,6 +275,14 @@ async function getUserGoalsForRange(
           );
         }
       }
+      // The measured value is checked against the formula estimate when one could
+      // be computed, and on the absolute bounds alone when it could not — a failed
+      // or impossible formula must not discard an otherwise good reading.
+      const bmr =
+        userPreferences?.use_external_bmr &&
+        isUsableMeasuredBmr(measuredBmr, formulaBmr || null)
+          ? (measuredBmr as number)
+          : formulaBmr;
 
       // Mirror DashboardService exactly: use user's actual activity multiplier, not hardcoded
       const activityMultiplier = ACTIVITY_MULTIPLIERS[activityLevel] || 1.2;
@@ -336,6 +378,13 @@ async function getUserGoalsForRange(
           calorieSafetyFloorValue:
             userPreferences?.calorie_safety_floor_value ||
             DEFAULT_CUSTOM_CALORIE_SAFETY_FLOOR,
+          // computeCalorieTarget re-validates this against its own formula estimate
+          // before letting it become the RMR safety floor.
+          measuredBmr:
+            userPreferences?.use_external_bmr &&
+            isUsableMeasuredBmr(measuredBmr, formulaBmr || null)
+              ? measuredBmr
+              : undefined,
         });
         goalCalories = targetResult.finalTarget;
       }
@@ -442,6 +491,8 @@ async function manageGoalTimeline(authenticatedUserId: string, goalData: any) {
       p_vitamin_c,
       p_calcium,
       p_iron,
+      p_caffeine_mg,
+      p_alcohol_g,
       p_target_exercise_calories_burned,
       p_target_exercise_duration_minutes,
       p_protein_percentage,
@@ -542,7 +593,13 @@ async function manageGoalTimeline(authenticatedUserId: string, goalData: any) {
       protein: cleanNumber(protein_to_store),
       carbs: cleanNumber(carbs_to_store),
       fat: cleanNumber(fat_to_store),
-      water_goal_ml: cleanNumber(p_water_goal_ml),
+      // A blank input means "no water goal", not 0.
+      water_goal_ml: cleanNumber(
+        typeof p_water_goal_ml === 'string' && p_water_goal_ml.trim() === ''
+          ? null
+          : p_water_goal_ml,
+        true
+      ),
       saturated_fat: cleanNumber(p_saturated_fat),
       polyunsaturated_fat: cleanNumber(p_polyunsaturated_fat),
       monounsaturated_fat: cleanNumber(p_monounsaturated_fat),
@@ -556,6 +613,8 @@ async function manageGoalTimeline(authenticatedUserId: string, goalData: any) {
       vitamin_c: cleanNumber(p_vitamin_c),
       calcium: cleanNumber(p_calcium),
       iron: cleanNumber(p_iron),
+      caffeine_mg: cleanNumber(p_caffeine_mg),
+      alcohol_g: cleanNumber(p_alcohol_g),
       target_exercise_calories_burned: cleanNumber(
         p_target_exercise_calories_burned
       ),

@@ -32,6 +32,24 @@ export function truncateIfNeeded(
   );
 }
 
+/**
+ * Longest user-authored note emitted verbatim in a tool result.
+ *
+ * A note may be up to NOTES_MAX_LENGTH (4000) characters — half the cloud
+ * response budget for a single field, and a whole-record truncation pass would
+ * drop other foods to make room for one recipe. Cap the field instead, and say
+ * so, so the model knows the text continues and can fetch the food directly.
+ */
+export const NOTE_PREVIEW_LIMIT = 400;
+
+export function truncateNote(note: unknown): string | undefined {
+  if (typeof note !== 'string') return undefined;
+  const trimmed = note.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length <= NOTE_PREVIEW_LIMIT) return trimmed;
+  return `${trimmed.slice(0, NOTE_PREVIEW_LIMIT)}… (note truncated)`;
+}
+
 // Space reserved for the truncation note appended after a reduced payload.
 const NOTE_RESERVE = 200;
 
@@ -55,6 +73,38 @@ function findDominantArray(data: unknown): DominantArray | null {
     return null;
   }
   const record = data as Record<string, unknown>;
+  // Diary pages have two public arrays, but one shared offset. Treat them as
+  // one ordered record stream so truncating food rows cannot skip meal rows.
+  if (
+    Array.isArray(record.food_entries) &&
+    Array.isArray(record.meal_entries) &&
+    typeof record.total_count === 'number' &&
+    'next_offset' in record
+  ) {
+    const entries = [
+      ...record.food_entries.map((entry) => ({ kind: 'food', entry })),
+      ...record.meal_entries.map((entry) => ({ kind: 'meal', entry })),
+    ].sort((left, right) => {
+      const leftEntry = left.entry as Record<string, unknown>;
+      const rightEntry = right.entry as Record<string, unknown>;
+      const leftKey = `${leftEntry.entry_date ?? ''}|${leftEntry.entry_time ?? ''}|${leftEntry.id ?? ''}`;
+      const rightKey = `${rightEntry.entry_date ?? ''}|${rightEntry.entry_time ?? ''}|${rightEntry.id ?? ''}`;
+      return leftKey.localeCompare(rightKey);
+    });
+    return {
+      array: entries,
+      rebuild: (slice) => ({
+        ...record,
+        food_entries: slice
+          .filter((item) => (item as { kind: string }).kind === 'food')
+          .map((item) => (item as { entry: unknown }).entry),
+        meal_entries: slice
+          .filter((item) => (item as { kind: string }).kind === 'meal')
+          .map((item) => (item as { entry: unknown }).entry),
+      }),
+      label: 'diary entries',
+    };
+  }
   let bestKey: string | null = null;
   for (const [key, value] of Object.entries(record)) {
     if (!Array.isArray(value) || value.length === 0) continue;
@@ -101,7 +151,42 @@ export function truncateJsonRecords(
     return truncateIfNeeded(full, undefined, profile);
   }
 
-  const { array, rebuild, label } = target;
+  const { array, label } = target;
+  // A paginated result may be shortened after the repository already computed
+  // next_offset. Recompute it from the records actually emitted so a caller
+  // never skips the fetched-but-truncated tail of a page.
+  const paginatedRecord =
+    data !== null &&
+    typeof data === 'object' &&
+    !Array.isArray(data) &&
+    typeof (data as Record<string, unknown>).total_count === 'number' &&
+    'next_offset' in (data as Record<string, unknown>)
+      ? (data as Record<string, unknown>)
+      : null;
+  const totalCount = Number(paginatedRecord?.total_count);
+  const currentNextOffset = paginatedRecord?.next_offset;
+  const originalOffset =
+    typeof currentNextOffset === 'number'
+      ? currentNextOffset - array.length
+      : Number.isFinite(totalCount)
+        ? totalCount - array.length
+        : 0;
+  const rebuild = (slice: unknown[]) => {
+    const rebuilt = target.rebuild(slice);
+    if (
+      !paginatedRecord ||
+      !Number.isFinite(totalCount) ||
+      !Number.isFinite(originalOffset)
+    ) {
+      return rebuilt;
+    }
+    const nextOffset = originalOffset + slice.length;
+    return {
+      ...(rebuilt as Record<string, unknown>),
+      has_more: totalCount > nextOffset,
+      next_offset: totalCount > nextOffset ? nextOffset : null,
+    };
+  };
   let keep = array.length;
   let text = full;
   while (keep > 1 && text.length > limit - NOTE_RESERVE) {

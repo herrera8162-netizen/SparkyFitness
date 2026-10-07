@@ -29,7 +29,7 @@ import {
   formVariantToFoodVariant,
   sanitizeGlycemicIndexFrontend,
 } from '@/utils/foodForm';
-import { nutrientFields } from '@/constants/foodForm';
+import { nutrientFields, UNSCALED_NUTRIENT_FIELDS } from '@/constants/foodForm';
 import {
   getConversionFactor,
   shouldOfferAiConversion,
@@ -116,6 +116,7 @@ function scaleVariantNutrition(
   };
 
   nutrientFields.forEach((nutrient) => {
+    if (UNSCALED_NUTRIENT_FIELDS.includes(nutrient)) return;
     const originalValue = Number(variant[nutrient]);
     if (!isNaN(originalValue)) {
       scaledVariant[nutrient] = Number(
@@ -138,6 +139,52 @@ function scaleVariantNutrition(
   }
 
   return scaledVariant;
+}
+
+/**
+ * Keep every variant consistent after the default variant was replaced from a
+ * data source: re-derive each non-default variant from the new default using
+ * the same unit-conversion rules the form uses for manual edits
+ * (getConversionFactor + scaleVariantNutrition). Variants whose unit is not
+ * compatible with the refreshed default's unit (e.g. g vs tbsp) are left
+ * untouched — the form treats those as manual-conversion cases too.
+ */
+function rescaleVariantsFromRefreshedDefault(
+  variants: FormFoodVariantWithEquivalents[],
+  refreshedDefault: FormFoodVariant
+): FormFoodVariantWithEquivalents[] {
+  const baseSize = toPositiveNumber(refreshedDefault.serving_size);
+  if (baseSize === null) return variants;
+  return variants.map((variant) => {
+    if (variant.is_default) return variant;
+    const factor = getConversionFactor(
+      String(refreshedDefault.serving_unit ?? ''),
+      String(variant.serving_unit ?? '')
+    );
+    const size = toPositiveNumber(variant.serving_size);
+    if (factor === null || size === null) return variant;
+    const scaled = scaleVariantNutrition(
+      refreshedDefault,
+      (size / baseSize) * factor
+    );
+    return {
+      ...variant,
+      ...scaled,
+      // Keep this variant's identity, serving data, and provenance intact —
+      // `scaled` is derived from the refreshed default and would otherwise
+      // clobber these with the default's values.
+      id: variant.id,
+      is_default: variant.is_default,
+      equivalents: variant.equivalents,
+      is_locked: variant.is_locked,
+      serving_size: variant.serving_size,
+      serving_unit: variant.serving_unit,
+      source: variant.source,
+      ai_confidence: variant.ai_confidence,
+      provider_nutrients: variant.provider_nutrients,
+      provider_nutrient_units: variant.provider_nutrient_units,
+    };
+  });
 }
 
 function buildExactVariantSnapshot(
@@ -391,6 +438,7 @@ export function useCustomFoodForm({
     brand: '',
     is_quick_food: false,
     barcode: '',
+    notes: '',
   });
 
   // Provider nutrient values the user mapped onto this food (custom nutrient
@@ -468,7 +516,13 @@ export function useCustomFoodForm({
   );
 
   const resetForm = useCallback(() => {
-    setFormData({ name: '', brand: '', is_quick_food: false, barcode: '' });
+    setFormData({
+      name: '',
+      brand: '',
+      is_quick_food: false,
+      barcode: '',
+      notes: '',
+    });
     setImageItems([]);
     const defaultVariant = createDefaultFormVariant(customNutrients);
     const grouped = groupEquivalentVariants([defaultVariant]);
@@ -557,6 +611,7 @@ export function useCustomFoodForm({
         brand: food.brand || '',
         is_quick_food: food.is_quick_food || false,
         barcode: food.barcode || '',
+        notes: food.notes || '',
       });
       // A provider search result has no `images` array yet — its photo is the
       // single upstream `image_url`. Seed the picker with it so importing
@@ -591,7 +646,13 @@ export function useCustomFoodForm({
         loadExistingVariants();
       }
     } else if (initialVariants && initialVariants.length > 0) {
-      setFormData({ name: '', brand: '', is_quick_food: false, barcode: '' });
+      setFormData({
+        name: '',
+        brand: '',
+        is_quick_food: false,
+        barcode: '',
+        notes: '',
+      });
       const mapped = initialVariants.map((variant) =>
         foodVariantToFormVariant({
           ...variant,
@@ -1071,6 +1132,11 @@ export function useCustomFoodForm({
         vitamin_c: scaled.vitamin_c,
         calcium: scaled.calcium,
         iron: scaled.iron,
+        caffeine_mg: scaled.caffeine_mg,
+        water_ml: scaled.water_ml,
+        alcohol_g: scaled.alcohol_g,
+        // Not scaled -- see UNSCALED_NUTRIENT_FIELDS.
+        abv_percent: scaled.abv_percent,
         custom_nutrients: scaled.custom_nutrients
           ? { ...scaled.custom_nutrients }
           : currentVariant.custom_nutrients,
@@ -1111,6 +1177,103 @@ export function useCustomFoodForm({
   const updateField = (field: string, value: string | boolean) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
+
+  /**
+   * Applies freshly fetched source data to the open form in place: the food's
+   * name/brand and the default variant's serving and nutrition. Nothing is
+   * persisted until the user saves; saving then routes through the normal
+   * post-save sync prompt so logged diary entries can optionally be updated.
+   *
+   * Non-default variants are scaled snapshots of the default (the app creates
+   * them via unit conversion / serving-size edits), so the refresh re-derives
+   * them from the refreshed default to keep every variant consistent.
+   */
+  const applyProviderRefresh = useCallback(
+    (refreshed: Food) => {
+      setFormData((prev) => ({
+        ...prev,
+        name: refreshed.name || prev.name,
+        brand: refreshed.brand || prev.brand,
+      }));
+
+      const incoming = refreshed.default_variant;
+      if (!incoming) return;
+
+      const incomingForm = foodVariantToFormVariant(incoming);
+      const patch: Partial<GroupedFormFoodVariant> = {
+        serving_size: incoming.serving_size,
+        serving_unit: incoming.serving_unit,
+      };
+      // Mirror a fresh import: overwrite every source field, including the
+      // ones the source does not provide. foodVariantToFormVariant maps 0
+      // (the server's "not provided" marker) to undefined, so assigning
+      // unconditionally also clears values that predate this refresh —
+      // previously those kept their stale values because the undefined
+      // check below would have skipped them.
+      for (const nutrient of nutrientFields) {
+        patch[nutrient] = incomingForm[nutrient];
+      }
+      patch.glycemic_index = sanitizeGlycemicIndexFrontend(
+        incoming.glycemic_index
+      );
+
+      let defaultIndex = -1;
+      const nextVariants = variants.map((variant, index) => {
+        if (!variant.is_default) return variant;
+        defaultIndex = index;
+        return {
+          ...variant,
+          ...patch,
+          // Refreshed values replace any AI estimate on this variant.
+          ...(variant.source === 'ai_estimate'
+            ? { source: 'imported' as const, ai_confidence: null }
+            : {}),
+        };
+      });
+      if (defaultIndex === -1) return;
+
+      const merged = nextVariants[defaultIndex];
+      if (!merged) return;
+      // Re-derive non-default variants from the refreshed default so every
+      // variant stays consistent — the app is the scaling authority.
+      const rescaledVariants = rescaleVariantsFromRefreshedDefault(
+        nextVariants,
+        merged
+      );
+      setVariants(rescaledVariants);
+      setOriginalVariants((orig) =>
+        orig.map((o, i) => {
+          const target = rescaledVariants[i];
+          if (!target) return o;
+          return i === defaultIndex ? { ...o, ...merged } : { ...o, ...target };
+        })
+      );
+      setLoadedVariants((loaded) =>
+        loaded.map((l, i) => {
+          if (!l) return l;
+          const target = rescaledVariants[i];
+          if (!target) return l;
+          return i === defaultIndex ? { ...l, ...merged } : { ...l, ...target };
+        })
+      );
+      // Update the serving-size scaling bases so post-refresh serving-size
+      // edits scale from the refreshed values.
+      setServingSizeScalingBaseVariants((prev) =>
+        prev.map((b, i) => {
+          const target = rescaledVariants[i];
+          if (!target) return b;
+          return i === defaultIndex ? deepClone(merged) : deepClone(target);
+        })
+      );
+      // Refreshed values are no longer an AI estimate, so drop its unit badge.
+      setVariantMeta((meta) =>
+        meta.map((m, i) =>
+          i === defaultIndex ? { ...m, aiEstimatedUnit: null } : m
+        )
+      );
+    },
+    [variants]
+  );
 
   const validateBeforeSave = useCallback(() => {
     const newVariantErrors = variants.map((v) =>
@@ -1180,6 +1343,9 @@ export function useCustomFoodForm({
         is_quick_food: formData.is_quick_food,
         is_custom: true,
         barcode: formData.barcode.trim() || null,
+        // Always send the key, even when empty: the server treats an omitted
+        // `notes` as "leave unchanged", so clearing a note must send null.
+        notes: formData.notes.trim() || null,
         provider_external_id: food?.provider_external_id,
         provider_type: food?.provider_type,
         provider_verified: food?.provider_verified,
@@ -1325,6 +1491,7 @@ export function useCustomFoodForm({
     aiEstimatedUnits,
     platform,
     updateField,
+    applyProviderRefresh,
     addVariant,
     duplicateVariant,
     removeVariant,

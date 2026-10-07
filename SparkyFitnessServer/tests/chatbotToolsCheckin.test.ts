@@ -6,6 +6,7 @@ import preferenceService from '../services/preferenceService.js';
 import moodRepository from '../models/moodRepository.js';
 import fastingRepository from '../models/fastingRepository.js';
 import sleepRepository from '../models/sleepRepository.js';
+import { toolOpts } from './helpers/toolExecutionOptions.js';
 
 vi.mock('../services/measurementService', () => ({
   default: {
@@ -16,6 +17,7 @@ vi.mock('../services/measurementService', () => ({
     createCustomCategory: vi.fn(),
     upsertCustomMeasurementEntry: vi.fn(),
     getCustomMeasurementEntriesByDate: vi.fn(),
+    getCustomMeasurementEntriesByDateRange: vi.fn(),
     processSleepEntry: vi.fn(),
   },
 }));
@@ -47,7 +49,7 @@ vi.mock('../config/logging', () => ({
   log: vi.fn(),
 }));
 
-const opts = { toolCallId: 'tc-1', messages: [] };
+const opts = toolOpts;
 const DB_ERROR_TEXT =
   'Error [DB_ERROR]: A database error occurred.\n\nSuggestion: Do NOT retry the same call — it will fail the same way. Tell the user what failed and stop.';
 
@@ -55,6 +57,9 @@ let tools: ReturnType<typeof buildCheckinTools>;
 
 function mockEmptyDiary() {
   vi.mocked(measurementService.getCheckInMeasurements).mockResolvedValue({});
+  vi.mocked(
+    measurementService.getCheckInMeasurementsByDateRange
+  ).mockResolvedValue([]);
   vi.mocked(moodRepository.getMoodEntryByDate).mockResolvedValue(undefined);
   vi.mocked(
     sleepRepository.getSleepEntriesByUserIdAndDateRange
@@ -71,6 +76,44 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(preferenceService.getUserPreferences).mockResolvedValue({});
   tools = buildCheckinTools('user-1', 'UTC');
+});
+
+describe('get_custom_metrics_history', () => {
+  it('returns custom-only days with category metadata and source dates', async () => {
+    vi.mocked(
+      measurementService.getCustomMeasurementEntriesByDateRange
+    ).mockResolvedValue([
+      {
+        id: 'custom-1',
+        category_id: 'category-1',
+        value: 82,
+        entry_date: '2026-06-02',
+        entry_timestamp: '2026-06-02T07:30:00.000Z',
+        custom_categories: {
+          id: 'category-1',
+          name: 'Abdomen',
+          measurement_type: 'cm',
+          data_type: 'numeric',
+        },
+      },
+    ]);
+
+    const result = await tools.sparky_manage_checkin.execute!(
+      {
+        action: 'get_custom_metrics_history',
+        start_date: '2026-06-01',
+        end_date: '2026-06-03',
+      },
+      opts
+    );
+
+    expect(result).toContain('Custom Metrics History');
+    expect(result).toContain('Abdomen');
+    expect(result).toContain('2026-06-02');
+    expect(
+      measurementService.getCustomMeasurementEntriesByDateRange
+    ).toHaveBeenCalledWith('user-1', 'user-1', '2026-06-01', '2026-06-03');
+  });
 });
 
 describe('log_biometrics', () => {
@@ -701,17 +744,21 @@ describe('log_sleep', () => {
 describe('list_checkin_diary', () => {
   it('renders all sections with unit conversion', async () => {
     mockEmptyDiary();
-    vi.mocked(measurementService.getCheckInMeasurements).mockResolvedValue({
-      id: 'ci-1',
-      entry_date: '2026-06-01',
-      weight: 80,
-      height: null,
-      body_fat_percentage: null,
-      neck: null,
-      waist: 90,
-      hips: null,
-      steps: 9000,
-    });
+    vi.mocked(
+      measurementService.getCheckInMeasurementsByDateRange
+    ).mockResolvedValue([
+      {
+        id: 'ci-1',
+        entry_date: '2026-06-01',
+        weight: 80,
+        height: null,
+        body_fat_percentage: null,
+        neck: null,
+        waist: 90,
+        hips: null,
+        steps: 9000,
+      },
+    ]);
     vi.mocked(moodRepository.getMoodEntryByDate).mockResolvedValue({
       id: 'mood-1',
       mood_value: 8,
@@ -851,9 +898,12 @@ describe('list_checkin_diary', () => {
     expect(result).toBe(
       '### Check-in Diary: today\n\nNo check-in data found for this date.\n'
     );
-    expect(measurementService.getCheckInMeasurements).toHaveBeenCalledWith(
+    expect(
+      measurementService.getCheckInMeasurementsByDateRange
+    ).toHaveBeenCalledWith(
       'user-1',
       'user-1',
+      todayInZone('UTC'),
       todayInZone('UTC')
     );
   });
@@ -924,6 +974,24 @@ describe('get_biometrics_history', () => {
       { entry_date: '2026-06-01', weight: 81, steps: null },
     ]);
 
+    vi.mocked(
+      measurementService.getCustomMeasurementEntriesByDateRange
+    ).mockResolvedValue([
+      {
+        id: 'custom-1',
+        category_id: 'category-1',
+        value: 82,
+        entry_date: '2026-06-02',
+        entry_timestamp: '2026-06-02T07:30:00.000Z',
+        custom_categories: {
+          id: 'category-1',
+          name: 'Abdomen',
+          measurement_type: 'cm',
+          data_type: 'numeric',
+        },
+      },
+    ]);
+
     const result = await tools.sparky_manage_checkin.execute!(
       {
         action: 'get_biometrics_history',
@@ -933,11 +1001,19 @@ describe('get_biometrics_history', () => {
       opts
     );
 
-    expect(result).toBe(
-      '# Biometrics History\n\n' +
-        `**2026-06-01**: Weight: ${81 * 2.20462262}lbs \n\n` +
-        `**2026-06-02**: Weight: ${80 * 2.20462262}lbs | BF: 22% | Steps: 9000`
-    );
+    const history = JSON.parse(result as string);
+    expect(history.standard_measurements).toHaveLength(2);
+    expect(history.standard_measurements[0]).toMatchObject({
+      entry_date: '2026-06-01',
+      value_date: '2026-06-01',
+      weight: 81 * 2.20462262,
+    });
+    expect(history.custom_measurements[0]).toMatchObject({
+      id: 'custom-1',
+      entry_date: '2026-06-02',
+      value_date: '2026-06-02',
+      custom_categories: { name: 'Abdomen', measurement_type: 'cm' },
+    });
     expect(
       measurementService.getCheckInMeasurementsByDateRange
     ).toHaveBeenCalledWith('user-1', 'user-1', '2026-06-01', '2026-06-02');
@@ -948,12 +1024,20 @@ describe('get_biometrics_history', () => {
       measurementService.getCheckInMeasurementsByDateRange
     ).mockResolvedValue([]);
 
+    vi.mocked(
+      measurementService.getCustomMeasurementEntriesByDateRange
+    ).mockResolvedValue([]);
     const result = await tools.sparky_manage_checkin.execute!(
       { action: 'get_biometrics_history' },
       opts
     );
 
-    expect(result).toBe('# Biometrics History\n\nNo results found.');
+    expect(JSON.parse(result as string)).toEqual({
+      start_date: '1970-01-01',
+      end_date: '9999-12-31',
+      standard_measurements: [],
+      custom_measurements: [],
+    });
     expect(
       measurementService.getCheckInMeasurementsByDateRange
     ).toHaveBeenCalledWith('user-1', 'user-1', '1970-01-01', '9999-12-31');

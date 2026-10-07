@@ -7,20 +7,36 @@ import {
   type ChatToolCategorySlug,
 } from '@workspace/shared';
 import { ASK_USER_TOOL_NAME } from '@workspace/shared';
+import { buildAllergenTools } from './allergenTools.js';
 import { buildAskTools } from './askTools.js';
 import { buildCheckinTools } from './checkinTools.js';
+import { buildCustomNutrientTools } from './customNutrientTools.js';
+import { buildWaterContainerTools } from './waterContainerTools.js';
+import { buildCaffeineKineticsTools } from './caffeineKineticsTools.js';
 import { buildCoachTools } from './coachTools.js';
 import { buildEngagementTools } from './engagementTools.js';
+import { buildExerciseStatsTools } from './exerciseStatsTools.js';
 import { buildExerciseTools } from './exerciseTools.js';
+import { buildSleepScienceTools } from './sleepScienceTools.js';
+import { buildIntegrationsTools } from './integrationsTools.js';
+import { buildSyncedDataTools } from './syncedDataTools.js';
+import { buildProgressPhotoTools } from './progressPhotoTools.js';
+import { buildBarcodeTools } from './barcodeTools.js';
+import { buildDashboardTools } from './dashboardTools.js';
+import { buildFavoritesTools } from './favoritesTools.js';
 import { buildFoodTools } from './foodTools.js';
 import { buildGoalTools } from './goalTools.js';
 import { buildHabitTools } from './habitTools.js';
+import { buildMealPlanTools } from './mealPlansTools.js';
 import { buildMedicationTools } from './medicationTools.js';
+import { buildSymptomTools } from './symptomTools.js';
 import { ENABLE_TOOLS_TOOL_NAME, buildMetaTools } from './metaTools.js';
 import { buildProfileTools } from './profileTools.js';
 import { buildReportTools } from './reportTools.js';
 import { buildVisionTools } from './visionTools.js';
+import type { FoodPhotoEstimateSink } from './foodPhotoEstimateSink.js';
 import { buildWizardTools } from './wizardTools.js';
+import { buildWorkoutPlanTools } from './workoutPlanTools.js';
 
 /**
  * Tool surfaces the chatbot can expose:
@@ -41,26 +57,77 @@ type ToolMap = Record<string, Tool>;
 // mirrors the historical builder ordering — the Anthropic cache breakpoint
 // lands on whatever ends up last (see applyChatProviderTuning), and
 // tests/chatbotToolsIndex.test.ts pins the full/core surfaces against it.
+/**
+ * Per-turn context a builder may use. Only the vision category needs it today
+ * (it hands the structured photo estimate to the turn so it can be persisted
+ * and logged verbatim); every other builder ignores the argument.
+ */
+export interface ToolBuildContext {
+  foodPhotoEstimateSink?: FoodPhotoEstimateSink;
+  /**
+   * The image attached to this turn, as a data URL.
+   *
+   * A model can see an attached image but cannot put it in a tool call — a
+   * tool call is JSON text and the bytes are not something it can transcribe.
+   * Asked for an `image_url` it therefore invents one, which the vision tool
+   * rejects. Set after the tools are built (the caller has the messages, the
+   * builder does not); the tools read it at call time.
+   */
+  latestImageDataUrl?: string | null;
+  /** The active AI service config ID from the current chat session, if known. */
+  serviceConfigId?: string | null;
+}
+
 const CATEGORY_BUILDERS: Record<
   ChatToolCategorySlug,
-  ((userId: string, tz: string, actingUserId?: string) => ToolMap)[]
+  ((
+    userId: string,
+    tz: string,
+    ctx?: ToolBuildContext,
+    actingUserId?: string
+  ) => ToolMap)[]
 > = {
-  exercise: [(u, tz, act) => buildExerciseTools(u, tz, act)],
-  food: [(u, tz, act) => buildFoodTools(u, tz, act)],
-  checkin: [(u, tz, act) => buildCheckinTools(u, tz, act)],
-  goals: [(u, tz, act) => buildGoalTools(u, tz, act)],
+  exercise: [
+    (u, tz, _ctx, act) => buildExerciseTools(u, tz, act),
+    (u, tz) => buildExerciseStatsTools(u, tz),
+    (u, tz) => buildWorkoutPlanTools(u, tz),
+  ],
+  food: [
+    (u, tz, _ctx, act) => buildFoodTools(u, tz, act),
+    (u, tz) => buildFavoritesTools(u, tz),
+    (u, tz) => buildMealPlanTools(u, tz),
+    (u, tz) => buildCustomNutrientTools(u, tz),
+    (u, tz) => buildWaterContainerTools(u, tz),
+    (u, tz) => buildCaffeineKineticsTools(u, tz),
+    (u, tz) => buildAllergenTools(u, tz),
+    (u, tz) => buildBarcodeTools(u, tz),
+  ],
+  checkin: [
+    (u, tz, _ctx, act) => buildCheckinTools(u, tz, act),
+    (u, tz) => buildProgressPhotoTools(u, tz),
+    (u, tz) => buildSleepScienceTools(u, tz),
+    (u, tz) => buildSymptomTools(u, tz),
+  ],
+  goals: [(u, tz) => buildGoalTools(u, tz)],
   coaching: [
-    (u, tz, act) => buildCoachTools(u, tz, act),
-    (u, tz, act) => buildEngagementTools(u, tz, act),
-    (u, _tz, act) => buildWizardTools(u, act),
+    (u, tz) => buildCoachTools(u, tz),
+    (u, tz) => buildEngagementTools(u, tz),
+    (u) => buildWizardTools(u),
   ],
-  vision: [(u, _tz, act) => buildVisionTools(u, act)],
+  vision: [
+    (u, _tz, ctx) => buildVisionTools(u, ctx?.foodPhotoEstimateSink, ctx),
+  ],
   profile: [
-    (u, _tz, act) => buildProfileTools(u, act),
-    (u, tz, act) => buildHabitTools(u, tz, act),
+    (u, _tz, _ctx, act) => buildProfileTools(u, act),
+    (u, tz) => buildHabitTools(u, tz),
+    (u, tz) => buildIntegrationsTools(u, tz),
+    (u, tz) => buildSyncedDataTools(u, tz),
   ],
-  reports: [(u, tz, act) => buildReportTools(u, tz, act)],
-  medications: [(u, tz, act) => buildMedicationTools(u, tz, act)],
+  reports: [
+    (u, tz, _ctx, act) => buildReportTools(u, tz, act),
+    (u, tz) => buildDashboardTools(u, tz),
+  ],
+  medications: [(u, tz) => buildMedicationTools(u, tz)],
 };
 
 // Composition order: the core categories first (a strict prefix of the full
@@ -104,6 +171,7 @@ function composeTools(
   tz: string,
   profile: ChatToolProfile,
   categories?: readonly string[],
+  ctx?: ToolBuildContext,
   actingUserId?: string
 ): ToolMap {
   const selected = resolveCategories(profile, categories);
@@ -111,7 +179,7 @@ function composeTools(
   for (const slug of CATEGORY_ORDER) {
     if (!selected.has(slug)) continue;
     for (const build of CATEGORY_BUILDERS[slug]) {
-      Object.assign(tools, build(userId, tz, actingUserId));
+      Object.assign(tools, build(userId, tz, ctx, actingUserId));
     }
   }
   return tools;
@@ -123,6 +191,7 @@ function composeTools(
 function composeAllToolsWithIndex(
   userId: string,
   tz: string,
+  ctx?: ToolBuildContext,
   actingUserId?: string
 ): {
   tools: ToolMap;
@@ -133,7 +202,7 @@ function composeAllToolsWithIndex(
   for (const slug of CATEGORY_ORDER) {
     const names: string[] = [];
     for (const build of CATEGORY_BUILDERS[slug]) {
-      const built = build(userId, tz, actingUserId);
+      const built = build(userId, tz, ctx, actingUserId);
       Object.assign(tools, built);
       names.push(...Object.keys(built));
     }
@@ -207,8 +276,7 @@ function applyChatProviderTuning(tools: ToolMap): void {
       ...lastTool.providerOptions,
       anthropic: {
         ...(lastTool.providerOptions?.anthropic as
-          | Record<string, unknown>
-          | undefined),
+          Record<string, unknown> | undefined),
         cacheControl: { type: 'ephemeral' },
       },
     };
@@ -251,6 +319,7 @@ export function buildChatbotTools(
   providerTuning = true,
   categories?: readonly string[],
   includeAskTool = false,
+  ctx?: ToolBuildContext,
   actingUserId?: string
 ): ToolMap {
   // Normalize the selection into the cache key so two requests with different
@@ -261,7 +330,12 @@ export function buildChatbotTools(
   const resolvedActingUserId = actingUserId ?? userId;
   const key = `${providerTuning ? 'chat' : 'mcp'}|${profile}|${categoryKey}|${includeAskTool ? 'ask' : 'noask'}|${tz}|${userId}|${resolvedActingUserId}`;
   const now = Date.now();
-  const cached = toolCache.get(key);
+  // A build context is per-turn (the vision category closes over this turn's
+  // estimate sink), so a cached map would hand one turn's sink to the next.
+  // Only image turns pass one, and those already spend seconds in a vision
+  // call, so skipping the cache there costs nothing measurable.
+  const cacheable = ctx === undefined;
+  const cached = cacheable ? toolCache.get(key) : undefined;
   if (cached && cached.expiresAt > now) {
     return cached.tools;
   }
@@ -271,6 +345,7 @@ export function buildChatbotTools(
     tz,
     profile,
     categories,
+    ctx,
     resolvedActingUserId
   );
   // Composed last so applyChatProviderTuning's Anthropic cache breakpoint lands
@@ -282,6 +357,8 @@ export function buildChatbotTools(
   if (providerTuning) {
     applyChatProviderTuning(tools);
   }
+
+  if (!cacheable) return tools;
 
   if (toolCache.size >= TOOL_CACHE_MAX_ENTRIES) {
     // Simple pressure valve: drop the oldest entries (insertion order).
@@ -315,12 +392,16 @@ const surfaceCache = new Map<
 export function buildChatToolSurface(
   userId: string,
   tz: string,
+  ctx?: ToolBuildContext,
   actingUserId?: string
 ): ChatToolSurface {
   const resolvedActingUserId = actingUserId ?? userId;
   const key = `${tz}|${userId}|${resolvedActingUserId}`;
   const now = Date.now();
-  const cached = surfaceCache.get(key);
+  // Same rule as buildChatbotTools: a per-turn context must never be cached,
+  // or one turn's photo-estimate sink would be handed to the next.
+  const cacheable = ctx === undefined;
+  const cached = cacheable ? surfaceCache.get(key) : undefined;
   if (cached && cached.expiresAt > now) {
     return cached.surface;
   }
@@ -328,6 +409,7 @@ export function buildChatToolSurface(
   const { tools, toolNamesByCategory } = composeAllToolsWithIndex(
     userId,
     tz,
+    ctx,
     resolvedActingUserId
   );
   // The quick-reply tool is composed for every surface but only made active for
@@ -340,11 +422,13 @@ export function buildChatToolSurface(
   Object.assign(tools, buildMetaTools());
   applyChatProviderTuning(tools);
 
+  const surface: ChatToolSurface = { tools, toolNamesByCategory };
+  if (!cacheable) return surface;
+
   if (surfaceCache.size >= TOOL_CACHE_MAX_ENTRIES) {
     const firstKey = surfaceCache.keys().next().value;
     if (firstKey !== undefined) surfaceCache.delete(firstKey);
   }
-  const surface: ChatToolSurface = { tools, toolNamesByCategory };
   surfaceCache.set(key, { surface, expiresAt: now + TOOL_CACHE_TTL_MS });
   return surface;
 }

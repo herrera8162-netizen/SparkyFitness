@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Check, Sparkles, Clock, CalendarDays, X } from 'lucide-react';
 import {
   Dialog,
@@ -9,6 +10,7 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { NumericInput } from '@/components/NumericInput';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -34,7 +36,7 @@ import { useActiveAIService } from '@/hooks/AI/useAIServiceSettings';
 import { useUserAiConfigAllowed } from '@/hooks/AI/useUserAiConfigAllowed';
 import {
   CONFIDENCE_TONES,
-  OVERALL_CONFIDENCE_LABELS,
+  aiConfidenceSchema,
   shouldOfferAiConversion,
   userHourMinute,
   defaultMealTypeForTime,
@@ -46,6 +48,10 @@ import {
   formatQuantityServingLabel,
   formatUnitOptionLabel,
 } from '@/utils/foodServing';
+import {
+  getAiConfidenceLabel,
+  getAiEstimateLabel,
+} from '@/utils/aiConfidenceLabels';
 
 // Confidence tone classes for the saved-AI-variant indicator in the picker dropdown.
 const AI_PICKER_ICON_TONE_CLASSES: Record<ConfidenceTone, string> = {
@@ -60,8 +66,19 @@ const AI_ESTIMATE_BADGE_TONE_CLASSES: Record<ConfidenceTone, string> = {
   warning: 'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300',
   error: 'bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-300',
 };
+
+const getValidAiConfidence = (
+  confidence: FoodVariant['ai_confidence']
+): AiConfidence | null => {
+  const result = aiConfidenceSchema.safeParse(confidence);
+  return result.success ? result.data : null;
+};
+
 import { AiEstimateSection } from '@/components/FoodUnitSelector/AiEstimateSection';
 import FavoriteStarButton from '@/components/FavoriteStarButton';
+import { MarkdownView } from '@/components/ui/MarkdownView';
+import { MarkdownEditor } from '@/components/ui/MarkdownEditor';
+import { usableFoodImages } from '@/utils/foodImages';
 
 interface FoodUnitSelectorProps {
   food: Food;
@@ -73,7 +90,8 @@ interface FoodUnitSelectorProps {
     unit: string,
     selectedVariant: FoodVariant,
     entryTime?: string | null,
-    mealType?: string | null
+    mealType?: string | null,
+    notes?: string | null
   ) => void;
   showUnitSelector?: boolean;
   initialQuantity?: number;
@@ -114,6 +132,7 @@ const FoodUnitSelector = ({
   availableMealTypes,
   targetLabel,
 }: FoodUnitSelectorProps) => {
+  const { t } = useTranslation();
   const {
     loggingLevel,
     energyUnit,
@@ -141,8 +160,11 @@ const FoodUnitSelector = ({
   const [selectedVariant, setSelectedVariant] = useState<FoodVariant | null>(
     null
   );
-  const [quantity, setQuantity] = useState<number | string>(1);
+  const [quantity, setQuantity] = useState<number | undefined>(1);
   const [entryTime, setEntryTime] = useState('');
+  // The note for THIS diary entry. Separate from the food's own note, which is
+  // shown read-only above and never copied into the entry.
+  const [entryNotes, setEntryNotes] = useState('');
   const [mealType, setMealType] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -160,6 +182,11 @@ const FoodUnitSelector = ({
       } else {
         setEntryTime('');
       }
+
+      // The dialog is not unmounted between foods (Diary only toggles `open`
+      // and never clears `selectedFood`), so a note typed for one food would
+      // otherwise still be in the box when the next one is logged.
+      setEntryNotes('');
 
       if (
         showMealTypeSelect &&
@@ -232,6 +259,9 @@ const FoodUnitSelector = ({
       setQuantity(variant.serving_size);
     },
   });
+  const selectedAiConfidence = getValidAiConfidence(
+    selectedVariant?.ai_confidence
+  );
 
   const loadVariantsData = useCallback(async () => {
     debug(loggingLevel, 'Loading food variants for food ID:', food?.id);
@@ -261,6 +291,10 @@ const FoodUnitSelector = ({
         vitamin_c: food.default_variant?.vitamin_c || 0,
         calcium: food.default_variant?.calcium || 0,
         iron: food.default_variant?.iron || 0,
+        caffeine_mg: food.default_variant?.caffeine_mg || 0,
+        water_ml: food.default_variant?.water_ml || 0,
+        alcohol_g: food.default_variant?.alcohol_g || 0,
+        abv_percent: food.default_variant?.abv_percent,
         custom_nutrients: food.default_variant?.custom_nutrients,
         source: food.default_variant?.source,
         ai_confidence: food.default_variant?.ai_confidence,
@@ -292,6 +326,10 @@ const FoodUnitSelector = ({
           vitamin_c: variant.vitamin_c || 0,
           calcium: variant.calcium || 0,
           iron: variant.iron || 0,
+          caffeine_mg: variant.caffeine_mg || 0,
+          water_ml: variant.water_ml || 0,
+          alcohol_g: variant.alcohol_g || 0,
+          abv_percent: variant.abv_percent,
           custom_nutrients: variant.custom_nutrients,
           // Preserve AI provenance so the dropdown can badge AI-source variants.
           source: variant.source,
@@ -343,6 +381,10 @@ const FoodUnitSelector = ({
         vitamin_c: food.default_variant?.vitamin_c || 0,
         calcium: food.default_variant?.calcium || 0,
         iron: food.default_variant?.iron || 0,
+        caffeine_mg: food.default_variant?.caffeine_mg || 0,
+        water_ml: food.default_variant?.water_ml || 0,
+        alcohol_g: food.default_variant?.alcohol_g || 0,
+        abv_percent: food.default_variant?.abv_percent,
         custom_nutrients: food.default_variant?.custom_nutrients,
         source: food.default_variant?.source,
         ai_confidence: food.default_variant?.ai_confidence,
@@ -362,8 +404,52 @@ const FoodUnitSelector = ({
       initialUnit,
       initialVariantId,
     });
-    if (open && food && food.id) {
-      loadVariantsData();
+    if (open && food) {
+      if (food.id && !food.id.startsWith('temp-')) {
+        loadVariantsData();
+      } else {
+        const primaryUnit: FoodVariant = {
+          id: food.default_variant?.id || 'default',
+          serving_size: food.default_variant?.serving_size || 100,
+          serving_unit: food.default_variant?.serving_unit || 'g',
+          serving_description: food.default_variant?.serving_description,
+          calories: food.default_variant?.calories || 0,
+          protein: food.default_variant?.protein || 0,
+          carbs: food.default_variant?.carbs || 0,
+          fat: food.default_variant?.fat || 0,
+          saturated_fat: food.default_variant?.saturated_fat || 0,
+          polyunsaturated_fat: food.default_variant?.polyunsaturated_fat || 0,
+          monounsaturated_fat: food.default_variant?.monounsaturated_fat || 0,
+          trans_fat: food.default_variant?.trans_fat || 0,
+          cholesterol: food.default_variant?.cholesterol || 0,
+          sodium: food.default_variant?.sodium || 0,
+          potassium: food.default_variant?.potassium || 0,
+          dietary_fiber: food.default_variant?.dietary_fiber || 0,
+          sugars: food.default_variant?.sugars || 0,
+          vitamin_a: food.default_variant?.vitamin_a || 0,
+          vitamin_c: food.default_variant?.vitamin_c || 0,
+          calcium: food.default_variant?.calcium || 0,
+          iron: food.default_variant?.iron || 0,
+          caffeine_mg: food.default_variant?.caffeine_mg || 0,
+          water_ml: food.default_variant?.water_ml || 0,
+          alcohol_g: food.default_variant?.alcohol_g || 0,
+          abv_percent: food.default_variant?.abv_percent,
+          custom_nutrients: food.default_variant?.custom_nutrients,
+          source: food.default_variant?.source,
+          ai_confidence: food.default_variant?.ai_confidence,
+        };
+        const allVariants =
+          food.variants && food.variants.length > 0
+            ? food.variants
+            : [primaryUnit];
+        setVariants(allVariants);
+        const selected =
+          (initialVariantId &&
+            allVariants.find((v) => v.id === initialVariantId)) ||
+          allVariants[0] ||
+          null;
+        setSelectedVariant(selected);
+      }
       setQuantity(
         initialQuantity !== undefined
           ? initialQuantity
@@ -387,6 +473,8 @@ const FoodUnitSelector = ({
     event.preventDefault();
     debug(loggingLevel, 'Handling submit.');
 
+    if (quantity === undefined) return;
+
     if (isConverting) {
       const convertedVariant = buildConvertedVariant();
       if (!convertedVariant) {
@@ -406,16 +494,14 @@ const FoodUnitSelector = ({
           ...convertedVariant,
           ...savedVariant,
         };
-        const numericQuantity =
-          typeof quantity === 'number' ? quantity : parseFloat(quantity) || 0;
-
         onSelect(
           food,
-          numericQuantity,
+          quantity,
           variantWithId.serving_unit,
           variantWithId,
           entryTime || null,
-          showMealTypeSelect ? mealType : null
+          showMealTypeSelect ? mealType : null,
+          entryNotes.trim() || null
         );
         onOpenChange(false);
         setQuantity(1);
@@ -427,22 +513,20 @@ const FoodUnitSelector = ({
     }
 
     if (selectedVariant) {
-      const numericQuantity =
-        typeof quantity === 'number' ? quantity : parseFloat(quantity) || 0;
-
       info(loggingLevel, 'Submitting food selection:', {
         food,
-        quantity: numericQuantity,
+        quantity: quantity,
         unit: selectedVariant.serving_unit,
         variantId: selectedVariant.id || undefined,
       });
       onSelect(
         food,
-        numericQuantity,
+        quantity,
         selectedVariant.serving_unit,
         selectedVariant,
         entryTime || null,
-        showMealTypeSelect ? mealType : null
+        showMealTypeSelect ? mealType : null,
+        entryNotes.trim() || null
       );
       onOpenChange(false);
       setQuantity(1);
@@ -456,12 +540,20 @@ const FoodUnitSelector = ({
     ? buildConvertedVariant()
     : selectedVariant;
 
-  const numericQuantity =
-    typeof quantity === 'number' ? quantity : parseFloat(quantity) || 0;
+  // Photos of the food being logged, offered to the note editor. Already
+  // resolved to a usable src, which is the form written into the markdown.
+  const foodImagePaths = useMemo(
+    () => usableFoodImages(food?.images),
+    [food?.images]
+  );
+  const foodImageOptions = useMemo(
+    () => foodImagePaths.map((src) => ({ path: src, src })),
+    [foodImagePaths]
+  );
 
   const nutrition = (() => {
-    if (!activeVariant) return null;
-    const ratio = numericQuantity / (activeVariant.serving_size || 1);
+    if (!activeVariant || quantity === undefined) return null;
+    const ratio = quantity / (activeVariant.serving_size || 1);
     return {
       calories: (activeVariant.calories || 0) * ratio,
       protein: (activeVariant.protein || 0) * ratio,
@@ -499,11 +591,14 @@ const FoodUnitSelector = ({
   const displayUnit = isConverting
     ? pendingUnit.trim() || '?'
     : selectedVariant?.serving_unit || '';
-  const displayServing = isConverting
-    ? `${quantity} ${displayUnit}`.trim()
-    : selectedVariant
-      ? formatQuantityServingLabel(numericQuantity, selectedVariant)
-      : `${quantity} ${displayUnit}`.trim();
+  const displayServing =
+    quantity === undefined
+      ? ''
+      : isConverting
+        ? `${quantity} ${displayUnit}`.trim()
+        : selectedVariant
+          ? formatQuantityServingLabel(quantity, selectedVariant)
+          : `${quantity} ${displayUnit}`.trim();
 
   return (
     <Dialog
@@ -515,12 +610,25 @@ const FoodUnitSelector = ({
           <DialogTitle className="flex items-center gap-2">
             <span>
               {initialQuantity
-                ? `Edit ${food?.name}`
+                ? t('foodUnitSelector.editTitle', {
+                    name: food?.name,
+                    defaultValue: `Edit ${food?.name}`,
+                  })
                 : resolvedMealSlotName
-                  ? `Add ${food?.name} to ${resolvedMealSlotName}`
+                  ? t('foodUnitSelector.addToSlotTitle', {
+                      name: food?.name,
+                      slot: resolvedMealSlotName,
+                      defaultValue: `Add ${food?.name} to ${resolvedMealSlotName}`,
+                    })
                   : isDiaryContext
-                    ? `Add ${food?.name}`
-                    : `Add ${food?.name} to Meal`}
+                    ? t('foodUnitSelector.addToDiaryTitle', {
+                        name: food?.name,
+                        defaultValue: `Add ${food?.name}`,
+                      })
+                    : t('foodUnitSelector.addTitle', {
+                        name: food?.name,
+                        defaultValue: `Add ${food?.name} to Meal`,
+                      })}
             </span>
             {/* Only persisted local/saved foods can be favorited (external
                 provider search results are not saved yet, so they have no
@@ -531,35 +639,45 @@ const FoodUnitSelector = ({
           </DialogTitle>
           <DialogDescription>
             {initialQuantity
-              ? `Edit the quantity and unit for ${food?.name}.`
-              : `Select the quantity and unit for your food entry.`}
+              ? t('foodUnitSelector.editDescription', {
+                  name: food?.name,
+                  defaultValue: `Edit the quantity and unit for ${food?.name}.`,
+                })
+              : t(
+                  'foodUnitSelector.addDescription',
+                  'Select the quantity and unit for your food entry.'
+                )}
           </DialogDescription>
         </DialogHeader>
 
         {loading ? (
-          <div>Loading units...</div>
+          <div>{t('foodUnitSelector.loadingUnits', 'Loading units...')}</div>
         ) : (
           <form onSubmit={handleSubmit}>
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <Label htmlFor="quantity">Quantity</Label>
-                  <Input
+                  <Label htmlFor="quantity">
+                    {t('foodUnitSelector.quantity', 'Quantity')}
+                  </Label>
+                  <NumericInput
                     ref={quantityInputRef}
                     id="quantity"
-                    type="number"
                     step="any"
                     min="0.01"
+                    decimals={3}
+                    required
                     value={quantity}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      debug(loggingLevel, 'Quantity changed:', val);
-                      setQuantity(val);
+                    onValueChange={(newQuantity) => {
+                      debug(loggingLevel, 'Quantity changed:', newQuantity);
+                      setQuantity(newQuantity);
                     }}
                   />
                 </div>
                 <div>
-                  <Label htmlFor="unit">Unit</Label>
+                  <Label htmlFor="unit">
+                    {t('foodUnitSelector.unit', 'Unit')}
+                  </Label>
                   <div className="flex items-center gap-2">
                     <Select
                       value={dropdownValue}
@@ -569,23 +687,32 @@ const FoodUnitSelector = ({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {variants.map(
-                          (variant) =>
+                        {variants.map((variant) => {
+                          const aiConfidence = getValidAiConfidence(
+                            variant.ai_confidence
+                          );
+
+                          return (
                             variant.id && (
                               <SelectItem key={variant.id} value={variant.id}>
                                 <span className="flex items-center gap-1.5">
                                   {formatUnitOptionLabel(variant)}
                                   {variant.source === 'ai_estimate' &&
-                                    variant.ai_confidence && (
+                                    aiConfidence && (
                                       <Sparkles
-                                        className={`h-3 w-3 ${AI_PICKER_ICON_TONE_CLASSES[CONFIDENCE_TONES[variant.ai_confidence as AiConfidence]]}`}
-                                        aria-label={`AI estimate (${OVERALL_CONFIDENCE_LABELS[variant.ai_confidence as AiConfidence]} confidence)`}
+                                        className={`h-3 w-3 ${AI_PICKER_ICON_TONE_CLASSES[CONFIDENCE_TONES[aiConfidence]]}`}
+                                        aria-label={getAiEstimateLabel(
+                                          t,
+                                          'foodUnitSelector',
+                                          aiConfidence
+                                        )}
                                       />
                                     )}
                                 </span>
                               </SelectItem>
                             )
-                        )}
+                          );
+                        })}
                         {convertibleUnits.length > 0 && (
                           <>
                             <SelectSeparator />
@@ -610,15 +737,19 @@ const FoodUnitSelector = ({
                         )}
                         <SelectSeparator />
                         <SelectItem value="__custom__">
-                          Custom unit...
+                          {t('foodUnitSelector.customUnit', 'Custom unit...')}
                         </SelectItem>
                       </SelectContent>
                     </Select>
                     {selectedVariant?.source === 'ai_estimate' &&
-                      selectedVariant.ai_confidence && (
+                      selectedAiConfidence && (
                         <Sparkles
-                          className={`h-4 w-4 ${AI_PICKER_ICON_TONE_CLASSES[CONFIDENCE_TONES[selectedVariant.ai_confidence as AiConfidence]]}`}
-                          aria-label={`AI estimate (${OVERALL_CONFIDENCE_LABELS[selectedVariant.ai_confidence as AiConfidence]} confidence)`}
+                          className={`h-4 w-4 ${AI_PICKER_ICON_TONE_CLASSES[CONFIDENCE_TONES[selectedAiConfidence]]}`}
+                          aria-label={getAiEstimateLabel(
+                            t,
+                            'foodUnitSelector',
+                            selectedAiConfidence
+                          )}
                         />
                       )}
                   </div>
@@ -629,10 +760,17 @@ const FoodUnitSelector = ({
                 availableMealTypes &&
                 availableMealTypes.length > 0 && (
                   <div className="space-y-1">
-                    <Label htmlFor="mealType">Meal Type</Label>
+                    <Label htmlFor="mealType">
+                      {t('foodUnitSelector.meal', 'Meal')}
+                    </Label>
                     <Select value={mealType} onValueChange={setMealType}>
                       <SelectTrigger id="mealType" className="w-full text-sm">
-                        <SelectValue placeholder="Select meal type" />
+                        <SelectValue
+                          placeholder={t(
+                            'foodUnitSelector.selectMeal',
+                            'Select meal'
+                          )}
+                        />
                       </SelectTrigger>
                       <SelectContent>
                         {availableMealTypes.map((t) => (
@@ -648,36 +786,44 @@ const FoodUnitSelector = ({
               {showTimeInput && (
                 <div className="space-y-1">
                   <div className="flex items-center justify-between">
-                    <Label htmlFor="entryTime">Time (optional)</Label>
+                    <Label htmlFor="entryTime">
+                      {t('foodUnitSelector.timeOptional', 'Time (optional)')}
+                    </Label>
                     <div className="flex items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => setEntryTime('')}
                         disabled={!entryTime}
                         className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-muted-foreground shadow-sm hover:bg-destructive/10 hover:text-destructive transition-colors disabled:opacity-40 disabled:pointer-events-none"
-                        title="Clear time"
+                        title={t('foodUnitSelector.clearTime', 'Clear time')}
                       >
                         <X className="h-4 w-4" />
-                        Clear
+                        {t('foodUnitSelector.clear', 'Clear')}
                       </button>
                       <button
                         type="button"
                         onClick={handleSetCurrentTime}
                         className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-                        title="Set to current local time"
+                        title={t(
+                          'foodUnitSelector.setCurrentTime',
+                          'Set to current local time'
+                        )}
                       >
                         <Clock className="h-4 w-4" />
-                        Now
+                        {t('foodUnitSelector.now', 'Now')}
                       </button>
                       {resolvedDefaultMealTime && (
                         <button
                           type="button"
                           onClick={handleSetDefaultTime}
                           className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-3 py-1 text-sm font-medium text-foreground shadow-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-                          title={`Set to meal default (${toHourMinute(resolvedDefaultMealTime)})`}
+                          title={t('foodUnitSelector.setMealDefault', {
+                            time: toHourMinute(resolvedDefaultMealTime),
+                            defaultValue: `Set to meal default (${toHourMinute(resolvedDefaultMealTime)})`,
+                          })}
                         >
                           <CalendarDays className="h-4 w-4" />
-                          Default
+                          {t('foodUnitSelector.default', 'Default')}
                         </button>
                       )}
                     </div>
@@ -695,11 +841,16 @@ const FoodUnitSelector = ({
               {pendingUnitIsCustom && (
                 <div className="border rounded-lg p-3 space-y-3 bg-muted/50">
                   <div>
-                    <Label htmlFor="customUnitName">Unit name</Label>
+                    <Label htmlFor="customUnitName">
+                      {t('foodUnitSelector.unitName', 'Unit name')}
+                    </Label>
                     <Input
                       id="customUnitName"
                       type="text"
-                      placeholder="e.g. slice, bar, scoop"
+                      placeholder={t(
+                        'foodUnitSelector.unitNamePlaceholder',
+                        'e.g. slice, bar, scoop'
+                      )}
                       value={pendingUnit}
                       onChange={(e) => {
                         setPendingUnit(e.target.value);
@@ -718,7 +869,10 @@ const FoodUnitSelector = ({
                         type="number"
                         step="0.01"
                         min="0.01"
-                        placeholder="e.g. 1"
+                        placeholder={t(
+                          'foodUnitSelector.numberPlaceholder',
+                          'e.g. 1'
+                        )}
                         value={conversionFactor}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -739,7 +893,7 @@ const FoodUnitSelector = ({
                     size="sm"
                     onClick={cancelConversion}
                   >
-                    Cancel
+                    {t('common.cancel', 'Cancel')}
                   </Button>
                 </div>
               )}
@@ -750,10 +904,12 @@ const FoodUnitSelector = ({
                 autoConversionFactor === null && (
                   <div className="border rounded-lg p-3 space-y-3 bg-muted/50">
                     <p className="text-sm text-muted-foreground">
-                      These units can&apos;t be converted automatically — enter
-                      how many{' '}
-                      <strong>{conversionBaseVariant?.serving_unit}</strong> are
-                      in 1 <strong>{pendingUnit}</strong>.
+                      {t('foodUnitSelector.manualConversion', {
+                        defaultValue:
+                          "These units can't be converted automatically — enter how many {{baseUnit}} are in 1 {{unit}}.",
+                        baseUnit: conversionBaseVariant?.serving_unit,
+                        unit: pendingUnit,
+                      })}
                     </p>
 
                     {/* AI estimate path: shown only when both units are
@@ -799,14 +955,20 @@ const FoodUnitSelector = ({
                         {aiEstimateData !== null && (
                           <span
                             className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold ${AI_ESTIMATE_BADGE_TONE_CLASSES[CONFIDENCE_TONES[aiEstimateData.confidence]]}`}
-                            aria-label={`AI estimate (${OVERALL_CONFIDENCE_LABELS[aiEstimateData.confidence]} confidence)`}
+                            aria-label={getAiEstimateLabel(
+                              t,
+                              'foodUnitSelector',
+                              aiEstimateData.confidence
+                            )}
                           >
-                            {
-                              OVERALL_CONFIDENCE_LABELS[
+                            {t('foodUnitSelector.confidenceEstimate', {
+                              defaultValue: '{{confidence}} estimate',
+                              confidence: getAiConfidenceLabel(
+                                t,
+                                'foodUnitSelector',
                                 aiEstimateData.confidence
-                              ]
-                            }{' '}
-                            estimate
+                              ),
+                            })}
                           </span>
                         )}
                       </Label>
@@ -815,7 +977,10 @@ const FoodUnitSelector = ({
                         type="number"
                         step="0.01"
                         min="0.01"
-                        placeholder="e.g. 1"
+                        placeholder={t(
+                          'foodUnitSelector.numberPlaceholder',
+                          'e.g. 1'
+                        )}
                         value={conversionFactor}
                         onChange={(e) => {
                           const val = e.target.value;
@@ -840,7 +1005,7 @@ const FoodUnitSelector = ({
                       size="sm"
                       onClick={cancelConversion}
                     >
-                      Cancel
+                      {t('common.cancel', 'Cancel')}
                     </Button>
                   </div>
                 )}
@@ -848,7 +1013,10 @@ const FoodUnitSelector = ({
               {nutrition && (
                 <div className="bg-muted p-3 rounded-lg">
                   <h4 className="font-medium mb-2">
-                    Nutrition for {displayServing}:
+                    {t('foodUnitSelector.nutritionFor', {
+                      defaultValue: 'Nutrition for {{serving}}:',
+                      serving: displayServing,
+                    })}
                   </h4>
                   <div className="grid grid-cols-2 gap-2 text-sm">
                     <div>
@@ -857,12 +1025,69 @@ const FoodUnitSelector = ({
                       )}{' '}
                       {getEnergyUnitString(energyUnit)}
                     </div>
-                    <div>{nutrition.protein.toFixed(1)}g protein</div>
-                    <div>{nutrition.carbs.toFixed(1)}g carbs</div>
-                    <div>{nutrition.fat.toFixed(1)}g fat</div>
+                    <div>
+                      {t('foodUnitSelector.proteinAmount', {
+                        defaultValue: '{{amount}}g protein',
+                        amount: nutrition.protein.toFixed(1),
+                      })}
+                    </div>
+                    <div>
+                      {t('foodUnitSelector.carbsAmount', {
+                        defaultValue: '{{amount}}g carbs',
+                        amount: nutrition.carbs.toFixed(1),
+                      })}
+                    </div>
+                    <div>
+                      {t('foodUnitSelector.fatAmount', {
+                        defaultValue: '{{amount}}g fat',
+                        amount: nutrition.fat.toFixed(1),
+                      })}
+                    </div>
                   </div>
                 </div>
               )}
+
+              {/*
+                Below the nutrition panel on purpose: the figures are what this
+                dialog is opened to check, and a long note above them would push
+                them off-screen.
+              */}
+              {food?.notes ? (
+                <div className="space-y-1">
+                  <Label>
+                    {t('foodUnitSelector.foodNotes', 'About this food')}
+                  </Label>
+                  <div className="rounded-md border bg-muted/40 px-3 py-2 max-h-48 overflow-y-auto">
+                    <MarkdownView images={foodImagePaths}>
+                      {food.notes}
+                    </MarkdownView>
+                  </div>
+                </div>
+              ) : null}
+
+              {/*
+                Not gated on `showTimeInput`: a per-occasion note has nothing to
+                do with whether the time picker is shown.
+              */}
+              <div className="space-y-1">
+                <Label htmlFor="entryNotes">
+                  {t(
+                    'foodUnitSelector.entryNotes',
+                    'Note for this entry (optional)'
+                  )}
+                </Label>
+                <MarkdownEditor
+                  id="entryNotes"
+                  value={entryNotes}
+                  onChange={setEntryNotes}
+                  rows={3}
+                  placeholder={t(
+                    'foodUnitSelector.entryNotesPlaceholder',
+                    'Anything specific about this time you ate it'
+                  )}
+                  imageOptions={foodImageOptions}
+                />
+              </div>
 
               <div className="flex justify-end space-x-2">
                 <Button
@@ -870,7 +1095,7 @@ const FoodUnitSelector = ({
                   variant="outline"
                   onClick={() => onOpenChange(false)}
                 >
-                  Cancel
+                  {t('common.cancel', 'Cancel')}
                 </Button>
                 <Button
                   type="submit"
@@ -884,12 +1109,12 @@ const FoodUnitSelector = ({
                   }
                 >
                   {createFoodVariantMutation.isPending
-                    ? 'Saving...'
+                    ? t('common.saving', 'Saving...')
                     : initialQuantity
-                      ? 'Update Food'
+                      ? t('foodUnitSelector.updateFood', 'Update Food')
                       : isDiaryContext
-                        ? 'Add Food'
-                        : 'Add to Meal'}
+                        ? t('foodUnitSelector.addFood', 'Add Food')
+                        : t('foodUnitSelector.addToMeal', 'Add to Meal')}
                 </Button>
               </div>
             </div>

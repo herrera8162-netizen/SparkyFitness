@@ -26,7 +26,8 @@ interface StoredServerConfig {
   authType?: 'apiKey' | 'session';
 }
 
-export type TimeRange = 'today' | '24h' | '3d' | '7d' | '30d' | '90d' | '180d' | '365d';
+export type TimeRange =
+  'today' | '24h' | '3d' | '7d' | '30d' | '90d' | '180d' | '365d';
 
 const SERVER_CONFIGS_KEY = 'serverConfigs';
 const ACTIVE_SERVER_CONFIG_ID_KEY = 'activeServerConfigId';
@@ -38,13 +39,19 @@ const SYNC_ON_OPEN_ENABLED_KEY = 'syncOnOpenEnabled';
 const PENDING_HEALTH_SYNC_CACHE_REFRESH_KEY = 'pendingHealthSyncCacheRefresh';
 
 const secureStoreKey = (configId: string) => `apiKey_${configId}`;
-const sessionTokenSecureStoreKey = (configId: string) => `sessionToken_${configId}`;
-const proxyHeadersSecureStoreKey = (configId: string) => `proxyHeaders_${configId}`;
-const secureStoreOptions = { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK };
+const sessionTokenSecureStoreKey = (configId: string) =>
+  `sessionToken_${configId}`;
+const proxyHeadersSecureStoreKey = (configId: string) =>
+  `proxyHeaders_${configId}`;
+const secureStoreOptions = {
+  keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK,
+};
 
-export const proxyHeadersToRecord = (headers?: ProxyHeader[]): Record<string, string> => {
+export const proxyHeadersToRecord = (
+  headers?: ProxyHeader[]
+): Record<string, string> => {
   if (!headers?.length) return {};
-  return Object.fromEntries(headers.map(h => [h.name, h.value]));
+  return Object.fromEntries(headers.map((h) => [h.name, h.value]));
 };
 
 // undefined = cache cold (not yet read), null = no active config, ServerConfig = cached config
@@ -70,7 +77,7 @@ const getRawStoredConfigs = async (): Promise<StoredServerConfig[]> => {
 export const saveServerConfig = async (config: ServerConfig): Promise<void> => {
   try {
     const stored = await getRawStoredConfigs();
-    const index = stored.findIndex(c => c.id === config.id);
+    const index = stored.findIndex((c) => c.id === config.id);
     const existingAuthType = index > -1 ? stored[index].authType : undefined;
     const authType = config.authType ?? existingAuthType;
 
@@ -86,18 +93,32 @@ export const saveServerConfig = async (config: ServerConfig): Promise<void> => {
       stored.push(stripped);
     }
 
-    await SecureStore.setItemAsync(secureStoreKey(config.id), config.apiKey, secureStoreOptions);
+    await SecureStore.setItemAsync(
+      secureStoreKey(config.id),
+      config.apiKey,
+      secureStoreOptions
+    );
 
     if (config.sessionToken !== undefined) {
       if (config.sessionToken) {
-        await SecureStore.setItemAsync(sessionTokenSecureStoreKey(config.id), config.sessionToken, secureStoreOptions);
+        await SecureStore.setItemAsync(
+          sessionTokenSecureStoreKey(config.id),
+          config.sessionToken,
+          secureStoreOptions
+        );
       } else {
-        await SecureStore.deleteItemAsync(sessionTokenSecureStoreKey(config.id));
+        await SecureStore.deleteItemAsync(
+          sessionTokenSecureStoreKey(config.id)
+        );
       }
     }
 
     if (config.proxyHeaders?.length) {
-      await SecureStore.setItemAsync(proxyHeadersSecureStoreKey(config.id), JSON.stringify(config.proxyHeaders), secureStoreOptions);
+      await SecureStore.setItemAsync(
+        proxyHeadersSecureStoreKey(config.id),
+        JSON.stringify(config.proxyHeaders),
+        secureStoreOptions
+      );
     } else {
       await SecureStore.deleteItemAsync(proxyHeadersSecureStoreKey(config.id));
     }
@@ -143,7 +164,7 @@ export const getActiveServerConfig = async (): Promise<ServerConfig | null> => {
     }
 
     const configs = await getAllServerConfigs();
-    const result = configs.find(config => config.id === activeId) || null;
+    const result = configs.find((config) => config.id === activeId) || null;
     // Only cache non-null results; getAllServerConfigs swallows errors and returns [],
     // so a transient failure would otherwise be cached as "no config" permanently.
     if (result !== null) {
@@ -152,7 +173,10 @@ export const getActiveServerConfig = async (): Promise<ServerConfig | null> => {
     return result;
   } catch (e) {
     const message = getErrorMessage(e);
-    addLog(`[Storage] Failed to retrieve active server config: ${message}`, 'ERROR');
+    addLog(
+      `[Storage] Failed to retrieve active server config: ${message}`,
+      'ERROR'
+    );
     throw e;
   }
 };
@@ -168,13 +192,27 @@ export const getAllServerConfigs = async (): Promise<ServerConfig[]> => {
 
     const configs: ServerConfig[] = await Promise.all(
       stored.map(async (entry) => {
-        const secureKey = await SecureStore.getItemAsync(secureStoreKey(entry.id), secureStoreOptions);
-        const sessionToken = await SecureStore.getItemAsync(sessionTokenSecureStoreKey(entry.id), secureStoreOptions);
-        const proxyHeadersJson = await SecureStore.getItemAsync(proxyHeadersSecureStoreKey(entry.id), secureStoreOptions);
+        const secureKey = await SecureStore.getItemAsync(
+          secureStoreKey(entry.id),
+          secureStoreOptions
+        );
+        const sessionToken = await SecureStore.getItemAsync(
+          sessionTokenSecureStoreKey(entry.id),
+          secureStoreOptions
+        );
+        const proxyHeadersJson = await SecureStore.getItemAsync(
+          proxyHeadersSecureStoreKey(entry.id),
+          secureStoreOptions
+        );
         let proxyHeaders: ProxyHeader[] | undefined;
         if (proxyHeadersJson) {
-          try { proxyHeaders = JSON.parse(proxyHeadersJson); } catch {
-            addLog(`Failed to parse proxy headers for config ${entry.id}.`, 'ERROR');
+          try {
+            proxyHeaders = JSON.parse(proxyHeadersJson);
+          } catch {
+            addLog(
+              `Failed to parse proxy headers for config ${entry.id}.`,
+              'ERROR'
+            );
           }
         }
 
@@ -193,13 +231,17 @@ export const getAllServerConfigs = async (): Promise<ServerConfig[]> => {
 
         // Legacy migration: key still in AsyncStorage
         if (entry.apiKey) {
-          await SecureStore.setItemAsync(secureStoreKey(entry.id), entry.apiKey, secureStoreOptions);
+          await SecureStore.setItemAsync(
+            secureStoreKey(entry.id),
+            entry.apiKey,
+            secureStoreOptions
+          );
           migrated = true;
           return { ...base, apiKey: entry.apiKey };
         }
 
         return { ...base, apiKey: '' };
-      }),
+      })
     );
 
     // Strip migrated plaintext keys from AsyncStorage.
@@ -217,16 +259,53 @@ export const getAllServerConfigs = async (): Promise<ServerConfig[]> => {
     return configs;
   } catch (e) {
     const message = getErrorMessage(e);
-    addLog(`[Storage] Failed to retrieve all server configs: ${message}`, 'ERROR');
+    addLog(
+      `[Storage] Failed to retrieve all server configs: ${message}`,
+      'ERROR'
+    );
     return [];
   }
 };
 
 /**
+ * Configs that stopped being active since the last identity change. Captured
+ * here, before the active id is overwritten, because every caller announces
+ * the identity change only after the switch, when the outgoing id is gone.
+ */
+const outgoingServerConfigIds = new Set<string>();
+
+const rememberOutgoingServerConfig = async (
+  nextId: string | null
+): Promise<void> => {
+  const current = await AsyncStorage.getItem(ACTIVE_SERVER_CONFIG_ID_KEY);
+  if (current && current !== nextId) outgoingServerConfigIds.add(current);
+};
+
+/**
+ * Every config whose data may belong to the identity that just changed: the
+ * configs switched away from, and the one active now (signing in again on
+ * the same config can be a different person). Clears the outgoing set.
+ */
+export const takeIdentityChangeServerConfigIds = async (): Promise<
+  string[]
+> => {
+  // Read before clearing, so a failed read keeps the outgoing ids for the
+  // next identity change.
+  const active = await AsyncStorage.getItem(ACTIVE_SERVER_CONFIG_ID_KEY);
+  const ids = new Set(outgoingServerConfigIds);
+  outgoingServerConfigIds.clear();
+  if (active) ids.add(active);
+  return [...ids];
+};
+
+/**
  * Sets a specific server configuration as the active one.
  */
-export const setActiveServerConfig = async (configId: string): Promise<void> => {
+export const setActiveServerConfig = async (
+  configId: string
+): Promise<void> => {
   try {
+    await rememberOutgoingServerConfig(configId);
     await AsyncStorage.setItem(ACTIVE_SERVER_CONFIG_ID_KEY, configId);
     activeServerConfigCache = undefined;
   } catch (e) {
@@ -236,6 +315,19 @@ export const setActiveServerConfig = async (configId: string): Promise<void> => 
   }
 };
 
+let onServerConfigDeleted: ((configId: string) => Promise<void>) | null = null;
+
+/**
+ * Runs after a server config is deleted, for data kept per config outside
+ * this module (watch telemetry). Registered by the app rather than imported
+ * here, so storage does not load native modules.
+ */
+export const setOnServerConfigDeleted = (
+  callback: ((configId: string) => Promise<void>) | null
+): void => {
+  onServerConfigDeleted = callback;
+};
+
 /**
  * Deletes a specific server configuration and its SecureStore key.
  * If the deleted config was active, it clears the active config.
@@ -243,7 +335,7 @@ export const setActiveServerConfig = async (configId: string): Promise<void> => 
 export const deleteServerConfig = async (configId: string): Promise<void> => {
   try {
     let stored = await getRawStoredConfigs();
-    stored = stored.filter(config => config.id !== configId);
+    stored = stored.filter((config) => config.id !== configId);
     await AsyncStorage.setItem(SERVER_CONFIGS_KEY, JSON.stringify(stored));
     activeServerConfigCache = undefined;
     await SecureStore.deleteItemAsync(secureStoreKey(configId));
@@ -252,7 +344,18 @@ export const deleteServerConfig = async (configId: string): Promise<void> => {
 
     const activeId = await AsyncStorage.getItem(ACTIVE_SERVER_CONFIG_ID_KEY);
     if (activeId === configId) {
+      await rememberOutgoingServerConfig(null);
       await AsyncStorage.removeItem(ACTIVE_SERVER_CONFIG_ID_KEY);
+    }
+    // The config is already gone, so a failure here only leaves unreadable
+    // data behind; it must not fail the delete.
+    try {
+      await onServerConfigDeleted?.(configId);
+    } catch (e) {
+      addLog(
+        `[Storage] Failed to clean up data for deleted config: ${getErrorMessage(e)}`,
+        'WARNING'
+      );
     }
   } catch (e) {
     const message = getErrorMessage(e);
@@ -335,12 +438,20 @@ export const saveLastWritebackTime = async (): Promise<string | null> => {
   }
 };
 
-export const saveBackgroundSyncEnabled = async (enabled: boolean): Promise<void> => {
+export const saveBackgroundSyncEnabled = async (
+  enabled: boolean
+): Promise<void> => {
   try {
-    await AsyncStorage.setItem(BACKGROUND_SYNC_ENABLED_KEY, JSON.stringify(enabled));
+    await AsyncStorage.setItem(
+      BACKGROUND_SYNC_ENABLED_KEY,
+      JSON.stringify(enabled)
+    );
   } catch (error) {
     const message = getErrorMessage(error);
-    addLog(`[Storage] Failed to save background sync enabled preference: ${message}`, 'ERROR');
+    addLog(
+      `[Storage] Failed to save background sync enabled preference: ${message}`,
+      'ERROR'
+    );
   }
 };
 
@@ -351,17 +462,28 @@ export const loadBackgroundSyncEnabled = async (): Promise<boolean> => {
     return JSON.parse(value) as boolean;
   } catch (error) {
     const message = getErrorMessage(error);
-    addLog(`[Storage] Failed to load background sync enabled preference: ${message}`, 'ERROR');
+    addLog(
+      `[Storage] Failed to load background sync enabled preference: ${message}`,
+      'ERROR'
+    );
     return false;
   }
 };
 
-export const saveSyncOnOpenEnabled = async (enabled: boolean): Promise<void> => {
+export const saveSyncOnOpenEnabled = async (
+  enabled: boolean
+): Promise<void> => {
   try {
-    await AsyncStorage.setItem(SYNC_ON_OPEN_ENABLED_KEY, JSON.stringify(enabled));
+    await AsyncStorage.setItem(
+      SYNC_ON_OPEN_ENABLED_KEY,
+      JSON.stringify(enabled)
+    );
   } catch (error) {
     const message = getErrorMessage(error);
-    addLog(`[Storage] Failed to save sync on open preference: ${message}`, 'ERROR');
+    addLog(
+      `[Storage] Failed to save sync on open preference: ${message}`,
+      'ERROR'
+    );
   }
 };
 
@@ -372,7 +494,10 @@ export const loadSyncOnOpenEnabled = async (): Promise<boolean> => {
     return JSON.parse(value) as boolean;
   } catch (error) {
     const message = getErrorMessage(error);
-    addLog(`[Storage] Failed to load sync on open preference: ${message}`, 'ERROR');
+    addLog(
+      `[Storage] Failed to load sync on open preference: ${message}`,
+      'ERROR'
+    );
     return false;
   }
 };
@@ -382,34 +507,51 @@ export const savePendingHealthSyncCacheRefresh = async (): Promise<void> => {
     await AsyncStorage.setItem(PENDING_HEALTH_SYNC_CACHE_REFRESH_KEY, 'true');
   } catch (error) {
     const message = getErrorMessage(error);
-    addLog(`[Storage] Failed to save pending health sync cache refresh: ${message}`, 'ERROR');
+    addLog(
+      `[Storage] Failed to save pending health sync cache refresh: ${message}`,
+      'ERROR'
+    );
   }
 };
 
-export const consumePendingHealthSyncCacheRefresh = async (): Promise<boolean> => {
-  try {
-    const value = await AsyncStorage.getItem(PENDING_HEALTH_SYNC_CACHE_REFRESH_KEY);
-    if (value !== 'true') {
+export const consumePendingHealthSyncCacheRefresh =
+  async (): Promise<boolean> => {
+    try {
+      const value = await AsyncStorage.getItem(
+        PENDING_HEALTH_SYNC_CACHE_REFRESH_KEY
+      );
+      if (value !== 'true') {
+        return false;
+      }
+
+      await AsyncStorage.removeItem(PENDING_HEALTH_SYNC_CACHE_REFRESH_KEY);
+      return true;
+    } catch (error) {
+      const message = getErrorMessage(error);
+      addLog(
+        `[Storage] Failed to consume pending health sync cache refresh: ${message}`,
+        'ERROR'
+      );
       return false;
     }
-
-    await AsyncStorage.removeItem(PENDING_HEALTH_SYNC_CACHE_REFRESH_KEY);
-    return true;
-  } catch (error) {
-    const message = getErrorMessage(error);
-    addLog(`[Storage] Failed to consume pending health sync cache refresh: ${message}`, 'ERROR');
-    return false;
-  }
-};
+  };
 
 const COLLAPSED_CATEGORIES_KEY = '@HealthMetrics:collapsedCategories';
 
-export const saveCollapsedCategories = async (categories: string[]): Promise<void> => {
+export const saveCollapsedCategories = async (
+  categories: string[]
+): Promise<void> => {
   try {
-    await AsyncStorage.setItem(COLLAPSED_CATEGORIES_KEY, JSON.stringify(categories));
+    await AsyncStorage.setItem(
+      COLLAPSED_CATEGORIES_KEY,
+      JSON.stringify(categories)
+    );
   } catch (error) {
     const message = getErrorMessage(error);
-    addLog(`[Storage] Failed to save collapsed categories: ${message}`, 'ERROR');
+    addLog(
+      `[Storage] Failed to save collapsed categories: ${message}`,
+      'ERROR'
+    );
   }
 };
 
@@ -421,10 +563,13 @@ export const loadCollapsedCategories = async (): Promise<string[]> => {
     }
   } catch (error) {
     const message = getErrorMessage(error);
-    addLog(`[Storage] Failed to load collapsed categories: ${message}`, 'ERROR');
+    addLog(
+      `[Storage] Failed to load collapsed categories: ${message}`,
+      'ERROR'
+    );
   }
   // Default: all categories except Common are collapsed
-  return CATEGORY_ORDER.filter(c => c !== 'Common');
+  return CATEGORY_ORDER.filter((c) => c !== 'Common');
 };
 
 export const clearSessionToken = async (configId: string): Promise<void> => {

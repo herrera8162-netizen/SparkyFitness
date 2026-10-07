@@ -3,44 +3,124 @@ import workoutPresetRepository from '../models/workoutPresetRepository.js';
 import exerciseRepository from '../models/exerciseRepository.js';
 import { log } from '../config/logging.js';
 import { resolveTemplateStartDay } from '../utils/timezoneLoader.js';
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function createWorkoutPlanTemplate(userId: any, planData: any) {
+
+export interface WorkoutPlanAssignmentSetInput {
+  id?: number | string | null;
+  set_number: number;
+  set_type?: string | null;
+  reps?: number | null;
+  weight?: number | null;
+  duration?: number | null;
+  rest_time?: number | null;
+  notes?: string | null;
+}
+
+export interface WorkoutPlanAssignmentInput {
+  id?: number | string | null;
+  day_of_week?: number | null;
+  session_index?: number | null;
+  session_name?: string | null;
+  workout_preset_id?: number | string | null;
+  exercise_id?: string | null;
+  sort_order?: number | null;
+  sets?: WorkoutPlanAssignmentSetInput[] | null;
+}
+
+export interface CreateWorkoutPlanTemplateInput {
+  plan_name: string;
+  description?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  is_active?: boolean | null;
+  schedule_type?: 'weekly' | 'sequential';
+  entry_mode?: 'prompt' | 'prefill';
+  assignments?: WorkoutPlanAssignmentInput[] | null;
+  currentClientDate?: string | null;
+}
+
+export interface UpdateWorkoutPlanTemplateInput {
+  plan_name?: string;
+  description?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  is_active?: boolean | null;
+  schedule_type?: 'weekly' | 'sequential';
+  entry_mode?: 'prompt' | 'prefill';
+  assignments?: WorkoutPlanAssignmentInput[] | null;
+  currentClientDate?: string | null;
+}
+
+async function validateAndNormalizeAssignments(
+  assignments: WorkoutPlanAssignmentInput[],
+  scheduleType: 'weekly' | 'sequential',
+  userId: string
+): Promise<void> {
+  for (const assignment of assignments) {
+    if (scheduleType === 'weekly') {
+      if (
+        assignment.day_of_week === undefined ||
+        assignment.day_of_week === null ||
+        assignment.day_of_week < 0 ||
+        assignment.day_of_week > 6
+      ) {
+        throw new Error(
+          'Weekly workout plan assignments must have a valid day_of_week (0-6).'
+        );
+      }
+    } else if (scheduleType === 'sequential') {
+      assignment.day_of_week = null;
+    }
+    if (assignment.workout_preset_id) {
+      const preset = await workoutPresetRepository.getWorkoutPresetById(
+        assignment.workout_preset_id,
+        userId
+      );
+      if (!preset) {
+        throw new Error(
+          `Workout Preset with ID ${assignment.workout_preset_id} not found.`
+        );
+      }
+    }
+    if (assignment.exercise_id) {
+      const exercise = await exerciseRepository.getExerciseById(
+        assignment.exercise_id,
+        userId
+      );
+      if (!exercise) {
+        throw new Error(
+          `Exercise with ID ${assignment.exercise_id} not found.`
+        );
+      }
+    }
+  }
+}
+
+async function createWorkoutPlanTemplate(
+  userId: string,
+  planData: CreateWorkoutPlanTemplateInput
+) {
   log(
     'info',
     'createWorkoutPlanTemplate service - received planData:',
     planData
   );
   // Validate assignments
+  const scheduleType = planData.schedule_type || 'sequential';
+  const entryMode =
+    scheduleType === 'sequential' ? 'prompt' : planData.entry_mode || 'prompt';
   if (planData.assignments) {
-    for (const assignment of planData.assignments) {
-      if (assignment.workout_preset_id) {
-        const preset = await workoutPresetRepository.getWorkoutPresetById(
-          assignment.workout_preset_id,
-          userId
-        );
-        if (!preset) {
-          throw new Error(
-            `Workout Preset with ID ${assignment.workout_preset_id} not found.`
-          );
-        }
-      }
-      if (assignment.exercise_id) {
-        const exercise = await exerciseRepository.getExerciseById(
-          assignment.exercise_id,
-          userId
-        );
-        if (!exercise) {
-          throw new Error(
-            `Exercise with ID ${assignment.exercise_id} not found.`
-          );
-        }
-      }
-    }
+    await validateAndNormalizeAssignments(
+      planData.assignments,
+      scheduleType,
+      userId
+    );
   }
   try {
     const newPlan =
       await workoutPlanTemplateRepository.createWorkoutPlanTemplate({
         ...planData,
+        schedule_type: scheduleType,
+        entry_mode: entryMode,
         user_id: userId,
       });
     log(
@@ -48,10 +128,14 @@ async function createWorkoutPlanTemplate(userId: any, planData: any) {
       'createWorkoutPlanTemplate service - newPlan created:',
       newPlan
     );
-    if (newPlan.is_active) {
+    if (
+      newPlan.is_active &&
+      newPlan.schedule_type !== 'sequential' &&
+      newPlan.entry_mode === 'prefill'
+    ) {
       log(
         'info',
-        `createWorkoutPlanTemplate service - New plan is active, creating exercise entries from template ${newPlan.id}`
+        `createWorkoutPlanTemplate service - New plan is active, weekly, and prefill, creating exercise entries from template ${newPlan.id}`
       );
       const today = await resolveTemplateStartDay(
         userId,
@@ -65,15 +149,15 @@ async function createWorkoutPlanTemplate(userId: any, planData: any) {
     } else {
       log(
         'info',
-        'createWorkoutPlanTemplate service - New plan is not active, skipping exercise entry creation.'
+        'createWorkoutPlanTemplate service - Skipping exercise entry creation (inactive, sequential, or prompt mode).'
       );
     }
     return newPlan;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     log(
       'error',
-      // @ts-expect-error TS(2571): Object is of type 'unknown'.
-      `Error creating workout plan template for user ${userId}: ${error.message}`,
+      `Error creating workout plan template for user ${userId}: ${message}`,
       error
     );
     throw new Error('Failed to create workout plan template.', {
@@ -81,12 +165,18 @@ async function createWorkoutPlanTemplate(userId: any, planData: any) {
     });
   }
 }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getWorkoutPlanTemplatesByUserId(userId: any) {
+
+async function getWorkoutPlanTemplatesByUserId(userId: string) {
   return workoutPlanTemplateRepository.getWorkoutPlanTemplatesByUserId(userId);
 }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getWorkoutPlanTemplateById(userId: any, templateId: any) {
+
+async function getWorkoutPlanTemplateById(
+  userId: string,
+  templateId: string | number
+) {
+  // RLS already gates read access (owner or family-shared via
+  // can_view_exercise_library). If the row comes back, the caller is allowed to
+  // see it; an extra owner check here would wrongly 403 shared templates.
   const template =
     await workoutPlanTemplateRepository.getWorkoutPlanTemplateById(
       templateId,
@@ -95,26 +185,13 @@ async function getWorkoutPlanTemplateById(userId: any, templateId: any) {
   if (!template) {
     throw new Error('Workout plan template not found.');
   }
-  const ownerId =
-    // @ts-expect-error TS(2554): Expected 2 arguments, but got 1.
-    await workoutPlanTemplateRepository.getWorkoutPlanTemplateOwnerId(
-      templateId
-    );
-  if (ownerId !== userId) {
-    throw new Error(
-      'Forbidden: You do not have access to this workout plan template.'
-    );
-  }
   return template;
 }
 
 async function updateWorkoutPlanTemplate(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  userId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  templateId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  updateData: any
+  userId: string,
+  templateId: string | number,
+  updateData: UpdateWorkoutPlanTemplateInput
 ) {
   log(
     'info',
@@ -126,37 +203,47 @@ async function updateWorkoutPlanTemplate(
       templateId,
       userId
     );
+  if (!ownerId) {
+    throw new Error('Workout plan template not found.');
+  }
   if (ownerId !== userId) {
     throw new Error(
       'Forbidden: You do not have permission to update this workout plan template.'
     );
   }
+  let existingTemplate: Awaited<
+    ReturnType<typeof workoutPlanTemplateRepository.getWorkoutPlanTemplateById>
+  > | null = null;
+  if (updateData.schedule_type || updateData.assignments) {
+    existingTemplate =
+      await workoutPlanTemplateRepository.getWorkoutPlanTemplateById(
+        templateId,
+        userId
+      );
+  }
+  // If schedule_type changed between weekly and sequential, require updated assignments
+  if (
+    updateData.schedule_type &&
+    existingTemplate?.schedule_type &&
+    updateData.schedule_type !== existingTemplate.schedule_type &&
+    !updateData.assignments
+  ) {
+    throw new Error(
+      'Changing schedule_type requires providing updated assignments.'
+    );
+  }
   // Validate assignments if they are being updated
   if (updateData.assignments) {
-    for (const assignment of updateData.assignments) {
-      if (assignment.workout_preset_id) {
-        const preset = await workoutPresetRepository.getWorkoutPresetById(
-          assignment.workout_preset_id,
-          userId
-        );
-        if (!preset) {
-          throw new Error(
-            `Workout Preset with ID ${assignment.workout_preset_id} not found.`
-          );
-        }
-      }
-      if (assignment.exercise_id) {
-        const exercise = await exerciseRepository.getExerciseById(
-          assignment.exercise_id,
-          userId
-        );
-        if (!exercise) {
-          throw new Error(
-            `Exercise with ID ${assignment.exercise_id} not found.`
-          );
-        }
-      }
-    }
+    const scheduleType: 'weekly' | 'sequential' =
+      updateData.schedule_type ||
+      (existingTemplate?.schedule_type === 'sequential'
+        ? 'sequential'
+        : 'weekly');
+    await validateAndNormalizeAssignments(
+      updateData.assignments,
+      scheduleType,
+      userId
+    );
   }
   try {
     const today = await resolveTemplateStartDay(
@@ -173,21 +260,39 @@ async function updateWorkoutPlanTemplate(
       userId,
       today
     );
+    const shouldUnlinkHistoricalEntries =
+      existingTemplate?.schedule_type === 'weekly' &&
+      updateData.schedule_type === 'sequential';
+    if (shouldUnlinkHistoricalEntries) {
+      log(
+        'info',
+        `updateWorkoutPlanTemplate service - Unlinking historical exercise entries for template ${templateId} on transition to sequential`
+      );
+    }
+    const payload =
+      updateData.schedule_type === 'sequential'
+        ? { ...updateData, entry_mode: 'prompt' as const }
+        : updateData;
     const updatedPlan =
       await workoutPlanTemplateRepository.updateWorkoutPlanTemplate(
         templateId,
         userId,
-        updateData
+        payload,
+        shouldUnlinkHistoricalEntries
       );
     log(
       'info',
       'updateWorkoutPlanTemplate service - updatedPlan:',
       updatedPlan
     );
-    if (updatedPlan.is_active) {
+    if (
+      updatedPlan.is_active &&
+      updatedPlan.schedule_type !== 'sequential' &&
+      updatedPlan.entry_mode === 'prefill'
+    ) {
       log(
         'info',
-        `updateWorkoutPlanTemplate service - Updated plan is active, creating exercise entries from template ${updatedPlan.id}`
+        `updateWorkoutPlanTemplate service - Updated plan is active, weekly, and prefill, creating exercise entries from template ${updatedPlan.id}`
       );
       await exerciseRepository.createExerciseEntriesFromTemplate(
         updatedPlan.id,
@@ -197,15 +302,15 @@ async function updateWorkoutPlanTemplate(
     } else {
       log(
         'info',
-        'updateWorkoutPlanTemplate service - Updated plan is not active, skipping exercise entry creation.'
+        'updateWorkoutPlanTemplate service - Skipping exercise entry creation (inactive, sequential, or prompt mode).'
       );
     }
     return updatedPlan;
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     log(
       'error',
-      // @ts-expect-error TS(2571): Object is of type 'unknown'.
-      `Error updating workout plan template ${templateId} for user ${userId}: ${error.message}`,
+      `Error updating workout plan template ${templateId} for user ${userId}: ${message}`,
       error
     );
     throw new Error('Failed to update workout plan template.', {
@@ -213,8 +318,11 @@ async function updateWorkoutPlanTemplate(
     });
   }
 }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function deleteWorkoutPlanTemplate(userId: any, templateId: any) {
+
+async function deleteWorkoutPlanTemplate(
+  userId: string,
+  templateId: string | number
+) {
   log(
     'info',
     `deleteWorkoutPlanTemplate service - received templateId: ${templateId} for user: ${userId}`
@@ -224,6 +332,9 @@ async function deleteWorkoutPlanTemplate(userId: any, templateId: any) {
       templateId,
       userId
     );
+  if (ownerId === null || ownerId === undefined) {
+    throw new Error('Workout plan template not found.');
+  }
   if (ownerId !== userId) {
     throw new Error(
       'Forbidden: You do not have permission to delete this workout plan template.'
@@ -254,10 +365,10 @@ async function deleteWorkoutPlanTemplate(userId: any, templateId: any) {
     log('info', `Workout plan template ${templateId} deleted successfully.`);
     return { message: 'Workout plan template deleted successfully.' };
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
     log(
       'error',
-      // @ts-expect-error TS(2571): Object is of type 'unknown'.
-      `Error deleting workout plan template ${templateId} for user ${userId}: ${error.message}`,
+      `Error deleting workout plan template ${templateId} for user ${userId}: ${message}`,
       error
     );
     throw new Error('Failed to delete workout plan template.', {
@@ -265,13 +376,14 @@ async function deleteWorkoutPlanTemplate(userId: any, templateId: any) {
     });
   }
 }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getActiveWorkoutPlanForDate(userId: any, date: any) {
+
+async function getActiveWorkoutPlanForDate(userId: string, date: string) {
   return workoutPlanTemplateRepository.getActiveWorkoutPlanForDate(
     userId,
     date
   );
 }
+
 export { createWorkoutPlanTemplate };
 export { getWorkoutPlanTemplatesByUserId };
 export { getWorkoutPlanTemplateById };

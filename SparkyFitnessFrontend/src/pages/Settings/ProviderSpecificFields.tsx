@@ -2,9 +2,47 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Clipboard } from 'lucide-react';
 import { useTranslation, Trans } from 'react-i18next';
 import type { ExternalDataProvider } from './ExternalProviderSettings';
+
+// Developer dashboards where each OAuth provider's Client ID/Secret and callback
+// URL are configured. Kept in sync with the per-provider text in EditProviderForm.
+const OAUTH_DASHBOARD_LABELS =
+  'settings.foodExerciseDataProviders.oauthDashboards';
+
+const OAUTH_PROVIDER_DASHBOARDS: Record<
+  string,
+  { labelKey: string; url: string }
+> = {
+  withings: {
+    labelKey: `${OAUTH_DASHBOARD_LABELS}.withings`,
+    url: 'https://developer.withings.com/dashboard/',
+  },
+  fitbit: {
+    labelKey: `${OAUTH_DASHBOARD_LABELS}.fitbit`,
+    url: 'https://dev.fitbit.com/apps',
+  },
+  oura: {
+    labelKey: `${OAUTH_DASHBOARD_LABELS}.oura`,
+    url: 'https://developer.ouraring.com/applications',
+  },
+  googlehealth: {
+    labelKey: `${OAUTH_DASHBOARD_LABELS}.googlehealth`,
+    url: 'https://console.cloud.google.com/apis/credentials',
+  },
+  polar: {
+    labelKey: `${OAUTH_DASHBOARD_LABELS}.polar`,
+    url: 'https://admin.polaraccesslink.com',
+  },
+};
 
 interface ProviderSpecificFieldsProps {
   provider: Partial<ExternalDataProvider>;
@@ -51,7 +89,11 @@ export const ProviderSpecificFields = ({
     'strava',
     'polar',
     'hevy',
+    'liftosaur',
   ].includes(provider.provider_type || '');
+
+  const providerDashboard =
+    OAUTH_PROVIDER_DASHBOARDS[provider.provider_type || ''];
 
   const getCallbackUrl = () => {
     if (provider.provider_type === 'strava') {
@@ -123,7 +165,9 @@ export const ProviderSpecificFields = ({
               ? 'Client Secret'
               : provider.provider_type === 'yazio'
                 ? 'YAZIO Password'
-                : 'API Key / App Key'}
+                : provider.provider_type === 'liftosaur'
+                  ? 'Liftosaur API Key'
+                  : 'API Key / App Key'}
           </Label>
           <Input
             id="new_app_key"
@@ -132,7 +176,11 @@ export const ProviderSpecificFields = ({
             onChange={(e) =>
               setProvider((prev) => ({ ...prev, app_key: e.target.value }))
             }
-            placeholder="Enter Key"
+            placeholder={
+              provider.provider_type === 'liftosaur'
+                ? 'Enter Liftosaur API Key (lftsk_...)'
+                : 'Enter Key'
+            }
             autoComplete="off"
           />
         </div>
@@ -191,12 +239,9 @@ export const ProviderSpecificFields = ({
             />
           </div>
           <p className="text-sm text-muted-foreground col-span-2">
-            Username and password for Open Food Facts are optional. If you have
-            an account, adding these credentials allows Sparky to make
-            authenticated requests, which can help reduce rate limiting during
-            busy periods. If you want to keep the existing credentials, simply
-            leave the fields blank. Note that credentials cannot be combined
-            with publicly sharing this provider row.
+            {t(
+              'settings.foodExerciseDataProviders.openFoodFacts.credentialContributionHelp'
+            )}
           </p>
           <p className="text-sm text-muted-foreground col-span-2">
             Open Food Facts is a community-driven database that supports
@@ -405,8 +450,20 @@ export const ProviderSpecificFields = ({
           This integration uses OAuth2. You will be redirected to the provider
           to authorize access after adding or updating the provider.
           <br />
-          In your provider's developer dashboard, you must set your callback URL
-          to:
+          In your{' '}
+          {providerDashboard ? (
+            <a
+              href={providerDashboard.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-500 underline"
+            >
+              {t(providerDashboard.labelKey)}
+            </a>
+          ) : (
+            t(`${OAUTH_DASHBOARD_LABELS}.fallback`)
+          )}
+          , you must set your callback URL to:
           <strong className="flex items-center mt-1">
             {getCallbackUrl()}
             <Button
@@ -475,6 +532,14 @@ export const ProviderSpecificFields = ({
         </p>
       )}
 
+      {provider.provider_type === 'liftosaur' && (
+        <p className="text-sm text-muted-foreground col-span-2">
+          Generate an API key in the Liftosaur app: Settings &#62; API Keys
+          (starts with <span className="font-mono">lftsk_</span>). A Liftosaur
+          Pro subscription is required to use the Liftosaur API.
+        </p>
+      )}
+
       {provider.provider_type === 'nutritionix' && (
         <p className="text-sm text-muted-foreground col-span-2">
           Get your App ID and App Key from the{' '}
@@ -525,7 +590,9 @@ export const ProviderSpecificFields = ({
         </p>
       )}
 
-      {['hevy', 'polar'].includes(provider.provider_type || '') && (
+      {['hevy', 'polar', 'liftosaur'].includes(
+        provider.provider_type || ''
+      ) && (
         <div className="flex items-center space-x-2 col-span-2">
           <Switch
             id="full_sync_on_connect"
@@ -564,6 +631,45 @@ export const ProviderSpecificFields = ({
         </div>
       )}
 
+      {provider.provider_type === 'canadian-nutrient-file' && (
+        <div className="col-span-2 space-y-2">
+          <p className="text-sm text-muted-foreground">
+            <Trans
+              i18nKey="settings.cnf.providerSpecificDescription"
+              defaults="The Canadian Nutrient File (CNF) contains information published by Health Canada under the <1>Open Government Licence – Canada</1>. It is free, public, and requires no credentials. Supported languages are <3>English (en)</3> and <5>French (fr)</5>."
+              components={{
+                1: (
+                  <a
+                    href="https://open.canada.ca/en/open-government-licence-canada"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline font-medium"
+                  />
+                ),
+                3: <strong />,
+                5: <strong />,
+              }}
+            />
+          </p>
+          <p className="text-sm text-muted-foreground">
+            <Trans
+              i18nKey="settings.cnf.providerSpecificPortal"
+              defaults="For more details, see the official portal at <1>Canadian Nutrient File</1>."
+              components={{
+                1: (
+                  <a
+                    href="https://open.canada.ca/data/en/dataset/1b6139bd-ed7e-4043-bc28-ff00e10f3109"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline font-medium"
+                  />
+                ),
+              }}
+            />
+          </p>
+        </div>
+      )}
+
       {provider.provider_type === 'free-exercise-db' && (
         <div className="col-span-2 space-y-2">
           <p className="text-sm text-muted-foreground">
@@ -597,6 +703,71 @@ export const ProviderSpecificFields = ({
               wger Project Website
             </a>
             .
+          </p>
+        </div>
+      )}
+
+      {provider.provider_type === 'coros_mcp' && (
+        <div className="col-span-2 space-y-4">
+          <div>
+            <Label htmlFor="coros_region">
+              {t(
+                'settings.foodExerciseDataProviders.coros.regionLabel',
+                'COROS Region'
+              )}
+            </Label>
+            <Select
+              value={provider.base_url || 'https://mcpus.coros.com/mcp'}
+              onValueChange={(val) =>
+                setProvider((prev) => ({ ...prev, base_url: val }))
+              }
+            >
+              <SelectTrigger id="coros_region" className="w-full">
+                <SelectValue placeholder="Select region" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="https://mcpus.coros.com/mcp">
+                  {t(
+                    'settings.foodExerciseDataProviders.coros.regionUs',
+                    'United States (mcpus.coros.com)'
+                  )}
+                </SelectItem>
+                <SelectItem value="https://mcpeu.coros.com/mcp">
+                  {t(
+                    'settings.foodExerciseDataProviders.coros.regionEu',
+                    'Europe (mcpeu.coros.com)'
+                  )}{' '}
+                  <span className="text-xs text-muted-foreground">
+                    (
+                    {t(
+                      'settings.foodExerciseDataProviders.coros.notTested',
+                      'not yet tested'
+                    )}
+                    )
+                  </span>
+                </SelectItem>
+                <SelectItem value="https://mcpcn.coros.com/mcp">
+                  {t(
+                    'settings.foodExerciseDataProviders.coros.regionCn',
+                    'Mainland China (mcpcn.coros.com)'
+                  )}{' '}
+                  <span className="text-xs text-muted-foreground">
+                    (
+                    {t(
+                      'settings.foodExerciseDataProviders.coros.notTested',
+                      'not yet tested'
+                    )}
+                    )
+                  </span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {t(
+              'settings.foodExerciseDataProviders.coros.infoText',
+              "No API keys needed. You'll sign in with your COROS account. Your SparkyFitness address must be https:// (or localhost) for COROS to accept the connection."
+            )}
           </p>
         </div>
       )}

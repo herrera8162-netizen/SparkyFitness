@@ -26,6 +26,8 @@ export const exerciseEntrySetsSchema = z.object({
   completed_at: z.date().nullable(),
   // Km; only meaningful on duration_distance sets.
   distance: z.number().nullable(),
+  is_pr: z.boolean().nullable().optional(),
+  rir: z.number().nullable().optional(),
 });
 
 export const exerciseEntrySetsInitializerSchema = z.object({
@@ -45,6 +47,8 @@ export const exerciseEntrySetsInitializerSchema = z.object({
   completed_at: z.date().optional().nullable(),
   // Km; only meaningful on duration_distance sets.
   distance: z.number().optional().nullable(),
+  is_pr: z.boolean().optional().nullable(),
+  rir: z.number().optional().nullable(),
 });
 
 export const exerciseEntrySetsMutatorSchema = z.object({
@@ -64,8 +68,14 @@ export const exerciseEntrySetsMutatorSchema = z.object({
   completed_at: z.date().optional().nullable(),
   // Km; only meaningful on duration_distance sets.
   distance: z.number().optional().nullable(),
+  is_pr: z.boolean().optional().nullable(),
+  rir: z.number().optional().nullable(),
 });
 
 export type ExerciseEntrySets = z.infer<typeof exerciseEntrySetsSchema>;
-export type ExerciseEntrySetsInitializer = z.infer<typeof exerciseEntrySetsInitializerSchema>;
-export type ExerciseEntrySetsMutator = z.infer<typeof exerciseEntrySetsMutatorSchema>;
+export type ExerciseEntrySetsInitializer = z.infer<
+  typeof exerciseEntrySetsInitializerSchema
+>;
+export type ExerciseEntrySetsMutator = z.infer<
+  typeof exerciseEntrySetsMutatorSchema
+>;

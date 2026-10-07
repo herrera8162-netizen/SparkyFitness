@@ -3,7 +3,11 @@ import measurementRepository from '../models/measurementRepository.js';
 import preferenceRepository from '../models/preferenceRepository.js';
 import userRepository from '../models/userRepository.js';
 import { log } from '../config/logging.js';
-import { getDefaultModel, getOpenAiCompatibleBaseUrl } from '../ai/config.js';
+import {
+  getDefaultModel,
+  getOpenAiCompatibleBaseUrl,
+  getPerplexityPreset,
+} from '../ai/config.js';
 import {
   dispatchAiRequest,
   requiresApiKey,
@@ -20,10 +24,11 @@ import { TtlCache } from '../utils/ttlCache.js';
 import {
   assertOutboundUrlShapeAndLiteralAllowed,
   createGuardedFetch,
-  deriveAiNetworkPolicy,
+  resolveAiNetworkPolicy,
   OutboundUrlBlockedError,
   requiresUserSuppliedAiUrl,
 } from '../utils/outboundUrlPolicy.js';
+import type { AiNetworkPolicy } from '../utils/outboundUrlPolicy.js';
 import {
   todayInZone,
   DatabaseCustomCategories,
@@ -52,9 +57,10 @@ interface ChatMessagePart {
 }
 
 interface ProcessedMessagePart {
-  type: 'text' | 'image';
+  type: 'text' | 'file';
   text?: string;
-  image?: string;
+  data?: string | Uint8Array | URL;
+  mediaType?: string;
 }
 
 interface ChatMessage {
@@ -81,10 +87,15 @@ import {
   ENABLE_TOOLS_TOOL_NAME,
   ASK_USER_TOOL_NAME,
   type ChatToolProfile,
+  type ToolBuildContext,
 } from '../ai/tools/index.js';
 import { CATEGORY_SUMMARIES } from '../ai/tools/metaTools.js';
 import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
+import {
+  createFoodPhotoEstimateSink,
+  FOOD_PHOTO_ESTIMATE_PART_TYPE,
+} from '../ai/tools/foodPhotoEstimateSink.js';
 import path from 'path';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -324,8 +335,10 @@ async function updateSparkyChatHistoryEntry(
   updateData: SparkyChatHistoryMutator
 ) {
   try {
-    // @ts-expect-error TS(2554): Expected 2 arguments, but got 1.
-    const entryOwnerId = await chatRepository.getChatHistoryEntryOwnerId(id);
+    const entryOwnerId = await chatRepository.getChatHistoryEntryOwnerId(
+      id,
+      authenticatedUserId
+    );
     if (!entryOwnerId) {
       throw new Error('Chat history entry not found.');
     }
@@ -360,8 +373,10 @@ async function deleteSparkyChatHistoryEntry(
   id: string
 ) {
   try {
-    // @ts-expect-error TS(2554): Expected 2 arguments, but got 1.
-    const entryOwnerId = await chatRepository.getChatHistoryEntryOwnerId(id);
+    const entryOwnerId = await chatRepository.getChatHistoryEntryOwnerId(
+      id,
+      authenticatedUserId
+    );
     if (!entryOwnerId) {
       throw new Error('Chat history entry not found.');
     }
@@ -507,6 +522,8 @@ async function prepareChatContext(
   // prepareStep) since there's no human-set limit to respect.
   categoriesAreManual = false,
   serviceSystemPrompt?: string | null,
+  latestImageDataUrl?: string | null,
+  serviceConfigId?: string | null,
   actingUserId?: string
 ) {
   const resolvedActingUserId = actingUserId ?? userId;
@@ -562,6 +579,16 @@ async function prepareChatContext(
   let activeToolNames: string[] | undefined;
   let prepareStep: ReturnType<typeof buildEscalationPrepareStep> | undefined;
 
+  // Catches the structured estimate if this turn analyses a food photo, so the
+  // numbers can be persisted and logged verbatim instead of the model retyping
+  // them one food at a time. Per-turn: two users' turns share this process.
+  const foodPhotoEstimateSink = createFoodPhotoEstimateSink();
+  const toolBuildContext: ToolBuildContext = {
+    foodPhotoEstimateSink,
+    latestImageDataUrl,
+    serviceConfigId,
+  };
+
   if (categoriesAreManual) {
     tools = buildChatbotTools(
       userId,
@@ -572,12 +599,18 @@ async function prepareChatContext(
       // Quick-reply chips: full profile only (the small local models 'core'
       // exists for pick tools unreliably from a wider surface).
       toolProfile === 'full',
+      toolBuildContext,
       resolvedActingUserId
     );
     activeToolNames = undefined; // every composed tool is sent
     prepareStep = undefined; // no mid-request widening
   } else {
-    const surface = buildChatToolSurface(userId, chatTz, resolvedActingUserId);
+    const surface = buildChatToolSurface(
+      userId,
+      chatTz,
+      toolBuildContext,
+      resolvedActingUserId
+    );
     tools = surface.tools;
     activeToolNames = [
       ...new Set(
@@ -653,6 +686,10 @@ async function prepareChatContext(
     activeToolNames,
     prepareStep,
     toolProfile,
+    // Returned so onFinish can persist whatever the vision tool captured this
+    // turn. The tools close over it, but they are built here and the message
+    // is saved in processChatMessageStream.
+    foodPhotoEstimateSink,
   };
 }
 
@@ -842,7 +879,7 @@ function stripHistoricalImages(messages: LlmMessage[]): LlmMessage[] {
     if (index === lastUserIndex || !Array.isArray(msg.content)) {
       return msg;
     }
-    const withoutImages = msg.content.filter((part) => part.type !== 'image');
+    const withoutImages = msg.content.filter((part) => part.type !== 'file');
     if (withoutImages.length === msg.content.length) {
       return msg;
     }
@@ -885,7 +922,7 @@ function estimateMessageTokens(
   let total = PER_MESSAGE_OVERHEAD;
   for (const part of content) {
     total +=
-      part.type === 'image'
+      part.type === 'file'
         ? IMAGE_TOKEN_ESTIMATE
         : Math.ceil((part.text?.length ?? 0) / CHARS_PER_TOKEN);
   }
@@ -926,13 +963,452 @@ interface ChatAiServiceConfig {
   custom_url?: string | null;
 }
 
+function extractTextFromAgentOutput(output: unknown): string | null {
+  if (!Array.isArray(output)) return null;
+  const texts: string[] = [];
+
+  for (const item of output) {
+    if (!item || typeof item !== 'object') continue;
+    const obj = item as {
+      type?: string;
+      text?: unknown;
+      output_text?: unknown;
+      content?: unknown;
+    };
+    if (typeof obj.text === 'string') {
+      texts.push(obj.text);
+    } else if (typeof obj.output_text === 'string') {
+      texts.push(obj.output_text);
+    } else if (typeof obj.content === 'string') {
+      texts.push(obj.content);
+    } else if (Array.isArray(obj.content)) {
+      for (const block of obj.content) {
+        if (!block || typeof block !== 'object') continue;
+        const b = block as {
+          type?: string;
+          text?: unknown;
+          output_text?: unknown;
+        };
+        if (typeof b.text === 'string') {
+          texts.push(b.text);
+        } else if (typeof b.output_text === 'string') {
+          texts.push(b.output_text);
+        }
+      }
+    }
+  }
+
+  return texts.length > 0 ? texts.join('\n\n') : null;
+}
+
+function createPerplexityFetch(baseFetch: typeof fetch = fetch): typeof fetch {
+  return async (
+    input: RequestInfo | URL,
+    init?: RequestInit
+  ): Promise<Response> => {
+    let url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+
+    if (url.includes('api.perplexity.ai')) {
+      url = url.replace(/\/chat\/completions$/, '/responses');
+    }
+
+    let modifiedInit = init;
+    if (init?.body && typeof init.body === 'string') {
+      try {
+        const bodyObj = JSON.parse(init.body) as {
+          messages?: Array<{ role?: string; content?: unknown }>;
+          input?: unknown;
+          [k: string]: unknown;
+        };
+        // Perplexity Agent API requires `input` (array of messages or text) and rejects `messages`
+        if (!bodyObj.input && Array.isArray(bodyObj.messages)) {
+          bodyObj.input = bodyObj.messages.map((msg) => {
+            if (!Array.isArray(msg.content)) return msg;
+            return {
+              ...msg,
+              content: msg.content.map((part) => {
+                if (typeof part === 'object' && part !== null) {
+                  const p = part as {
+                    type?: string;
+                    text?: string;
+                    image_url?: { url?: string } | string;
+                  };
+                  if (p.type === 'text' && typeof p.text === 'string') {
+                    return { type: 'input_text', text: p.text };
+                  }
+                  if (p.type === 'image_url') {
+                    const url =
+                      typeof p.image_url === 'object' && p.image_url !== null
+                        ? p.image_url.url
+                        : p.image_url;
+                    return { type: 'input_image', image_url: url };
+                  }
+                }
+                return part;
+              }),
+            };
+          });
+          delete bodyObj.messages;
+          delete bodyObj.temperature; // Agent API presets reject temperature
+          // Convert Chat Completions tool-call history to Agent API input items
+          if (Array.isArray(bodyObj.input)) {
+            const converted: unknown[] = [];
+            for (const item of bodyObj.input as Array<
+              Record<string, unknown>
+            >) {
+              const emptyContent =
+                item.content === null ||
+                item.content === undefined ||
+                item.content === '' ||
+                (Array.isArray(item.content) && item.content.length === 0);
+              if (item.role === 'assistant' && Array.isArray(item.tool_calls)) {
+                if (!emptyContent) {
+                  converted.push({ role: 'assistant', content: item.content });
+                }
+                for (const call of item.tool_calls as Array<{
+                  id?: string;
+                  function?: { name?: string; arguments?: string };
+                }>) {
+                  converted.push({
+                    type: 'function_call',
+                    call_id: call.id,
+                    name: call.function?.name,
+                    arguments: call.function?.arguments ?? '{}',
+                  });
+                }
+              } else if (item.role === 'tool') {
+                const out =
+                  typeof item.content === 'string'
+                    ? item.content
+                    : JSON.stringify(item.content ?? '');
+                converted.push({
+                  type: 'function_call_output',
+                  call_id: item.tool_call_id,
+                  output: out.length > 0 ? out : '{}',
+                });
+              } else if (item.role === 'assistant' && emptyContent) {
+                continue;
+              } else {
+                converted.push(item);
+              }
+            }
+            bodyObj.input = converted;
+          }
+          // Agent API expects flat function tools, not the nested Chat Completions shape
+          if (Array.isArray(bodyObj.tools)) {
+            bodyObj.tools = (
+              bodyObj.tools as Array<Record<string, unknown>>
+            ).map((tool) => {
+              const fn = tool.function as
+                | {
+                    name?: string;
+                    description?: string;
+                    parameters?: unknown;
+                    strict?: boolean;
+                  }
+                | undefined;
+              if (tool.type === 'function' && fn) {
+                return {
+                  type: 'function',
+                  name: fn.name,
+                  description: fn.description ?? '',
+                  parameters: fn.parameters ?? {
+                    type: 'object',
+                    properties: {},
+                  },
+                  ...(fn.strict !== undefined ? { strict: fn.strict } : {}),
+                };
+              }
+              return tool;
+            });
+          }
+          const toolChoice = bodyObj.tool_choice as
+            | { type?: string; function?: { name?: string } }
+            | string
+            | undefined;
+          if (
+            toolChoice &&
+            typeof toolChoice === 'object' &&
+            toolChoice.type === 'function' &&
+            toolChoice.function?.name
+          ) {
+            bodyObj.tool_choice = {
+              type: 'function',
+              name: toolChoice.function.name,
+            };
+          }
+
+          const rawModel =
+            typeof bodyObj.model === 'string' ? bodyObj.model : 'fast';
+          const preset = getPerplexityPreset(rawModel);
+          if (preset) {
+            bodyObj.preset = preset;
+            delete bodyObj.model;
+          } else {
+            const modelLower = rawModel.toLowerCase();
+            if (
+              modelLower.startsWith('anthropic/') ||
+              modelLower.includes('claude')
+            ) {
+              bodyObj.max_output_tokens = bodyObj.max_output_tokens ?? 4096;
+            }
+          }
+
+          modifiedInit = {
+            ...init,
+            body: JSON.stringify(bodyObj),
+          };
+        }
+      } catch {
+        // Keep original init if body is not JSON
+      }
+    }
+
+    const response = await baseFetch(url, modifiedInit);
+    if (!response.ok) {
+      return response;
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('text/event-stream') && response.body) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      const encoder = new TextEncoder();
+      let buffer = '';
+      let hasError = false;
+      let hasToolCalls = false;
+      const toolCallIndices = new Map<string, number>();
+
+      const transformedStream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              if (!hasError) {
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+              }
+              controller.close();
+              break;
+            }
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() ?? '';
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith('data:')) continue;
+              const dataStr = trimmed.slice(5).trim();
+              if (dataStr === '[DONE]') {
+                if (!hasError) {
+                  controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+                }
+                continue;
+              }
+              try {
+                const parsed = JSON.parse(dataStr) as {
+                  type?: string;
+                  delta?: string;
+                  call_id?: string;
+                  id?: string;
+                  name?: string;
+                  arguments?: string;
+                  item?: {
+                    type?: string;
+                    id?: string;
+                    name?: string;
+                    arguments?: string;
+                    call_id?: string;
+                  };
+                  error?: { message?: string };
+                  choices?: unknown;
+                };
+
+                // Upstream stream failure / error events
+                if (
+                  parsed.type === 'response.failed' ||
+                  parsed.type === 'error' ||
+                  parsed.error
+                ) {
+                  hasError = true;
+                  const errorMsg =
+                    parsed.error?.message ??
+                    'Perplexity Agent API stream failed.';
+                  controller.error(new Error(errorMsg));
+                  return;
+                }
+
+                // Text deltas
+                if (
+                  parsed.type === 'response.output_text.delta' &&
+                  typeof parsed.delta === 'string'
+                ) {
+                  const chunk = {
+                    choices: [
+                      {
+                        index: 0,
+                        delta: { content: parsed.delta },
+                        finish_reason: null,
+                      },
+                    ],
+                  };
+                  controller.enqueue(
+                    encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
+                  );
+                }
+                // Function / Tool call deltas (only for function items, not plain messages)
+                else if (
+                  parsed.type === 'response.function_call_arguments.delta' ||
+                  (parsed.type === 'response.output_item.added' &&
+                    (parsed.item?.type === 'function_call' ||
+                      parsed.item?.type === 'custom_tool_call' ||
+                      (typeof parsed.item?.name === 'string' &&
+                        parsed.item.name.length > 0)))
+                ) {
+                  hasToolCalls = true;
+                  const toolId =
+                    parsed.call_id ??
+                    parsed.id ??
+                    parsed.item?.call_id ??
+                    parsed.item?.id ??
+                    'call_0';
+                  let toolCallIndex = toolCallIndices.get(toolId);
+                  if (toolCallIndex === undefined) {
+                    toolCallIndex = toolCallIndices.size;
+                    toolCallIndices.set(toolId, toolCallIndex);
+                  }
+                  const toolName = parsed.name ?? parsed.item?.name ?? '';
+                  const argsDelta =
+                    parsed.delta ??
+                    parsed.arguments ??
+                    parsed.item?.arguments ??
+                    '';
+
+                  const chunk = {
+                    choices: [
+                      {
+                        index: 0,
+                        delta: {
+                          tool_calls: [
+                            {
+                              index: toolCallIndex,
+                              id: toolId,
+                              type: 'function',
+                              function: {
+                                name: toolName,
+                                arguments: argsDelta,
+                              },
+                            },
+                          ],
+                        },
+                        finish_reason: null,
+                      },
+                    ],
+                  };
+                  controller.enqueue(
+                    encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
+                  );
+                }
+                // Completion event
+                else if (parsed.type === 'response.completed') {
+                  const chunk = {
+                    choices: [
+                      {
+                        index: 0,
+                        delta: {},
+                        finish_reason: hasToolCalls ? 'tool_calls' : 'stop',
+                      },
+                    ],
+                  };
+                  controller.enqueue(
+                    encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`)
+                  );
+                } else if (parsed.choices) {
+                  controller.enqueue(encoder.encode(`${line}\n\n`));
+                }
+              } catch {
+                // Skip unparseable lines
+              }
+            }
+          }
+        },
+        cancel(reason) {
+          return reader.cancel(reason);
+        },
+      });
+
+      return new Response(transformedStream, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    }
+
+    if (contentType.includes('application/json')) {
+      try {
+        const data = (await response.json()) as {
+          id?: string;
+          model?: string;
+          output_text?: string;
+          output?: unknown;
+          choices?: unknown;
+          usage?: unknown;
+        };
+        const resolvedText =
+          typeof data?.output_text === 'string'
+            ? data.output_text
+            : extractTextFromAgentOutput(data?.output);
+
+        if (resolvedText !== null && !data.choices) {
+          const adapted = {
+            id: data.id || `pplx-${Date.now()}`,
+            object: 'chat.completion',
+            created: Math.floor(Date.now() / 1000),
+            model: data.model || 'sonar',
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: 'assistant',
+                  content: resolvedText,
+                },
+                finish_reason: 'stop',
+              },
+            ],
+            usage: data.usage || null,
+          };
+          return new Response(JSON.stringify(adapted), {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          });
+        }
+        return new Response(JSON.stringify(data), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
+      } catch {
+        // Return original on error
+      }
+    }
+
+    return response;
+  };
+}
+
 // Resolves the AI SDK model instance for a chat service: native adapters for
 // openai/anthropic/google, and the OpenAI-compatible base-URL ladder for
 // everything else. Self-hosted types get the SSRF-guarded fetch.
 function createChatModelInstance(
   aiService: ChatAiServiceConfig,
   modelName: string,
-  networkPolicy: ReturnType<typeof deriveAiNetworkPolicy>
+  networkPolicy: AiNetworkPolicy
 ): Parameters<typeof generateText>[0]['model'] {
   const apiKey = aiService.api_key ?? undefined;
 
@@ -953,6 +1429,7 @@ function createChatModelInstance(
     aiService.service_type === 'groq' ||
     aiService.service_type === 'openrouter' ||
     aiService.service_type === 'xai' ||
+    aiService.service_type === 'perplexity' ||
     aiService.service_type === 'meta'
   ) {
     if (
@@ -972,7 +1449,12 @@ function createChatModelInstance(
       baseURL,
       apiKey: apiKey || 'no-key',
     };
-    if (requiresUserSuppliedAiUrl(aiService.service_type)) {
+    if (aiService.service_type === 'perplexity') {
+      const baseFetch = requiresUserSuppliedAiUrl(aiService.service_type)
+        ? createGuardedFetch(networkPolicy)
+        : fetch;
+      providerOptions.fetch = createPerplexityFetch(baseFetch);
+    } else if (requiresUserSuppliedAiUrl(aiService.service_type)) {
       providerOptions.fetch = createGuardedFetch(networkPolicy);
     }
     return createOpenAI(providerOptions).chat(modelName);
@@ -1079,8 +1561,7 @@ const ASK_USER_PART_TYPE = `tool-${ASK_USER_TOOL_NAME}`;
 // the call into text keeps the transcript valid AND keeps the context intact.
 function askUserPartToText(part: ChatMessagePart): string | null {
   const input = part.input as
-    | { question?: unknown; options?: unknown }
-    | undefined;
+    { question?: unknown; options?: unknown } | undefined;
   const question = typeof input?.question === 'string' ? input.question : '';
   const options = Array.isArray(input?.options)
     ? input.options.filter((o): o is string => typeof o === 'string')
@@ -1148,9 +1629,33 @@ function mapMessagePart(part: ChatMessagePart): ProcessedMessagePart {
         part.mediaType?.startsWith('image/') ||
         part.url?.startsWith('data:image/')))
   ) {
-    // Handle both base64 data URLs and remote URLs
     const url = part.image_url?.url || part.image || part.url || '';
-    return { type: 'image' as const, image: url };
+    if (!url) {
+      return { type: 'text' as const, text: '' };
+    }
+    let mediaType =
+      part.mediaType ||
+      part.mimeType ||
+      (url.startsWith('data:')
+        ? url.split(';')[0].replace('data:', '')
+        : undefined);
+
+    if (!mediaType && typeof url === 'string') {
+      const cleanUrl = url.split('?')[0].split('#')[0].toLowerCase();
+      if (cleanUrl.endsWith('.png')) mediaType = 'image/png';
+      else if (cleanUrl.endsWith('.webp')) mediaType = 'image/webp';
+      else if (cleanUrl.endsWith('.gif')) mediaType = 'image/gif';
+      else if (cleanUrl.endsWith('.jpg') || cleanUrl.endsWith('.jpeg'))
+        mediaType = 'image/jpeg';
+      else if (cleanUrl.endsWith('.avif')) mediaType = 'image/avif';
+      else if (cleanUrl.endsWith('.svg')) mediaType = 'image/svg+xml';
+      else mediaType = 'image/jpeg';
+    }
+    return {
+      type: 'file' as const,
+      data: url,
+      mediaType: mediaType || 'image/jpeg',
+    };
   }
   // Fallback: treat unknown parts as text
   return { type: 'text' as const, text: String(part.text || '') };
@@ -1171,7 +1676,7 @@ function toCoreMessages(messages: ChatMessage[]): LlmMessage[] {
         .map(mapMessagePart)
         .filter(
           (p) =>
-            p.type === 'image' ||
+            p.type === 'file' ||
             (p.type === 'text' && p.text && p.text.trim() !== '')
         );
       if (parts.length > 0) {
@@ -1184,6 +1689,39 @@ function toCoreMessages(messages: ChatMessage[]): LlmMessage[] {
     }
     return { role, content: '' };
   });
+}
+
+/**
+ * Extracts the latest image data URL or base64 payload from the most recent
+ * user turn in the conversation history, if any.
+ */
+function extractLatestImageDataUrl(messages: ChatMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg.role !== 'user') continue;
+    const partsSource = Array.isArray(msg.parts)
+      ? msg.parts
+      : Array.isArray(msg.content)
+        ? (msg.content as ChatMessagePart[])
+        : null;
+    if (!partsSource) continue;
+    for (const part of partsSource) {
+      if (
+        part.type === 'image' ||
+        part.type === 'image_url' ||
+        (part.type === 'file' &&
+          (part.mimeType?.startsWith('image/') ||
+            part.mediaType?.startsWith('image/') ||
+            part.url?.startsWith('data:image/')))
+      ) {
+        const url = part.image_url?.url || part.image || part.url;
+        if (typeof url === 'string' && url.trim().length > 0) {
+          return url.trim();
+        }
+      }
+    }
+  }
+  return null;
 }
 
 // Applies the context-window controls in order: drop trailing empty assistant
@@ -1247,17 +1785,17 @@ const KEYWORD_RULES: { category: ChatToolCategorySlug; keywords: RegExp }[] = [
   {
     category: 'exercise',
     keywords:
-      /\b(run|ran|running|walk|walked|walking|jog|jogged|jogging|lift|lifted|lifting|workout|workouts|exercise|exercises|reps|sets|cardio|strength|gym|heart rate|bpm|treadmill|squats?|bench press|swim|swam|swimming|bike|biking|cycling|cycled|yoga|hike[ds]?|hiking|steps|push-?ups?|pull-?ups?|training|trained|worked out)\b/i,
+      /\b(run|ran|running|walk|walked|walking|jog|jogged|jogging|lift|lifted|lifting|workout|workouts|exercise|exercises|reps|sets|cardio|strength|gym|heart rate|bpm|treadmill|squats?|bench press|swim|swam|swimming|bike|biking|cycling|cycled|yoga|hike[ds]?|hiking|steps|push-?ups?|pull-?ups?|training|trained|worked out|personal\s+record\w*|best\s+effort\w*|matched\s+course\w*|pace\s+record\w*|workout\s+plan\w*|workout\s+template\w*|training\s+plan\w*|training\s+program\w*)\b/i,
   },
   {
     category: 'food',
     keywords:
-      /\b(eat|ate|eating|food|foods|meal|meals|water|drink|drank|drinking|ml|oz|cup|cups|breakfast|lunch|dinner|snack|snacks|calories?|kcal|macro|macros|protein|carbs|fat|banana|apple|chicken|nutrition|nutrients?|coffee|tea|juice|smoothie|recipe)\b/i,
+      /\b(eat|ate|eating|food|foods|meal|meals|water|drink|drank|drinking|ml|oz|cup|cups|breakfast|lunch|dinner|snack|snacks|calories?|kcal|macro|macros|protein|carbs|fat|banana|apple|chicken|nutrition|nutrients?|coffee|tea|juice|smoothie|recipe|favou?rite\w*|meal\s*plan\w*|meal\s*template\w*|custom\s+nutrient\w*|micronutrient\w*|water\s+container\w*|water\s+bottle\w*|allerg\w*|intoleran\w*|anaphyla\w*|barcode|bar\s?code|UPC|EAN)\b/i,
   },
   {
     category: 'checkin',
     keywords:
-      /\b(weigh(?:t|ts|ed|ing|s)?|height|waist|hips|neck|body fat|fat%|percentage|checkin|check-in|scale|bmi|mood|sleep|slept|nap|fasting|fasted|measurements?|measured)\b/i,
+      /\b(weigh(?:t|ts|ed|ing|s)?|height|waist|hips|neck|body fat|fat%|percentage|checkin|check-in|scale|bmi|mood|sleep|slept|nap|fasting|fasted|measurements?|measured|progress\s+photo\w*|body\s+photo\w*|transformation\s+photo\w*|sleep\s+debt|sleep\s+need|chronotype|energy\s+curve|circadian|MCTQ|social\s+jetlag)\b/i,
   },
   {
     category: 'goals',
@@ -1267,7 +1805,7 @@ const KEYWORD_RULES: { category: ChatToolCategorySlug; keywords: RegExp }[] = [
   {
     category: 'reports',
     keywords:
-      /\b(report|reports|summar(?:y|ies|ize|ise|ized|ised|izing)|progress|tdee|chart|charts|analytics|recap|overview|trends?|graphs?|stats?|statistics|analy(?:ze|sis|tics)|averages?|compare|comparison|how (?:am|did|was|have) i)\b/i,
+      /\b(report|reports|summar(?:y|ies|ize|ise|ized|ised|izing)|progress|tdee|chart|charts|analytics|recap|overview|trends?|graphs?|stats?|statistics|analy(?:ze|sis|tics)|averages?|compare|comparison|how (?:am|did|was|have) i|dashboard|daily\s+summary|calorie\s+balance|calories\s+remaining|net\s+calories)\b/i,
   },
   {
     category: 'coaching',
@@ -1281,7 +1819,7 @@ const KEYWORD_RULES: { category: ChatToolCategorySlug; keywords: RegExp }[] = [
   {
     category: 'profile',
     keywords:
-      /\b(profile|habit|habits|preference|preferences|settings|timezone|unit|units)\b/i,
+      /\b(profile|habit|habits|preference|preferences|settings|timezone|unit|units|integration\w*|connected\s+(app|service|device|provider)\w*|external\s+provider\w*|wearable\w*|garmin|withings|fitbit|oura|polar|coros|strava|hevy|synced\s+data|delete\s+synced|imported\s+data)\b/i,
   },
 ];
 
@@ -1309,15 +1847,22 @@ function extractMessageText(msg: ChatMessage): string {
 // True when a message carries an image part. Deterministic signal (unlike
 // text keywords or the LLM fallback, an attached image is unambiguous), so
 // it's applied directly rather than routed through classification.
-function hasImageParts(msg: ChatMessage): boolean {
+export function hasImageParts(msg: ChatMessage): boolean {
   const partsSource = Array.isArray(msg.parts)
     ? msg.parts
     : Array.isArray(msg.content)
       ? (msg.content as ChatMessagePart[])
       : null;
   return (
-    partsSource?.some((p) => p.type === 'image' || p.type === 'image_url') ??
-    false
+    partsSource?.some(
+      (p) =>
+        p.type === 'image' ||
+        p.type === 'image_url' ||
+        (p.type === 'file' &&
+          (p.mimeType?.startsWith('image/') ||
+            p.mediaType?.startsWith('image/') ||
+            p.url?.startsWith('data:image/')))
+    ) ?? false
   );
 }
 
@@ -1351,12 +1896,14 @@ async function classifyUserIntent(
   const text = extractMessageText(lastUserMessage);
 
   // 1. Deterministic + keyword signals (instant, 0ms). An attached image
-  // always implies vision (+ food, the dominant meal-photo case) regardless
-  // of accompanying text.
+  // on the current turn or recent turns in the active conversation always implies
+  // vision (+ food), ensuring follow-up logging turns have vision tools like
+  // sparky_log_food_photo loaded.
   const matchedCategories = new Set<ChatToolCategorySlug>(
     classifyByKeywords(text)
   );
-  if (hasImageParts(lastUserMessage)) {
+  const hasRecentImage = messages.slice(-4).some((m) => hasImageParts(m));
+  if (hasRecentImage || hasImageParts(lastUserMessage)) {
     matchedCategories.add('vision');
     matchedCategories.add('food');
   }
@@ -1381,13 +1928,15 @@ async function classifyUserIntent(
     const classificationPrompt = `Analyze the conversation history (especially the user's latest reply) and determine which of the following health tracking domains are relevant. Choose all that apply.
 
 Available domains:
-- exercise: tracking workouts, logging sets/reps, running, cardio, strength, steps.
-- food: logging meals, lookup foods/nutrition, tracking water intake.
-- checkin: logging daily check-ins, weight, height, body fat, or other body measurements.
+- exercise: tracking workouts, logging sets/reps, running, cardio, strength, steps, exercise stats, creating and managing workout plans, and checking next scheduled/sequential workouts.
+- food: logging meals, lookup foods/nutrition, tracking water intake, favorites, meal plans, custom nutrients, water containers, allergens, and barcode lookup.
+- checkin: logging daily check-ins, weight, height, body fat, other body measurements, progress photos, and sleep-science analytics.
 - goals: viewing or changing goals/targets.
-- reports: viewing progress charts, summaries, TDEE, or reports.
+- reports: viewing progress charts, summaries, TDEE, reports, or the daily dashboard.
 - coaching: general coaching advice, guidance, tips, or motivation.
-- profile: changing settings, preferences, timezone, habits, or profile details.
+- vision: analyzing food photos or scanning nutrition labels.
+- profile: changing settings, preferences, timezone, habits, profile details, connected integrations, or synced-data.
+- medications: tracking medications and GLP-1.
 
 Your response must contain ONLY the matched domain names as a comma-separated list (e.g., "exercise, food" or "checkin" or "none"). Do not include any other text.`;
 
@@ -1418,16 +1967,8 @@ Your response must contain ONLY the matched domain names as a comma-separated li
       .map((t) => t.trim().replace(/^[^a-z0-9]+|[^a-z0-9]+$/gi, ''));
 
     const categoriesList: ChatToolCategorySlug[] = [];
-    const validCategories: ChatToolCategorySlug[] = [
-      'exercise',
-      'food',
-      'checkin',
-      'goals',
-      'reports',
-      'coaching',
-      'profile',
-      'vision',
-    ];
+    const validCategories: readonly ChatToolCategorySlug[] =
+      CHAT_TOOL_CATEGORY_SLUGS;
     for (const cat of validCategories) {
       if (parts.includes(cat)) {
         categoriesList.push(cat);
@@ -1486,7 +2027,7 @@ async function processChatMessage(
 
     const modelName =
       aiService.model_name || getDefaultModel(aiService.service_type);
-    const networkPolicy = deriveAiNetworkPolicy(aiService, actorIsAdmin);
+    const networkPolicy = await resolveAiNetworkPolicy(aiService, actorIsAdmin);
 
     const modelInstance = createChatModelInstance(
       aiService,
@@ -1514,6 +2055,7 @@ async function processChatMessage(
       );
     }
 
+    const latestImageDataUrl = extractLatestImageDataUrl(messages);
     const {
       systemPromptContent,
       tools,
@@ -1527,6 +2069,8 @@ async function processChatMessage(
       activeCategories,
       categoriesAreManual,
       aiService.system_prompt,
+      latestImageDataUrl,
+      aiService.id,
       authenticatedUserId
     );
 
@@ -1738,8 +2282,7 @@ const FOOD_OPTIONS_TEMPERATURE = 0.7;
 // dispatch failure passes its category through unchanged for the route's
 // HTTP-status map.
 export type FoodOptionsErrorCategory =
-  | DispatchErrorCategory
-  | 'no_ai_configured';
+  DispatchErrorCategory | 'no_ai_configured';
 
 export type FoodOptionsResult =
   | { success: true; content: string }
@@ -1784,14 +2327,13 @@ async function processFoodOptionsRequest(
     api_key: aiService.api_key ?? undefined,
     model_name: aiService.model_name ?? undefined,
     custom_url: aiService.custom_url ?? undefined,
-    timeout: aiService.timeout ?? undefined,
   };
 
   const prompt = `${FOOD_OPTIONS_PROMPT}\n\nGENERATE_FOOD_OPTIONS:${foodName} in ${unit}`;
 
   const result = await dispatchAiRequest({
     provider,
-    networkPolicy: deriveAiNetworkPolicy(aiService, actorIsAdmin),
+    networkPolicy: await resolveAiNetworkPolicy(aiService, actorIsAdmin),
     prompt,
     parseJson: true,
     temperature: FOOD_OPTIONS_TEMPERATURE,
@@ -1825,8 +2367,7 @@ const NO_PRESET_SERVICE_TYPES = new Set([
 ]);
 
 export type TestConnectionResult =
-  | { ok: true }
-  | { ok: false; category: DispatchErrorCategory; detail: string };
+  { ok: true } | { ok: false; category: DispatchErrorCategory; detail: string };
 
 function statusError(message: string, statusCode: number): Error {
   const err = new Error(message) as Error & { statusCode?: number };
@@ -1885,10 +2426,14 @@ async function testAiServiceConnection(
   // Gate #4 (SSRF): a test fires an outbound POST to the effective custom URL, so
   // a non-admin must not aim it at a private/internal address (localhost, RFC1918,
   // link-local, cloud metadata). The URL is validated post-fallback so a stored
-  // value is checked too. Admins (trusted operator) and the ALLOW_PRIVATE_NETWORK_AI
-  // opt-in bypass this, keeping self-hosted setups like local Ollama working.
+  // value is checked too. Admins (trusted operator) and the private-network opt-in
+  // (admin toggle or ALLOW_PRIVATE_NETWORK_AI) bypass this, keeping self-hosted
+  // setups like local Ollama working.
   if (customUrl) {
-    const networkPolicy = deriveAiNetworkPolicy({ source: 'user' }, isAdmin);
+    const networkPolicy = await resolveAiNetworkPolicy(
+      { source: 'user' },
+      isAdmin
+    );
     try {
       assertOutboundUrlShapeAndLiteralAllowed(customUrl, networkPolicy);
     } catch (error) {
@@ -1918,7 +2463,7 @@ async function testAiServiceConnection(
 
   const result = await dispatchAiRequest({
     provider,
-    networkPolicy: deriveAiNetworkPolicy(
+    networkPolicy: await resolveAiNetworkPolicy(
       { is_public: false, source: 'user' },
       isAdmin
     ),
@@ -2021,7 +2566,7 @@ async function processChatMessageStream(
 
     const modelName =
       aiService.model_name || getDefaultModel(aiService.service_type);
-    const networkPolicy = deriveAiNetworkPolicy(aiService, actorIsAdmin);
+    const networkPolicy = await resolveAiNetworkPolicy(aiService, actorIsAdmin);
 
     log(
       'info',
@@ -2054,12 +2599,14 @@ async function processChatMessageStream(
       );
     }
 
+    const latestImageDataUrl = extractLatestImageDataUrl(messages);
     const {
       systemPromptContent,
       tools,
       activeToolNames,
       prepareStep,
       toolProfile,
+      foodPhotoEstimateSink,
     } = await prepareChatContext(
       userId,
       aiService.service_type,
@@ -2067,6 +2614,8 @@ async function processChatMessageStream(
       activeCategories,
       categoriesAreManual,
       aiService.system_prompt,
+      latestImageDataUrl,
+      aiService.id,
       authenticatedUserId
     );
 
@@ -2182,6 +2731,12 @@ async function processChatMessageStream(
             log('error', 'Failed to save user chat history:', err)
           );
 
+        // A photo estimate analysed this turn is persisted with the message.
+        // Asking the user how to save it always ends the turn, so their answer
+        // arrives in a fresh one — and chat history strips images, so without
+        // this the numbers would be gone and the photo unrepeatable.
+        const capturedEstimate = foodPhotoEstimateSink.get();
+
         // A turn that ends on a quick-reply call carries the question in the
         // tool call, so it must be persisted too — otherwise the chips (and the
         // question they answer) vanish on reload, and the reloaded transcript
@@ -2190,7 +2745,7 @@ async function processChatMessageStream(
           (call) => call.toolName === ASK_USER_TOOL_NAME
         );
 
-        if (!text.trim() && !askCall) {
+        if (!text.trim() && !askCall && !capturedEstimate) {
           log(
             'warn',
             `Skipping empty assistant chat history for user ${userId} (finishReason: ${finishReason})`
@@ -2200,6 +2755,12 @@ async function processChatMessageStream(
 
         const assistantParts: Record<string, unknown>[] = [];
         if (text.trim()) assistantParts.push({ type: 'text', text });
+        if (capturedEstimate) {
+          assistantParts.push({
+            type: FOOD_PHOTO_ESTIMATE_PART_TYPE,
+            data: capturedEstimate,
+          });
+        }
         if (askCall) {
           assistantParts.push({
             type: ASK_USER_PART_TYPE,
@@ -2265,6 +2826,7 @@ export { processChatMessage };
 export { processFoodOptionsRequest };
 export { testAiServiceConnection };
 export { processChatMessageStream };
+export { createPerplexityFetch };
 export default {
   handleAiServiceSettings,
   getAiServiceSettings,
@@ -2282,4 +2844,5 @@ export default {
   testAiServiceConnection,
   processChatMessageStream,
   getSystemPrompt,
+  createPerplexityFetch,
 };

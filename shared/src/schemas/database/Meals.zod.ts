@@ -29,6 +29,7 @@ export const mealsSchema = z.object({
   images: z.array(z.string()),
   cooked_weight_g: z.number().positive().nullable(),
   cooked_weight_source: mealsCookedWeightSourceSchema.nullable(),
+  notes: z.string().nullable(),
 });
 
 export const mealsInitializerSchema = z.object({
@@ -46,6 +47,7 @@ export const mealsInitializerSchema = z.object({
   images: z.array(z.string()).optional(),
   cooked_weight_g: z.number().positive().optional().nullable(),
   cooked_weight_source: mealsCookedWeightSourceSchema.optional().nullable(),
+  notes: z.string().optional().nullable(),
 });
 
 export const mealsMutatorSchema = z.object({
@@ -63,6 +65,7 @@ export const mealsMutatorSchema = z.object({
   images: z.array(z.string()).optional(),
   cooked_weight_g: z.number().positive().optional().nullable(),
   cooked_weight_source: mealsCookedWeightSourceSchema.optional().nullable(),
+  notes: z.string().optional().nullable(),
 });
 
 export type Meals = z.infer<typeof mealsSchema>;

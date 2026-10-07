@@ -1,5 +1,9 @@
 import { z } from 'zod';
 import {
+  MIN_MEASURED_BMR_KCAL,
+  MAX_MEASURED_BMR_KCAL,
+} from '@workspace/shared';
+import {
   dateSchema,
   optionalDateSchema,
   weightUnitEnum,
@@ -53,6 +57,12 @@ const logBiometricsSchema = z
       .max(100)
       .optional()
       .describe('Body water percentage'),
+    bmr: z.coerce
+      .number()
+      .min(MIN_MEASURED_BMR_KCAL)
+      .max(MAX_MEASURED_BMR_KCAL)
+      .optional()
+      .describe('Basal Metabolic Rate (BMR) in kcal'),
   })
   .strict();
 
@@ -201,6 +211,16 @@ const getBiometricsHistorySchema = z
   })
   .strict();
 
+const getCustomMetricsHistorySchema = z
+  .object({
+    action: z.literal('get_custom_metrics_history'),
+    start_date: dateSchema
+      .optional()
+      .describe('Start date for the history range'),
+    end_date: dateSchema.optional().describe('End date for the history range'),
+  })
+  .strict();
+
 export const manageCheckinSchema = z.discriminatedUnion('action', [
   logBiometricsSchema,
   logCustomMetricSchema,
@@ -212,6 +232,7 @@ export const manageCheckinSchema = z.discriminatedUnion('action', [
   listCheckinDiarySchema,
   getFastingStatusSchema,
   getBiometricsHistorySchema,
+  getCustomMetricsHistorySchema,
 ]);
 
 export type ManageCheckinInput = z.infer<typeof manageCheckinSchema>;
@@ -232,6 +253,7 @@ export const manageCheckinInput = z.object({
       'list_checkin_diary',
       'get_fasting_status',
       'get_biometrics_history',
+      'get_custom_metrics_history',
     ])
     .optional()
     .describe('Action to perform; see tool description for per-action fields.'),

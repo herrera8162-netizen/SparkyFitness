@@ -9,6 +9,7 @@ import { CheckInTopRow } from './CheckInTopRow';
 import { useCheckInLogic } from '@/hooks/CheckIn/useCheckInLogic';
 import { useSearchParams } from 'react-router-dom';
 import { CheckInPhotos } from './CheckInPhotos';
+import SymptomsPanel from '../Symptoms/SymptomsPanel';
 import { useCheckInPhotoDates } from '@/hooks/CheckIn/useCheckInPhotos';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
@@ -17,7 +18,7 @@ import { useUpdateFastMutation } from '@/hooks/Fasting/useFasting';
 import { FastingLog } from '@/types/fasting';
 import { CombinedMeasurement } from '@/types/checkin';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
-import { Timer, Activity, Moon, Camera } from 'lucide-react';
+import { Timer, Activity, Moon, Camera, HeartPulse } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 const CheckIn = () => {
@@ -32,9 +33,11 @@ const CheckIn = () => {
     boneMassKg,
     bodyWaterPercentage,
     muscleMassKg,
+    bmr,
     customCategories,
     customNotes,
     customValues,
+    customPlaceholders,
     handleCalculateBodyFat,
     handleDeleteMeasurementClick,
     handleSubmit,
@@ -52,6 +55,7 @@ const CheckIn = () => {
     setBoneMassKg,
     setBodyWaterPercentage,
     setMuscleMassKg,
+    setBmr,
     setCustomNotes,
     setCustomValues,
     setHeight,
@@ -128,6 +132,11 @@ const CheckIn = () => {
                 id: 'photos',
                 label: t('checkIn.tabs.photos', 'Photos'),
                 icon: Camera,
+              },
+              {
+                id: 'symptoms',
+                label: t('checkIn.tabs.symptoms', 'Symptoms'),
+                icon: HeartPulse,
               },
             ].map((tab) => {
               const Icon = tab.icon;
@@ -212,8 +221,10 @@ const CheckIn = () => {
             boneMassKg={boneMassKg}
             bodyWaterPercentage={bodyWaterPercentage}
             muscleMassKg={muscleMassKg}
+            bmr={bmr}
             customCategories={customCategories}
             customNotes={customNotes}
+            customPlaceholders={customPlaceholders}
             customValues={customValues}
             handleCalculateBodyFat={handleCalculateBodyFat}
             handleSubmit={handleSubmit}
@@ -226,6 +237,7 @@ const CheckIn = () => {
             setBoneMassKg={setBoneMassKg}
             setBodyWaterPercentage={setBodyWaterPercentage}
             setMuscleMassKg={setMuscleMassKg}
+            setBmr={setBmr}
             setCustomNotes={setCustomNotes}
             setCustomValues={setCustomValues}
             setHeight={setHeight}
@@ -263,6 +275,19 @@ const CheckIn = () => {
 
         <TabsContent value="photos" className="focus-visible:outline-none">
           <CheckInPhotos selectedDate={selectedDate} />
+        </TabsContent>
+
+        <TabsContent value="symptoms" className="focus-visible:outline-none">
+          <SymptomsPanel
+            selectedDate={selectedDate}
+            onDateChange={(dateString) => {
+              setSelectedDate(dateString);
+              setSearchParams((prev) => {
+                prev.set('date', dateString);
+                return prev;
+              });
+            }}
+          />
         </TabsContent>
       </Tabs>
 

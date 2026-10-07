@@ -1,8 +1,11 @@
-import "tsx/cjs";
+import 'tsx/cjs';
 import { ExpoConfig, ConfigContext } from 'expo/config';
 import { nativeLanguageTags } from './src/localization/localeRegistry';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { getIosAppGroup, DEV_BUNDLE_IDENTIFIER } = require('./app.identifiers.js');
+const {
+  getIosAppGroup,
+  DEV_BUNDLE_IDENTIFIER,
+} = require('./app.identifiers.js');
 
 const APP_NAME = 'SparkyFitness';
 const APP_SLUG = 'sparkyfitnessmobile';
@@ -10,12 +13,20 @@ const ANDROID_PROD_BUNDLE_IDENTIFIER = 'com.SparkyApps.SparkyFitnessMobile';
 const IOS_PROD_BUNDLE_IDENTIFIER = 'com.SparkyApps.SparkyFitnessMobile';
 const DEV_APPLE_TEAM_ID = process.env.EXPO_DEV_APPLE_TEAM_ID || '';
 const PROD_APPLE_TEAM_ID = process.env.EXPO_PROD_APPLE_TEAM_ID || '';
+// Optional. With it, Android draws cardio routes over Google Maps; without
+// it, Android keeps the plain route line and nothing else changes. iOS uses
+// Apple Maps and needs no key. Supply it from the build environment (an EAS
+// secret, for instance), never from the repo.
+const GOOGLE_MAPS_ANDROID_API_KEY =
+  process.env.GOOGLE_MAPS_ANDROID_API_KEY || '';
 
 const DEV_PACKAGE = DEV_BUNDLE_IDENTIFIER;
 const PROD_PACKAGE = ANDROID_PROD_BUNDLE_IDENTIFIER;
 
 const androidPermissions = [
   'android.permission.INTERNET',
+  'android.permission.POST_NOTIFICATIONS',
+  'android.permission.POST_PROMOTED_NOTIFICATIONS',
   'android.permission.health.READ_ACTIVE_CALORIES_BURNED',
   'android.permission.health.READ_BASAL_BODY_TEMPERATURE',
   'android.permission.health.READ_BASAL_METABOLIC_RATE',
@@ -23,6 +34,7 @@ const androidPermissions = [
   'android.permission.health.READ_BLOOD_PRESSURE',
   'android.permission.health.READ_BODY_FAT',
   'android.permission.health.READ_BODY_TEMPERATURE',
+  'android.permission.health.READ_BODY_WATER_MASS',
   'android.permission.health.READ_BONE_MASS',
   'android.permission.health.READ_CERVICAL_MUCUS',
   'android.permission.health.READ_CYCLING_PEDALING_CADENCE',
@@ -76,6 +88,7 @@ const devAndroidPermissions = [
   'android.permission.health.WRITE_BLOOD_PRESSURE',
   'android.permission.health.WRITE_BODY_FAT',
   'android.permission.health.WRITE_BODY_TEMPERATURE',
+  'android.permission.health.WRITE_BODY_WATER_MASS',
   'android.permission.health.WRITE_BONE_MASS',
   'android.permission.health.WRITE_CERVICAL_MUCUS',
   'android.permission.health.WRITE_CYCLING_PEDALING_CADENCE',
@@ -118,16 +131,36 @@ export default ({ config }: ConfigContext): Partial<ExpoConfig> => {
   }
 
   // Plugins only included in production builds
-  const prodPlugins = [
-    './plugins/withNetworkSecurityConfig',
-  ];
+  const prodPlugins = ['./plugins/withNetworkSecurityConfig'];
+
+  // Plugins only included in dev builds. The push-notification entitlement is
+  // stripped because free Apple "Personal Team" accounts cannot sign a build
+  // that declares the Push Notifications capability, and only local
+  // notifications are used. See plugins/withoutPushNotificationEntitlement.ts.
+  //
+  // MUST be spread FIRST in the `plugins` array below, not last. For a given
+  // mod type (e.g. "entitlements"), @expo/config-plugins wraps each newly
+  // registered mod around the previously registered one and runs the NEW
+  // one's function first, then delegates to the previous one — so execution
+  // order is the REVERSE of registration order. Registering last (as this
+  // used to) made our delete run FIRST, before expo-notifications/
+  // expo-widgets had added `aps-environment` back, so it never actually
+  // stripped anything. Registering first makes our delete run last, after
+  // every other plugin has had its say — which is what "must come last"
+  // actually requires.
+  const devPlugins = ['./plugins/withoutPushNotificationEntitlement'];
 
   return {
     ...config,
     name: APP_NAME,
     slug: APP_SLUG,
     version: packageJson.version,
-    locales: Object.fromEntries(nativeLanguageTags().map((language) => [language, `./locales/${language}.json`])),
+    locales: Object.fromEntries(
+      nativeLanguageTags().map((language) => [
+        language,
+        `./locales/${language}.json`,
+      ])
+    ),
     ios: {
       bundleIdentifier: isDev
         ? DEV_BUNDLE_IDENTIFIER
@@ -155,28 +188,38 @@ export default ({ config }: ConfigContext): Partial<ExpoConfig> => {
         // The localized InfoPlist permission strings come from `locales`; this
         // allows the generated app metadata to use the selected localization.
         CFBundleAllowMixedLocalizations: true,
+        // Lets the opt-in "Play through silent mode" rest chime (#2506) keep a
+        // silent track playing during a rest, so the chime still sounds with
+        // the app in the background. Nothing plays in the background unless
+        // that setting is on and a rest is running.
+        UIBackgroundModes: ['audio'],
       },
       entitlements: {
         'com.apple.security.application-groups': [getIosAppGroup()],
+        // Lets iOS honour the `timeSensitive` rest alert (see
+        // `scheduleRestNotification`); without it a Focus mode silences it.
+        'com.apple.developer.usernotifications.time-sensitive': true,
       },
       icon: './assets/icons/appicon.icon',
     },
     android: {
-      package: isDev
-        ? DEV_PACKAGE
-        : PROD_PACKAGE,
+      package: isDev ? DEV_PACKAGE : PROD_PACKAGE,
       permissions: androidPermissions,
       adaptiveIcon: {
         foregroundImage: './assets/icons/adaptiveicon.png',
         backgroundColor: '#FFFFFF',
-      }
+      },
     },
     plugins: [
+      // Must be first — see the comment on `devPlugins` above for why.
+      ...(isDev ? devPlugins : []),
       ...(config.plugins ?? []),
       'expo-image',
       [
-        // Foreground playback only (rest-timer chime): no mic permission, no
-        // background-audio mode, no Android record/foreground-service perms.
+        // No mic permission and no Android record/foreground-service perms.
+        // iOS background audio for the rest chime comes from `UIBackgroundModes`
+        // above; the plugin flag would also add Android's media-playback
+        // foreground service, which the chime doesn't use.
         'expo-audio',
         {
           microphonePermission: false,
@@ -188,7 +231,17 @@ export default ({ config }: ConfigContext): Partial<ExpoConfig> => {
       './plugins/withAppLanguage',
       './plugins/withCalorieWidget',
       './plugins/withExactAlarmModule',
+      './plugins/withWorkoutNotification',
       './plugins/withEnrichedMarkdownNoMath',
+      './plugins/withSceneLifecycle',
+      [
+        'react-native-maps',
+        {
+          // Writes the key into the Android manifest when set and removes it
+          // when not. No iOS key: iOS stays on Apple Maps.
+          androidGoogleMapsApiKey: GOOGLE_MAPS_ANDROID_API_KEY || undefined,
+        },
+      ],
       [
         'expo-localization',
         {
@@ -219,8 +272,11 @@ export default ({ config }: ConfigContext): Partial<ExpoConfig> => {
       ...config.extra,
       APP_VARIANT: environment,
       iosAppGroup: getIosAppGroup(),
+      // Whether the Android build has a Maps key. The key itself stays out
+      // of the JS bundle; the route screen only needs to know it is there.
+      androidGoogleMapsEnabled: GOOGLE_MAPS_ANDROID_API_KEY !== '',
       eas: {
-        projectId: "498a86c5-344f-4d2c-9033-dfd720e4a383",
+        projectId: '498a86c5-344f-4d2c-9033-dfd720e4a383',
       },
     },
   };

@@ -2,7 +2,12 @@ import { act, renderHook, waitFor } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 import Toast from 'react-native-toast-message';
 import type { PresetSessionResponse } from '@workspace/shared';
-import { useStartLiveWorkout } from '../../src/hooks/useStartLiveWorkout';
+import {
+  __resetLiveWorkoutStartForTests,
+  armWatchForActiveSession,
+  syncWatchIntervalTiming,
+  useStartLiveWorkout,
+} from '../../src/hooks/useStartLiveWorkout';
 import {
   __resetActiveWorkoutStoreForTests,
   useActiveWorkoutStore,
@@ -43,17 +48,38 @@ jest.mock('../../src/services/storage', () => ({
   getActiveServerConfig: jest.fn(),
 }));
 
-const mockCreateWorkout = createWorkout as jest.MockedFunction<typeof createWorkout>;
+jest.mock('../../modules/watch-connectivity', () => ({
+  __esModule: true,
+  default: {
+    isSupported: jest.fn(() => true),
+    startWorkout: jest.fn(),
+    updateIntervalTiming: jest.fn(),
+  },
+}));
+
+const mockWatch = (
+  jest.requireMock('../../modules/watch-connectivity') as {
+    default: { startWorkout: jest.Mock; updateIntervalTiming: jest.Mock };
+  }
+).default;
+const mockStartWorkout = mockWatch.startWorkout;
+const mockUpdateIntervalTiming = mockWatch.updateIntervalTiming;
+
+const mockCreateWorkout = createWorkout as jest.MockedFunction<
+  typeof createWorkout
+>;
 const mockInvalidate = invalidateExerciseCache as jest.MockedFunction<
   typeof invalidateExerciseCache
 >;
-const mockEnsurePermission = ensureNotificationPermission as jest.MockedFunction<
-  typeof ensureNotificationPermission
->;
+const mockEnsurePermission =
+  ensureNotificationPermission as jest.MockedFunction<
+    typeof ensureNotificationPermission
+  >;
 const mockToastShow = Toast.show as jest.MockedFunction<typeof Toast.show>;
-const mockFlushBeforeClear = flushActiveWorkoutBeforeClear as jest.MockedFunction<
-  typeof flushActiveWorkoutBeforeClear
->;
+const mockFlushBeforeClear =
+  flushActiveWorkoutBeforeClear as jest.MockedFunction<
+    typeof flushActiveWorkoutBeforeClear
+  >;
 const mockGetActiveServerConfig = getActiveServerConfig as jest.MockedFunction<
   typeof getActiveServerConfig
 >;
@@ -133,6 +159,7 @@ describe('useStartLiveWorkout', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     __resetActiveWorkoutStoreForTests();
+    __resetLiveWorkoutStartForTests();
     alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
     mockCreateWorkout.mockResolvedValue(makeSession());
   });
@@ -145,7 +172,10 @@ describe('useStartLiveWorkout', () => {
     const { result, navigation, queryClient } = setup();
 
     await act(async () => {
-      await result.current.startLiveWorkout({ name: 'Push Day', exercises: EXERCISES });
+      await result.current.startLiveWorkout({
+        name: 'Push Day',
+        exercises: EXERCISES,
+      });
     });
 
     expect(mockCreateWorkout).toHaveBeenCalledWith({
@@ -161,6 +191,158 @@ describe('useStartLiveWorkout', () => {
     expect(store.sessionId).toBe('session-1');
     expect(store.createdByLiveStart).toBe(true);
     expect(navigation.replace).toHaveBeenCalledWith('ActiveWorkout');
+  });
+
+  it('lets only one caller create a session when the phone and the watch start together', async () => {
+    let resolveCreate: (session: PresetSessionResponse) => void = () =>
+      undefined;
+    mockCreateWorkout.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        })
+    );
+    const queryClient = createTestQueryClient();
+    queryClient.setQueryData(serverConnectionQueryKey, true);
+    const navigation = {
+      replace: jest.fn(),
+      navigate: jest.fn(),
+      isFocused: jest.fn(() => false),
+    };
+    const phone = renderHook(() => useStartLiveWorkout(navigation), {
+      wrapper: createQueryWrapper(queryClient),
+    });
+    const watch = renderHook(() => useStartLiveWorkout(navigation), {
+      wrapper: createQueryWrapper(queryClient),
+    });
+
+    let phoneDone: Promise<void> = Promise.resolve();
+    act(() => {
+      phoneDone = phone.result.current.startLiveWorkout({
+        name: 'Push Day',
+        exercises: EXERCISES,
+      });
+    });
+    await act(async () => {
+      await watch.result.current.startLiveWorkout({
+        name: 'Pull Day',
+        exercises: EXERCISES,
+      });
+    });
+    expect(mockCreateWorkout).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveCreate(makeSession());
+      await phoneDone;
+    });
+    expect(mockCreateWorkout).toHaveBeenCalledTimes(1);
+    expect(useActiveWorkoutStore.getState().sessionId).toBe('session-1');
+  });
+
+  it('arms the watch with the interval format, cap, and start time', async () => {
+    const { result } = setup();
+    const before = Date.now();
+
+    await act(async () => {
+      await result.current.startLiveWorkout({
+        name: 'Push Day',
+        exercises: EXERCISES,
+        workoutFormat: 'amrap',
+        timeCapSeconds: 720,
+      });
+    });
+
+    expect(mockStartWorkout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: 'session-1',
+        workoutFormat: 'amrap',
+        timeCapSeconds: 720,
+        startedAt: expect.any(String),
+        armedAt: expect.any(String),
+        capEndsAt: expect.any(String),
+      })
+    );
+    const payload = mockStartWorkout.mock.calls[0][0];
+    const startedAt = Date.parse(payload.startedAt as string);
+    expect(startedAt).toBeGreaterThanOrEqual(before);
+    expect(startedAt).toBeLessThanOrEqual(Date.now());
+    // The phone leads the cap with a 5s countdown, so 0:00 is cap + 5s.
+    expect(Date.parse(payload.capEndsAt as string) - startedAt).toBe(
+      (720 + 5) * 1000
+    );
+    // The arm time the phone's later target updates are tagged with.
+    expect(useActiveWorkoutStore.getState().watchArmedAt).toBe(
+      Date.parse(payload.armedAt as string)
+    );
+  });
+
+  it('freezes the watch cap on pause and sends the pause length on resume', () => {
+    act(() => {
+      useActiveWorkoutStore.getState().startWorkout(makeSession());
+    });
+
+    syncWatchIntervalTiming({
+      paused: true,
+      pausedAtMs: Date.parse('2026-09-25T15:00:00.000Z'),
+    });
+    const paused = mockUpdateIntervalTiming.mock.calls.at(-1)?.[0];
+    expect(paused).toEqual(
+      expect.objectContaining({
+        sessionId: 'session-1',
+        paused: true,
+        pausedAt: '2026-09-25T15:00:00.000Z',
+        excludedPauseMs: 0,
+      })
+    );
+
+    syncWatchIntervalTiming({ paused: false, pauseDurationMs: 12_000 });
+    const resumed = mockUpdateIntervalTiming.mock.calls.at(-1)?.[0];
+    expect(resumed).toEqual(
+      expect.objectContaining({
+        sessionId: 'session-1',
+        paused: false,
+        excludedPauseMs: 12_000,
+        revision: (paused.revision as number) + 1,
+      })
+    );
+    expect(resumed.pausedAt).toBeUndefined();
+    expect(useActiveWorkoutStore.getState().watchIntervalRevision).toBe(
+      resumed.revision
+    );
+    expect(useActiveWorkoutStore.getState().watchExcludedPauseMs).toBe(12_000);
+
+    syncWatchIntervalTiming({ paused: false, pauseDurationMs: -5_000 });
+    const afterRollback = mockUpdateIntervalTiming.mock.calls.at(-1)?.[0];
+    expect(afterRollback.excludedPauseMs).toBe(12_000);
+    expect(afterRollback.revision).toBe((resumed.revision as number) + 1);
+    expect(useActiveWorkoutStore.getState().watchIntervalRevision).toBe(
+      afterRollback.revision
+    );
+  });
+
+  it('tells the watch when the store pauses and resumes', () => {
+    act(() => {
+      useActiveWorkoutStore.getState().startWorkout(makeSession(), {
+        workoutFormat: 'amrap',
+        timeCapSeconds: 60,
+      });
+      useActiveWorkoutStore.getState().pauseInterval();
+    });
+
+    expect(mockUpdateIntervalTiming).toHaveBeenCalledWith(
+      expect.objectContaining({ paused: true, sessionId: 'session-1' })
+    );
+
+    act(() => {
+      useActiveWorkoutStore.getState().resumeInterval();
+    });
+
+    expect(mockUpdateIntervalTiming).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        paused: false,
+        sessionId: 'session-1',
+      })
+    );
   });
 
   it('strips planned weight/reps/duration from the create payload and seeds them as the store plan', async () => {
@@ -194,7 +376,7 @@ describe('useStartLiveWorkout', () => {
             ],
           }),
         ],
-      }),
+      })
     );
     // The plan lands keyed to the created session's set ids for placeholders.
     expect(useActiveWorkoutStore.getState().plannedSetValues).toEqual({
@@ -224,7 +406,7 @@ describe('useStartLiveWorkout', () => {
     // Also tags the created session server-side (recentSessions stats
     // scoping), independent of the client-supplied exercises.
     expect(mockCreateWorkout).toHaveBeenCalledWith(
-      expect.objectContaining({ workout_preset_id: 42 }),
+      expect.objectContaining({ workout_preset_id: 42 })
     );
   });
 
@@ -239,7 +421,7 @@ describe('useStartLiveWorkout', () => {
     expect(useActiveWorkoutStore.getState().sourcePresetId).toBeNull();
     expect(useActiveWorkoutStore.getState().sourceServerConfigId).toBeNull();
     expect(mockCreateWorkout).toHaveBeenCalledWith(
-      expect.not.objectContaining({ workout_preset_id: expect.anything() }),
+      expect.not.objectContaining({ workout_preset_id: expect.anything() })
     );
   });
 
@@ -251,7 +433,7 @@ describe('useStartLiveWorkout', () => {
     });
 
     expect(mockCreateWorkout).toHaveBeenCalledWith(
-      expect.objectContaining({ name: defaultWorkoutName(getTodayDate()) }),
+      expect.objectContaining({ name: defaultWorkoutName(getTodayDate()) })
     );
   });
 
@@ -276,7 +458,10 @@ describe('useStartLiveWorkout', () => {
       await result.current.startLiveWorkout({ exercises: EXERCISES });
     });
 
-    expect(alertSpy).toHaveBeenCalledWith('No Server Connected', expect.any(String));
+    expect(alertSpy).toHaveBeenCalledWith(
+      'No Server Connected',
+      expect.any(String)
+    );
     expect(mockCreateWorkout).not.toHaveBeenCalled();
     expect(navigation.replace).not.toHaveBeenCalled();
   });
@@ -297,7 +482,7 @@ describe('useStartLiveWorkout', () => {
       expect.arrayContaining([
         expect.objectContaining({ text: 'Go to Workout' }),
         expect.objectContaining({ text: 'Clear & Start' }),
-      ]),
+      ])
     );
     // Without confirming the prompt, nothing is created.
     expect(mockCreateWorkout).not.toHaveBeenCalled();
@@ -310,9 +495,9 @@ describe('useStartLiveWorkout', () => {
     });
 
     alertSpy.mockImplementation((_title, _message, buttons) => {
-      const goTo = (buttons as { text: string; onPress?: () => void }[] | undefined)?.find(
-        (b) => b.text === 'Go to Workout',
-      );
+      const goTo = (
+        buttons as { text: string; onPress?: () => void }[] | undefined
+      )?.find((b) => b.text === 'Go to Workout');
       goTo?.onPress?.();
       return undefined as never;
     });
@@ -336,15 +521,18 @@ describe('useStartLiveWorkout', () => {
 
     // Simulate tapping the destructive "Clear & Start" button.
     alertSpy.mockImplementation((_title, _message, buttons) => {
-      const confirm = (buttons as { text: string; onPress?: () => void }[] | undefined)?.find(
-        (b) => b.text === 'Clear & Start',
-      );
+      const confirm = (
+        buttons as { text: string; onPress?: () => void }[] | undefined
+      )?.find((b) => b.text === 'Clear & Start');
       confirm?.onPress?.();
       return undefined as never;
     });
 
     await act(async () => {
-      await result.current.startLiveWorkout({ name: 'Push Day', exercises: EXERCISES });
+      await result.current.startLiveWorkout({
+        name: 'Push Day',
+        exercises: EXERCISES,
+      });
     });
 
     await waitFor(() => expect(mockCreateWorkout).toHaveBeenCalled());
@@ -360,7 +548,7 @@ describe('useStartLiveWorkout', () => {
     });
 
     expect(mockToastShow).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'error', text1: 'Nothing to start' }),
+      expect.objectContaining({ type: 'error', text1: 'Nothing to start' })
     );
     expect(mockCreateWorkout).not.toHaveBeenCalled();
   });
@@ -409,5 +597,57 @@ describe('useStartLiveWorkout', () => {
     expect(useActiveWorkoutStore.getState().sessionId).toBe('session-1');
     expect(useActiveWorkoutStore.getState().createdByLiveStart).toBe(true);
     expect(navigation.replace).not.toHaveBeenCalled();
+  });
+
+  it('tells the watch which exercises are a superset, and ignores a group of one', () => {
+    const base = makeSession().exercises[0];
+    const exercise = (
+      id: string,
+      name: string,
+      supersetGroup: number | null,
+      setIds: number[]
+    ) =>
+      ({
+        ...base,
+        id,
+        superset_group: supersetGroup,
+        exercise_snapshot: { ...base.exercise_snapshot, name },
+        sets: setIds.map((setId, index) => ({
+          ...base.sets[0],
+          id: setId,
+          set_number: index + 1,
+        })),
+      }) as typeof base;
+
+    act(() => {
+      useActiveWorkoutStore.getState().startWorkout({
+        ...makeSession(),
+        exercises: [
+          exercise('bench', 'Bench Press', 1, [1, 2]),
+          exercise('row', 'Barbell Row', 1, [3, 4]),
+          exercise('curl', 'Curl', 9, [5]),
+          exercise('squat', 'Squat', 2, [6]),
+          exercise('lunge', 'Lunge', 2, [7]),
+        ],
+      });
+    });
+
+    armWatchForActiveSession(
+      ((key: string, options?: { defaultValue?: string }) =>
+        options?.defaultValue ?? key) as never
+    );
+
+    expect(mockStartWorkout).toHaveBeenCalledWith(
+      expect.objectContaining({
+        exercises: [
+          expect.objectContaining({ name: 'Bench Press', supersetRun: 0 }),
+          expect.objectContaining({ name: 'Barbell Row', supersetRun: 0 }),
+          expect.objectContaining({ name: 'Curl', supersetRun: null }),
+          expect.objectContaining({ name: 'Squat', supersetRun: 1 }),
+          expect.objectContaining({ name: 'Lunge', supersetRun: 1 }),
+        ],
+        setOrder: ['1', '3', '2', '4', '5', '6', '7'],
+      })
+    );
   });
 });

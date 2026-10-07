@@ -7,7 +7,6 @@ import {
   requiredHeaders,
 } from '@/constants/exercises';
 import { ExerciseCSVData } from '@/pages/Exercises/ExerciseImportCSV';
-import { DailyExerciseEntry } from '@/types/reports';
 import {
   readNumberCell,
   parseCsv,
@@ -107,23 +106,25 @@ export function resolveExerciseImageSrc(image: string | undefined): string {
  * filtered list so they never disagree and render a broken thumbnail.
  */
 export function filterValidExerciseImages(
-  images: string[] | undefined | null
+  images: string[] | string | undefined | null
 ): string[] {
+  if (!images) return [];
+  if (typeof images === 'string') {
+    try {
+      const parsed = JSON.parse(images);
+      if (Array.isArray(parsed)) {
+        return filterValidExerciseImages(parsed);
+      }
+    } catch {
+      // not JSON array
+    }
+    const trimmed = images.trim();
+    return trimmed !== '' && trimmed !== '[]' ? [trimmed] : [];
+  }
   if (!Array.isArray(images)) return [];
   return images.filter((img) => {
     if (typeof img !== 'string') return false;
     const trimmed = img.trim();
     return trimmed !== '' && trimmed !== '[]';
   });
-}
-
-export function calcExerciseStatsFlat(entries: DailyExerciseEntry[]) {
-  return {
-    otherCalories: entries.reduce(
-      (acc, e) => acc + Number(e.calories_burned || 0),
-      0
-    ),
-    activeCalories: 0,
-    activitySteps: entries.reduce((acc, e) => acc + Number(e['steps'] || 0), 0),
-  };
 }

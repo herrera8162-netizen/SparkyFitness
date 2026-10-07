@@ -20,6 +20,7 @@ export const healthMetricSchema = z.enum([
   "spo2",
   "stress",
   "body_battery",
+  "skin_temperature",
 ]);
 export type HealthMetric = z.infer<typeof healthMetricSchema>;
 
@@ -64,6 +65,11 @@ export const stressSampleSchema = baseSampleSchema.extend({
 export const bodyBatterySampleSchema = baseSampleSchema.extend({
   level: z.number(),
 });
+export const skinTemperatureSampleSchema = baseSampleSchema.extend({
+  celsius: z.number().optional(),
+  temperature_celsius: z.number().optional(),
+  deviation_celsius: z.number().optional(),
+});
 
 export type HeartRateSample = z.infer<typeof heartRateSampleSchema>;
 export type HrvSample = z.infer<typeof hrvSampleSchema>;
@@ -71,6 +77,9 @@ export type RespirationSample = z.infer<typeof respirationSampleSchema>;
 export type Spo2Sample = z.infer<typeof spo2SampleSchema>;
 export type StressSample = z.infer<typeof stressSampleSchema>;
 export type BodyBatterySample = z.infer<typeof bodyBatterySampleSchema>;
+export type SkinTemperatureSample = z.infer<
+  typeof skinTemperatureSampleSchema
+>;
 
 const rowBase = {
   id: healthMetricSamplesIdSchema,
@@ -86,12 +95,41 @@ const rowBase = {
 // per-metric shape at the application boundary — the type safety a shared
 // table would otherwise lose relative to four separate tables.
 export const healthMetricSamplesSchema = z.discriminatedUnion("metric", [
-  z.object({ ...rowBase, metric: z.literal("heart_rate"), samples: z.array(heartRateSampleSchema) }),
-  z.object({ ...rowBase, metric: z.literal("hrv"), samples: z.array(hrvSampleSchema) }),
-  z.object({ ...rowBase, metric: z.literal("respiration"), samples: z.array(respirationSampleSchema) }),
-  z.object({ ...rowBase, metric: z.literal("spo2"), samples: z.array(spo2SampleSchema) }),
-  z.object({ ...rowBase, metric: z.literal("stress"), samples: z.array(stressSampleSchema) }),
-  z.object({ ...rowBase, metric: z.literal("body_battery"), samples: z.array(bodyBatterySampleSchema) }),
+  z.object({
+    ...rowBase,
+    metric: z.literal("heart_rate"),
+    samples: z.array(heartRateSampleSchema),
+  }),
+  z.object({
+    ...rowBase,
+    metric: z.literal("hrv"),
+    samples: z.array(hrvSampleSchema),
+  }),
+  z.object({
+    ...rowBase,
+    metric: z.literal("respiration"),
+    samples: z.array(respirationSampleSchema),
+  }),
+  z.object({
+    ...rowBase,
+    metric: z.literal("spo2"),
+    samples: z.array(spo2SampleSchema),
+  }),
+  z.object({
+    ...rowBase,
+    metric: z.literal("stress"),
+    samples: z.array(stressSampleSchema),
+  }),
+  z.object({
+    ...rowBase,
+    metric: z.literal("body_battery"),
+    samples: z.array(bodyBatterySampleSchema),
+  }),
+  z.object({
+    ...rowBase,
+    metric: z.literal("skin_temperature"),
+    samples: z.array(skinTemperatureSampleSchema),
+  }),
 ]);
 export type HealthMetricSamples = z.infer<typeof healthMetricSamplesSchema>;
 
@@ -105,15 +143,49 @@ const rowBaseInitializer = {
   updated_at: z.coerce.date().optional().nullable(),
 };
 
-export const healthMetricSamplesInitializerSchema = z.discriminatedUnion("metric", [
-  z.object({ ...rowBaseInitializer, metric: z.literal("heart_rate"), samples: z.array(heartRateSampleSchema) }),
-  z.object({ ...rowBaseInitializer, metric: z.literal("hrv"), samples: z.array(hrvSampleSchema) }),
-  z.object({ ...rowBaseInitializer, metric: z.literal("respiration"), samples: z.array(respirationSampleSchema) }),
-  z.object({ ...rowBaseInitializer, metric: z.literal("spo2"), samples: z.array(spo2SampleSchema) }),
-  z.object({ ...rowBaseInitializer, metric: z.literal("stress"), samples: z.array(stressSampleSchema) }),
-  z.object({ ...rowBaseInitializer, metric: z.literal("body_battery"), samples: z.array(bodyBatterySampleSchema) }),
-]);
-export type HealthMetricSamplesInitializer = z.infer<typeof healthMetricSamplesInitializerSchema>;
+export const healthMetricSamplesInitializerSchema = z.discriminatedUnion(
+  "metric",
+  [
+    z.object({
+      ...rowBaseInitializer,
+      metric: z.literal("heart_rate"),
+      samples: z.array(heartRateSampleSchema),
+    }),
+    z.object({
+      ...rowBaseInitializer,
+      metric: z.literal("hrv"),
+      samples: z.array(hrvSampleSchema),
+    }),
+    z.object({
+      ...rowBaseInitializer,
+      metric: z.literal("respiration"),
+      samples: z.array(respirationSampleSchema),
+    }),
+    z.object({
+      ...rowBaseInitializer,
+      metric: z.literal("spo2"),
+      samples: z.array(spo2SampleSchema),
+    }),
+    z.object({
+      ...rowBaseInitializer,
+      metric: z.literal("stress"),
+      samples: z.array(stressSampleSchema),
+    }),
+    z.object({
+      ...rowBaseInitializer,
+      metric: z.literal("body_battery"),
+      samples: z.array(bodyBatterySampleSchema),
+    }),
+    z.object({
+      ...rowBaseInitializer,
+      metric: z.literal("skin_temperature"),
+      samples: z.array(skinTemperatureSampleSchema),
+    }),
+  ],
+);
+export type HealthMetricSamplesInitializer = z.infer<
+  typeof healthMetricSamplesInitializerSchema
+>;
 
 // No Mutator schema: z.discriminatedUnion does not support .partial(), and
 // nothing in this codebase partially mutates a bucket — the server always

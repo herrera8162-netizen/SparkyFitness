@@ -32,6 +32,19 @@ export interface WaterContainer {
   unit: 'ml' | 'oz' | 'liter'; // Removed 'cup'
   is_primary: boolean;
   servings_per_container: number; // New field
+  hydration_factor?: number;
+  linked_food_id?: string | null;
+  linked_variant_id?: string | null;
+  linked_meal_type_id?: string | null;
+  /** Servings of the linked food one press logs. 1 when unlinked. */
+  linked_quantity?: number;
+  linked_variant_water_ml?: number | string | null;
+  linked_food_name?: string | null;
+  linked_variant_serving_size?: number | string | null;
+  linked_variant_serving_unit?: string | null;
+  linked_meal_type_name?: string | null;
+  is_quick_add?: boolean;
+  sort_order?: number;
 }
 
 export interface FamilyAccess {
@@ -50,6 +63,7 @@ export interface FamilyAccess {
     can_manage_checkin: boolean; // Added can_manage_checkin
     can_view_reports: boolean; // Added can_view_reports
     can_manage_medications: boolean; // Added can_manage_medications
+    can_manage_symptoms: boolean;
     share_external_providers: boolean;
   };
   access_end_date: string | null;

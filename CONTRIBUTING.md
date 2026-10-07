@@ -22,6 +22,7 @@ Every PR must include:
   - **Zod Validation**: New endpoints must include Zod schemas for request/response validation
   - **Endpoint Tests**: New endpoints must include automated tests
 - **Translations**: If applicable, only update the English (`en`) translation file. Translations should have hardcoded fall back directly in the code Non-English translation files are maintained in a separate repository linked with Webplate. https://github.com/CodeWithCJ/SparkyFitnessTranslations
+  - This covers the mobile app too, which has four translated surfaces: the runtime catalog, the Expo permission metadata, and the Android and iOS widget resources. Each is a separate Weblate component; edit only its `en` source.
 - **Architecture**: Follow the existing project standards
 - **Database Security**: Any new user-specific tables must be added to Row Level Security (RLS) in `SparkyFitnessServer/db/rls_policies.sql`.
 - **Code Integrity**: You certify that your contribution contains no malicious code (phishing, malware, etc.)
@@ -30,7 +31,7 @@ Every PR must include:
 ### 3. Workflow
 
 1. Fork the repo and create a branch.
-2. Commit your changes.
+2. Commit your changes using [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:`, …). Release versions are derived from them: `feat:` bumps the minor version, `fix:` the patch, and `feat!:` or a `BREAKING CHANGE:` footer the major.
 3. Submit a PR with the required screenshots and test confirmation.
 
 ### 4. Automated PR Validation

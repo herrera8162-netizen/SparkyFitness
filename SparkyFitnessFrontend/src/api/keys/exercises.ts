@@ -18,17 +18,37 @@ export const exerciseKeys = {
   details: () => [...exerciseKeys.all, 'detail'] as const,
   detail: (id: string) => [...exerciseKeys.details(), id] as const,
   impact: (id: string) => [...exerciseKeys.detail(id), 'impact'] as const,
+  alternatives: (id: string, mode: string, excludeIds: readonly string[]) =>
+    [
+      ...exerciseKeys.all,
+      'alternatives',
+      id,
+      mode,
+      [...excludeIds].sort().join(','),
+    ] as const,
+};
+
+export const workoutCoachingKeys = {
+  all: ['workoutCoaching'] as const,
+  settings: () => [...workoutCoachingKeys.all, 'settings'] as const,
+  feedback: (presetEntryId: string) =>
+    [...workoutCoachingKeys.all, 'feedback', presetEntryId] as const,
+  /** Adaptive suggestions; feedback saves invalidate this prefix. */
+  suggestions: () => [...workoutCoachingKeys.all, 'suggestions'] as const,
 };
 
 export const presetKeys = {
   all: ['workoutPresets'] as const,
   lists: () => [...presetKeys.all, 'list'] as const,
-  list: (page: number, limit: number) =>
-    [...presetKeys.lists(), { page, limit }] as const,
+  /**
+   * Key for one page of workout presets. It is scoped to the signed-in user so
+   * a cached page can never be handed back after the session switches account,
+   * matching the shape of `presetKeys.search` below.
+   */
+  list: (userId: string | undefined, page: number, limit: number) =>
+    [...presetKeys.lists(), { userId, page, limit }] as const,
   details: () => [...presetKeys.all, 'detail'] as const,
   detail: (id: string) => [...presetKeys.details(), id] as const,
-  infinite: (userId?: string, limit: number = 10) =>
-    [...presetKeys.lists(), 'infinite', { userId, limit }] as const,
   search: (searchTerm: string, userId?: string, limit: number = 10) =>
     [...presetKeys.lists(), 'search', { searchTerm, userId, limit }] as const,
 };
@@ -92,6 +112,8 @@ export const exerciseEntryKeys = {
       date,
       ...(userId ? [{ userId }] : []),
     ] as const,
+  /** Autocomplete source for the workout gym / location field. */
+  locations: () => [...exerciseEntryKeys.all, 'locations'] as const,
   history: (exerciseId: string, limit?: number) =>
     [
       ...exerciseEntryKeys.all,
@@ -99,8 +121,6 @@ export const exerciseEntryKeys = {
       exerciseId,
       ...(limit ? [{ limit }] : []),
     ] as const,
-  historyV2: (userId?: string, pageSize: number = 20) =>
-    [...exerciseEntryKeys.all, 'historyV2', { userId, pageSize }] as const,
   progress: (
     exerciseId: string,
     startDate: string,
@@ -126,11 +146,6 @@ export const exerciseEntryKeys = {
     [...exerciseEntryKeys.all, 'dailyStats', date] as const,
   groupedSession: (presetEntryId: string) =>
     [...exerciseEntryKeys.all, 'groupedSession', presetEntryId] as const,
-};
-export const suggestedExercisesKeys = {
-  all: ['exercises', 'suggested'] as const,
-  byLimit: (limit: number) =>
-    [...suggestedExercisesKeys.all, { limit }] as const,
 };
 
 export const assetKeys = {

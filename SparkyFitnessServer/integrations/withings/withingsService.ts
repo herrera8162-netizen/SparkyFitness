@@ -4,42 +4,100 @@ import { encrypt, decrypt, ENCRYPTION_KEY } from '../../security/encryption.js';
 import { log } from '../../config/logging.js';
 import withingsDataProcessor from './withingsDataProcessor.js';
 import { logRawResponse } from '../../utils/diagnosticLogger.js';
-// Helper function to interpolate parameters into a SQL query for logging
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function interpolateQuery(sql: any, params: any) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return sql.replace(/\$([0-9]+)/g, (match: any, p1: any) => {
-    const index = parseInt(p1, 10) - 1;
-    if (params[index] === undefined) {
-      return match; // Return original placeholder if param is missing
-    }
-    // Handle different types for proper SQL representation
-    if (typeof params[index] === 'string') {
-      return `'${params[index].replace(/'/g, "''")}'`; // Escape single quotes
-    }
-    if (params[index] instanceof Date) {
-      return `'${params[index].toISOString()}'`;
-    }
-    return params[index];
-  });
-}
+import { claimOAuthState, persistOAuthState } from '../../utils/oauthState.js';
+import { describeError } from '../../utils/errors.js';
+import { withProviderTokenLock } from '../../models/externalProviderRepository.js';
+import type {
+  WithingsActivity,
+  WithingsHeartSeries,
+  WithingsMeasureGroup,
+  WithingsSleepSeries,
+  WithingsWorkout,
+} from '../../types/withings.js';
 const WITHINGS_API_BASE_URL = 'https://wbsapi.withings.net';
 const WITHINGS_ACCOUNT_BASE_URL = 'https://account.withings.com';
+interface WithingsTokenBody {
+  access_token: string;
+  refresh_token: string;
+  expires_in?: string | number;
+  scope?: string;
+  userid?: string | number;
+}
+
+interface WithingsTokenEnvelope {
+  status?: number | string;
+  error?: string;
+  body?: Partial<WithingsTokenBody>;
+}
+
+// A rejected response can still carry a live access_token (for example when only
+// the refresh_token is missing), so failures are described by status and error
+// alone. The raw payload must never reach the logs.
+function describeWithingsFailure(
+  data: WithingsTokenEnvelope | undefined
+): string {
+  const status = data?.status === undefined ? 'absent' : String(data.status);
+  return `status ${status}${data?.error ? `: ${data.error}` : ''}`;
+}
+
+// Withings wraps every response as { status, body } and only status 0 is success.
+// Their docs do not specify whether an error response omits `body` or sends an
+// empty one, so a truthy-body check alone is not a safe guard: check the status
+// and the token fields before anything is encrypted or persisted. encrypt()
+// returns nulls rather than throwing on a missing token, so an unguarded refresh
+// would overwrite the stored refresh token with NULL and disconnect the user.
+function parseWithingsTokenResponse(
+  data: WithingsTokenEnvelope | undefined,
+  context: string
+): WithingsTokenBody {
+  const failure = describeWithingsFailure(data);
+  if (data?.status !== undefined && Number(data.status) !== 0) {
+    log('error', `Withings ${context} error: ${failure}.`);
+    throw new Error(`Withings ${context} failed with ${failure}.`);
+  }
+  if (!data || !data.body) {
+    log(
+      'error',
+      `Withings ${context} error: invalid response structure (${failure}).`
+    );
+    throw new Error(`Invalid Withings API response structure (${context}).`);
+  }
+  const { access_token, refresh_token } = data.body;
+  if (!access_token || !refresh_token) {
+    log(
+      'error',
+      `Withings ${context} error: response contained no usable tokens (${failure}).`
+    );
+    throw new Error(
+      `Missing access_token or refresh_token in Withings ${context} response.`
+    );
+  }
+  return { ...data.body, access_token, refresh_token };
+}
+
+// Withings expects token requests as form-encoded POST bodies on the v2/oauth2 endpoint.
+async function requestWithingsToken(params: Record<string, string>) {
+  return axios.post(
+    `${WITHINGS_API_BASE_URL}/v2/oauth2`,
+    new URLSearchParams({ action: 'requesttoken', ...params }),
+    {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    }
+  );
+}
 // Function to construct the Withings authorization URL
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getAuthorizationUrl(userId: any) {
+async function getAuthorizationUrl(userId: string) {
   const client = await getSystemClient();
   try {
-    const result = await client.query(
-      `SELECT encrypted_app_id, app_id_iv, app_id_tag
-             FROM external_data_providers
-             WHERE user_id = $1 AND provider_type = 'withings'`,
-      [userId]
-    );
-    if (result.rows.length === 0) {
-      throw new Error('Withings client credentials not found for user.');
-    }
-    const { encrypted_app_id, app_id_iv, app_id_tag } = result.rows[0];
+    // Issuing the state and reading the client credentials is one statement, so
+    // the client_id in this URL always belongs to the row holding the nonce.
+    const { state, encrypted_app_id, app_id_iv, app_id_tag } =
+      await persistOAuthState(client, {
+        userId,
+        providerType: 'withings',
+      });
     const clientId = await decrypt(
       encrypted_app_id,
       app_id_iv,
@@ -47,37 +105,36 @@ async function getAuthorizationUrl(userId: any) {
       ENCRYPTION_KEY
     );
     const scope = 'user.info,user.metrics,user.activity,user.sleepevents'; // Define required scopes
-    const state = userId; // Use the userId as the state to identify the user on callback
-    // Store state in session or database to validate on callback
     return `${WITHINGS_ACCOUNT_BASE_URL}/oauth2_user/authorize2?response_type=code&client_id=${clientId}&scope=${scope}&redirect_uri=${process.env.SPARKY_FITNESS_FRONTEND_URL}/withings/callback&state=${state}`;
   } finally {
     client.release();
   }
 }
-// Function to exchange authorization code for access and refresh tokens
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function exchangeCodeForTokens(userId: any, code: any, redirectUri: any) {
+// Function to exchange authorization code for access and refresh tokens.
+// `userId` is deliberately absent from this signature: the owner is recovered
+// from the claimed state row, so no caller can name the row that gets written.
+async function exchangeCodeForTokens(
+  state: unknown,
+  code: string,
+  redirectUri: string,
+  actorUserId: string
+) {
   const client = await getSystemClient();
   try {
-    // Validate state parameter (implementation depends on where state is stored)
-    // For example, retrieve from session and compare
-    const providerResult = await client.query(
-      `SELECT encrypted_app_id, app_id_iv, app_id_tag, encrypted_app_key, app_key_iv, app_key_tag
-             FROM external_data_providers
-             WHERE user_id = $1 AND provider_type = 'withings'`,
-      [userId]
-    );
-    if (providerResult.rows.length === 0) {
-      throw new Error('Withings client credentials not found for user.');
-    }
     const {
+      id: providerRowId,
+      user_id: ownerUserId,
       encrypted_app_id,
       app_id_iv,
       app_id_tag,
       encrypted_app_key,
       app_key_iv,
       app_key_tag,
-    } = providerResult.rows[0];
+    } = await claimOAuthState(client, {
+      state,
+      providerType: 'withings',
+      actorUserId,
+    });
     const clientId = await decrypt(
       encrypted_app_id,
       app_id_iv,
@@ -90,40 +147,24 @@ async function exchangeCodeForTokens(userId: any, code: any, redirectUri: any) {
       app_key_tag,
       ENCRYPTION_KEY
     );
-    const response = await axios.post(
-      `${WITHINGS_API_BASE_URL}/v2/oauth2`,
-      null,
-      {
-        params: {
-          action: 'requesttoken',
-          grant_type: 'authorization_code',
-          client_id: clientId,
-          client_secret: clientSecret,
-          code: code,
-          redirect_uri: redirectUri,
-        },
-      }
-    );
-    if (!response.data || !response.data.body) {
-      log(
-        'error',
-        'Withings requesttoken error: Invalid response structure.',
-        JSON.stringify(response.data)
-      );
-      throw new Error('Invalid Withings API response structure.');
+    if (!clientId || !clientSecret) {
+      throw new Error('Withings client ID or client secret is missing.');
     }
+
+    const response = await requestWithingsToken({
+      grant_type: 'authorization_code',
+      client_id: clientId,
+      client_secret: clientSecret,
+      code: code,
+      redirect_uri: redirectUri,
+    });
     const { access_token, refresh_token, expires_in, scope, userid } =
-      response.data.body;
-    if (!access_token || !refresh_token) {
-      throw new Error(
-        'Missing access_token or refresh_token in Withings API response.'
-      );
-    }
+      parseWithingsTokenResponse(response.data, 'requesttoken');
     // Encrypt tokens
     const encryptedAccessToken = await encrypt(access_token, ENCRYPTION_KEY);
     const encryptedRefreshToken = await encrypt(refresh_token, ENCRYPTION_KEY);
     // Validate expires_in
-    let validExpiresIn = parseInt(expires_in, 10);
+    let validExpiresIn = parseInt(String(expires_in), 10);
     if (isNaN(validExpiresIn) || validExpiresIn <= 0) {
       log(
         'warn',
@@ -142,172 +183,146 @@ async function exchangeCodeForTokens(userId: any, code: any, redirectUri: any) {
       scope,
       new Date(Date.now() + validExpiresIn * 1000),
       userid,
-      userId,
+      providerRowId,
     ];
-    log(
-      'info',
-      'Attempting to update database with payload:',
-      JSON.stringify(
-        {
-          encrypted_access_token: encryptedAccessToken.encryptedText,
-          scope: scope,
-          expires_in: expires_in,
-          external_user_id: userid,
-          user_id: userId,
-        },
-        null,
-        2
-      )
-    );
     try {
+      // Keyed on the claimed row's primary key: `provider_type` carries no
+      // uniqueness constraint, so a user_id predicate could fan out across rows.
+      // `oauth_state = NULL` is redundant after the claim, but states the invariant.
       const updateQuery = `UPDATE external_data_providers
                 SET encrypted_access_token = $1, access_token_iv = $2, access_token_tag = $3,
                     encrypted_refresh_token = $4, refresh_token_iv = $5, refresh_token_tag = $6,
-                    scope = $7, token_expires_at = $8, external_user_id = $9, is_active = TRUE, updated_at = NOW()
-                WHERE user_id = $10 AND provider_type = 'withings'`;
-      log('info', `Executing SQL query: ${updateQuery}`);
-      log('info', `With payload: ${JSON.stringify(updatePayload)}`);
-      log(
-        'info',
-        `Interpolated SQL query: ${interpolateQuery(updateQuery, updatePayload)}`
-      );
+                    scope = $7, token_expires_at = $8, external_user_id = $9,
+                    oauth_state = NULL, is_active = TRUE, updated_at = NOW()
+                WHERE id = $10`;
       const dbResult = await client.query(updateQuery, updatePayload);
       log(
         'info',
-        `Database update result for user ${userId}: ${dbResult.rowCount} rows updated.`
+        `Database update result for user ${ownerUserId}: ${dbResult.rowCount} rows updated.`
       );
     } catch (dbError) {
       log(
         'error',
-        `FATAL: Database update failed for user ${userId}:`,
+        `FATAL: Database update failed for user ${ownerUserId}:`,
         dbError
       );
       throw dbError; // Re-throw to ensure the outer catch block handles it
     }
-    return { success: true, userId: userid };
+    return { success: true, userId: userid, ownerUserId };
   } catch (error) {
-    // @ts-expect-error TS(2571): Object is of type 'unknown'.
-    log('error', `Error exchanging Withings code for tokens: ${error.message}`);
+    log(
+      'error',
+      `Error exchanging Withings code for tokens: ${describeError(error)}`
+    );
     throw error;
   } finally {
     client.release();
   }
 }
 // Function to refresh an expired access token
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function refreshAccessToken(userId: any) {
+async function refreshAccessToken(userId: string) {
   const client = await getClient(userId);
   try {
-    const providerResult = await client.query(
-      `SELECT encrypted_app_id, app_id_iv, app_id_tag, encrypted_app_key, app_key_iv, app_key_tag,
+    return await withProviderTokenLock(client, async () => {
+      const providerResult = await client.query(
+        `SELECT encrypted_app_id, app_id_iv, app_id_tag, encrypted_app_key, app_key_iv, app_key_tag,
                     encrypted_refresh_token, refresh_token_iv, refresh_token_tag
              FROM external_data_providers
-             WHERE user_id = $1 AND provider_type = 'withings'`,
-      [userId]
-    );
-    if (providerResult.rows.length === 0) {
-      throw new Error(
-        'Withings client credentials or refresh token not found for user.'
+             WHERE user_id = $1 AND provider_type = 'withings'
+             FOR UPDATE`,
+        [userId]
       );
-    }
-    const {
-      encrypted_app_id,
-      app_id_iv,
-      app_id_tag,
-      encrypted_app_key,
-      app_key_iv,
-      app_key_tag,
-      encrypted_refresh_token,
-      refresh_token_iv,
-      refresh_token_tag,
-    } = providerResult.rows[0];
-    const clientId = await decrypt(
-      encrypted_app_id,
-      app_id_iv,
-      app_id_tag,
-      ENCRYPTION_KEY
-    );
-    const clientSecret = await decrypt(
-      encrypted_app_key,
-      app_key_iv,
-      app_key_tag,
-      ENCRYPTION_KEY
-    );
-    const refreshToken = await decrypt(
-      encrypted_refresh_token,
-      refresh_token_iv,
-      refresh_token_tag,
-      ENCRYPTION_KEY
-    );
-    const response = await axios.post(
-      `${WITHINGS_API_BASE_URL}/v2/oauth2`,
-      null,
-      {
-        params: {
-          action: 'requesttoken',
-          grant_type: 'refresh_token',
-          client_id: clientId,
-          client_secret: clientSecret,
-          refresh_token: refreshToken,
-        },
+      if (providerResult.rows.length === 0) {
+        throw new Error(
+          'Withings client credentials or refresh token not found for user.'
+        );
       }
-    );
-    if (!response.data || !response.data.body) {
-      log(
-        'error',
-        'Withings refresh access token error: Invalid response structure.',
-        JSON.stringify(response.data)
+      const {
+        encrypted_app_id,
+        app_id_iv,
+        app_id_tag,
+        encrypted_app_key,
+        app_key_iv,
+        app_key_tag,
+        encrypted_refresh_token,
+        refresh_token_iv,
+        refresh_token_tag,
+      } = providerResult.rows[0];
+      const clientId = await decrypt(
+        encrypted_app_id,
+        app_id_iv,
+        app_id_tag,
+        ENCRYPTION_KEY
       );
-      throw new Error(
-        'Invalid Withings API response structure during token refresh.'
+      const clientSecret = await decrypt(
+        encrypted_app_key,
+        app_key_iv,
+        app_key_tag,
+        ENCRYPTION_KEY
       );
-    }
-    const {
-      access_token,
-      refresh_token: newRefreshToken,
-      expires_in,
-      scope,
-    } = response.data.body;
-    // Validate expires_in
-    let validExpiresIn = parseInt(expires_in, 10);
-    if (isNaN(validExpiresIn) || validExpiresIn <= 0) {
-      log(
-        'warn',
-        `Invalid or missing expires_in value received from Withings API during refresh: ${expires_in}. Defaulting to 0.`
+      const refreshToken = await decrypt(
+        encrypted_refresh_token,
+        refresh_token_iv,
+        refresh_token_tag,
+        ENCRYPTION_KEY
       );
-      validExpiresIn = 0; // Force immediate expiration to trigger refresh
-    }
-    // Encrypt new tokens
-    const encryptedAccessToken = await encrypt(access_token, ENCRYPTION_KEY);
-    const encryptedNewRefreshToken = await encrypt(
-      newRefreshToken,
-      ENCRYPTION_KEY
-    );
-    // Update tokens in external_data_providers table
-    await client.query(
-      `UPDATE external_data_providers
+      if (!clientId || !clientSecret || !refreshToken) {
+        throw new Error(
+          'Withings client ID, client secret, or refresh token is missing.'
+        );
+      }
+      const response = await requestWithingsToken({
+        grant_type: 'refresh_token',
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+      });
+      const {
+        access_token,
+        refresh_token: newRefreshToken,
+        expires_in,
+        scope,
+      } = parseWithingsTokenResponse(response.data, 'token refresh');
+      // Validate expires_in
+      let validExpiresIn = parseInt(String(expires_in), 10);
+      if (isNaN(validExpiresIn) || validExpiresIn <= 0) {
+        log(
+          'warn',
+          `Invalid or missing expires_in value received from Withings API during refresh: ${expires_in}. Defaulting to 0.`
+        );
+        validExpiresIn = 0; // Force immediate expiration to trigger refresh
+      }
+      // Encrypt new tokens
+      const encryptedAccessToken = await encrypt(access_token, ENCRYPTION_KEY);
+      const encryptedNewRefreshToken = await encrypt(
+        newRefreshToken,
+        ENCRYPTION_KEY
+      );
+      // Update tokens in external_data_providers table
+      await client.query(
+        `UPDATE external_data_providers
              SET encrypted_access_token = $1, access_token_iv = $2, access_token_tag = $3,
                  encrypted_refresh_token = $4, refresh_token_iv = $5, refresh_token_tag = $6,
                  scope = $7, token_expires_at = $8, updated_at = NOW()
              WHERE user_id = $9 AND provider_type = 'withings'`,
-      [
-        encryptedAccessToken.encryptedText,
-        encryptedAccessToken.iv,
-        encryptedAccessToken.tag,
-        encryptedNewRefreshToken.encryptedText,
-        encryptedNewRefreshToken.iv,
-        encryptedNewRefreshToken.tag,
-        scope,
-        new Date(Date.now() + validExpiresIn * 1000),
-        userId,
-      ]
-    );
-    return access_token;
+        [
+          encryptedAccessToken.encryptedText,
+          encryptedAccessToken.iv,
+          encryptedAccessToken.tag,
+          encryptedNewRefreshToken.encryptedText,
+          encryptedNewRefreshToken.iv,
+          encryptedNewRefreshToken.tag,
+          scope,
+          new Date(Date.now() + validExpiresIn * 1000),
+          userId,
+        ]
+      );
+      return access_token;
+    });
   } catch (error) {
     log(
       'error',
-      // @ts-expect-error TS(2571): Object is of type 'unknown'.
-      `Error refreshing Withings access token for user ${userId}: ${error.message}`
+      `Error refreshing Withings access token for user ${userId}: ${describeError(error)}`
     );
     throw error;
   } finally {
@@ -315,8 +330,7 @@ async function refreshAccessToken(userId: any) {
   }
 }
 // Helper function to get a valid access token (refreshes if expired)
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getValidAccessToken(userId: any) {
+async function getValidAccessToken(userId: string) {
   const client = await getClient(userId);
   try {
     const providerResult = await client.query(
@@ -353,8 +367,11 @@ async function getValidAccessToken(userId: any) {
   }
 }
 // Function to fetch measures data (weight, blood pressure, etc.)
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fetchMeasuresData(userId: any, startDate: any, endDate: any) {
+async function fetchMeasuresData(
+  userId: string,
+  startDate: number,
+  endDate: number
+): Promise<WithingsMeasureGroup[]> {
   const accessToken = await getValidAccessToken(userId);
   const client = await getClient(userId);
   try {
@@ -363,8 +380,7 @@ async function fetchMeasuresData(userId: any, startDate: any, endDate: any) {
       [userId]
     );
     const withingsUserId = providerResult.rows[0].external_user_id;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let allGroups: any = [];
+    let allGroups: WithingsMeasureGroup[] = [];
     let offset = 0;
     let hasMore = true;
     while (hasMore) {
@@ -401,8 +417,7 @@ async function fetchMeasuresData(userId: any, startDate: any, endDate: any) {
   } catch (error) {
     log(
       'error',
-      // @ts-expect-error TS(2571): Object is of type 'unknown'.
-      `Error fetching Withings measures data for user ${userId}: ${error.message}`
+      `Error fetching Withings measures data for user ${userId}: ${describeError(error)}`
     );
     throw error;
   } finally {
@@ -410,14 +425,10 @@ async function fetchMeasuresData(userId: any, startDate: any, endDate: any) {
   }
 }
 async function fetchAndProcessMeasuresData(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  userId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  createdByUserId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  startDate: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  endDate: any
+  userId: string,
+  createdByUserId: string,
+  startDate: number,
+  endDate: number
 ) {
   const measuregrps = await fetchMeasuresData(userId, startDate, endDate);
   if (measuregrps && measuregrps.length > 0) {
@@ -430,8 +441,11 @@ async function fetchAndProcessMeasuresData(
   return measuregrps;
 }
 // Function to fetch heart data
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fetchHeartData(userId: any, startDate: any, endDate: any) {
+async function fetchHeartData(
+  userId: string,
+  startDate: number,
+  endDate: number
+): Promise<WithingsHeartSeries[]> {
   const accessToken = await getValidAccessToken(userId);
   const client = await getClient(userId);
   try {
@@ -440,8 +454,7 @@ async function fetchHeartData(userId: any, startDate: any, endDate: any) {
       [userId]
     );
     const withingsUserId = providerResult.rows[0].external_user_id;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let allSeries: any = [];
+    let allSeries: WithingsHeartSeries[] = [];
     let offset = 0;
     let hasMore = true;
     while (hasMore) {
@@ -481,8 +494,7 @@ async function fetchHeartData(userId: any, startDate: any, endDate: any) {
   } catch (error) {
     log(
       'error',
-      // @ts-expect-error TS(2571): Object is of type 'unknown'.
-      `Error fetching Withings heart data for user ${userId}: ${error.message}`
+      `Error fetching Withings heart data for user ${userId}: ${describeError(error)}`
     );
     throw error;
   } finally {
@@ -490,14 +502,10 @@ async function fetchHeartData(userId: any, startDate: any, endDate: any) {
   }
 }
 async function fetchAndProcessHeartData(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  userId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  createdByUserId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  startDate: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  endDate: any
+  userId: string,
+  createdByUserId: string,
+  startDate: number,
+  endDate: number
 ) {
   const heartSeries = await fetchHeartData(userId, startDate, endDate);
   if (heartSeries && heartSeries.length > 0) {
@@ -510,8 +518,11 @@ async function fetchAndProcessHeartData(
   return heartSeries;
 }
 // Function to fetch sleep data (high-frequency stages)
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function fetchSleepData(userId: any, startDate: any, endDate: any) {
+async function fetchSleepData(
+  userId: string,
+  startDate: number,
+  endDate: number
+): Promise<WithingsSleepSeries[]> {
   const accessToken = await getValidAccessToken(userId);
   const client = await getClient(userId);
   try {
@@ -520,8 +531,7 @@ async function fetchSleepData(userId: any, startDate: any, endDate: any) {
       [userId]
     );
     const withingsUserId = providerResult.rows[0].external_user_id;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let allSeries: any = [];
+    let allSeries: WithingsSleepSeries[] = [];
     let currentStart = startDate;
     const SECONDS_IN_DAY = 24 * 60 * 60;
     // Withings limit: only 24h of high-frequency data per call
@@ -558,8 +568,7 @@ async function fetchSleepData(userId: any, startDate: any, endDate: any) {
   } catch (error) {
     log(
       'error',
-      // @ts-expect-error TS(2571): Object is of type 'unknown'.
-      `Error fetching Withings sleep data for user ${userId}: ${error.message}`
+      `Error fetching Withings sleep data for user ${userId}: ${describeError(error)}`
     );
     throw error;
   } finally {
@@ -567,14 +576,10 @@ async function fetchSleepData(userId: any, startDate: any, endDate: any) {
   }
 }
 async function fetchAndProcessSleepData(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  userId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  createdByUserId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  startDate: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  endDate: any
+  userId: string,
+  createdByUserId: string,
+  startDate: number,
+  endDate: number
 ) {
   const sleepSeries = await fetchSleepData(userId, startDate, endDate);
   if (sleepSeries && sleepSeries.length > 0) {
@@ -589,13 +594,10 @@ async function fetchAndProcessSleepData(
 // Function to fetch sleep summary data (action=getsummary)
 
 async function fetchSleepSummaryData(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  userId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  startDateYMD: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  endDateYMD: any
-) {
+  userId: string,
+  startDateYMD: string,
+  endDateYMD: string
+): Promise<WithingsSleepSeries[]> {
   const accessToken = await getValidAccessToken(userId);
   const client = await getClient(userId);
   try {
@@ -604,8 +606,7 @@ async function fetchSleepSummaryData(
       [userId]
     );
     const withingsUserId = providerResult.rows[0].external_user_id;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let allSeries: any = [];
+    let allSeries: WithingsSleepSeries[] = [];
     let offset = 0;
     let hasMore = true;
     while (hasMore) {
@@ -647,8 +648,7 @@ async function fetchSleepSummaryData(
   } catch (error) {
     log(
       'error',
-      // @ts-expect-error TS(2571): Object is of type 'unknown'.
-      `Error fetching Withings sleep summary data for user ${userId}: ${error.message}`
+      `Error fetching Withings sleep summary data for user ${userId}: ${describeError(error)}`
     );
     throw error;
   } finally {
@@ -658,13 +658,10 @@ async function fetchSleepSummaryData(
 // Function to fetch daily activity data (steps, total calories, etc.)
 
 async function fetchActivityData(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  userId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  startDateYMD: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  endDateYMD: any
-) {
+  userId: string,
+  startDateYMD: string,
+  endDateYMD: string
+): Promise<WithingsActivity[]> {
   const accessToken = await getValidAccessToken(userId);
   const client = await getClient(userId);
   try {
@@ -673,8 +670,7 @@ async function fetchActivityData(
       [userId]
     );
     const withingsUserId = providerResult.rows[0].external_user_id;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let allActivities: any = [];
+    let allActivities: WithingsActivity[] = [];
     let offset = 0;
     let hasMore = true;
     while (hasMore) {
@@ -713,8 +709,7 @@ async function fetchActivityData(
   } catch (error) {
     log(
       'error',
-      // @ts-expect-error TS(2571): Object is of type 'unknown'.
-      `Error fetching Withings activity data for user ${userId}: ${error.message}`
+      `Error fetching Withings activity data for user ${userId}: ${describeError(error)}`
     );
     throw error;
   } finally {
@@ -724,13 +719,10 @@ async function fetchActivityData(
 // Function to fetch workout data
 
 async function fetchWorkoutsData(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  userId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  startDateYMD: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  endDateYMD: any
-) {
+  userId: string,
+  startDateYMD: string,
+  endDateYMD: string
+): Promise<WithingsWorkout[]> {
   const accessToken = await getValidAccessToken(userId);
   const client = await getClient(userId);
   try {
@@ -739,8 +731,7 @@ async function fetchWorkoutsData(
       [userId]
     );
     const withingsUserId = providerResult.rows[0].external_user_id;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let allSeries: any = [];
+    let allSeries: WithingsWorkout[] = [];
     let offset = 0;
     let hasMore = true;
     while (hasMore) {
@@ -782,8 +773,7 @@ async function fetchWorkoutsData(
   } catch (error) {
     log(
       'error',
-      // @ts-expect-error TS(2571): Object is of type 'unknown'.
-      `Error fetching Withings workout data for user ${userId}: ${error.message}`
+      `Error fetching Withings workout data for user ${userId}: ${describeError(error)}`
     );
     throw error;
   } finally {
@@ -791,14 +781,10 @@ async function fetchWorkoutsData(
   }
 }
 async function fetchAndProcessWorkoutsData(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  userId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  createdByUserId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  startDateYMD: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  endDateYMD: any
+  userId: string,
+  createdByUserId: string,
+  startDateYMD: string,
+  endDateYMD: string
 ) {
   const workouts = await fetchWorkoutsData(userId, startDateYMD, endDateYMD);
   if (workouts && workouts.length > 0) {
@@ -811,8 +797,7 @@ async function fetchAndProcessWorkoutsData(
   return workouts;
 }
 // Function to disconnect Withings account
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function disconnectWithings(userId: any) {
+async function disconnectWithings(userId: string) {
   const client = await getClient(userId);
   try {
     const providerResult = await client.query(
@@ -872,16 +857,14 @@ async function disconnectWithings(userId: any) {
   } catch (error) {
     log(
       'error',
-      // @ts-expect-error TS(2571): Object is of type 'unknown'.
-      `Error disconnecting Withings account for user ${userId}: ${error.message}`
+      `Error disconnecting Withings account for user ${userId}: ${describeError(error)}`
     );
     throw error;
   } finally {
     client.release();
   }
 }
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function getStatus(userId: any) {
+async function getStatus(userId: string) {
   const client = await getClient(userId);
   try {
     const result = await client.query(
@@ -906,8 +889,7 @@ async function getStatus(userId: any) {
   } catch (error) {
     log(
       'error',
-      // @ts-expect-error TS(2571): Object is of type 'unknown'.
-      `Error getting Withings status for user ${userId}: ${error.message}`
+      `Error getting Withings status for user ${userId}: ${describeError(error)}`
     );
     throw error;
   } finally {

@@ -4,6 +4,7 @@ import {
   ExerciseEntrySetResponse,
   ExerciseModality,
   PresetSessionResponse,
+  WorkoutFormat,
 } from '@workspace/shared';
 import { Exercise } from './exercises';
 
@@ -28,6 +29,9 @@ export interface WorkoutPresetExercise {
   category?: string;
   modality?: ExerciseModality | null; // Populated from backend join
   superset_group?: number | null;
+  /** Within-session per-set ramp, kg. Null = off. */
+  ramp_increment?: number | null;
+  workout_plan_assignment_id?: string | number | null;
 }
 
 export interface WorkoutPreset {
@@ -36,6 +40,8 @@ export interface WorkoutPreset {
   name: string;
   description?: string;
   is_public?: boolean;
+  workout_format?: WorkoutFormat;
+  time_cap_seconds?: number | null;
   created_at?: string;
   updated_at?: string;
   exercises: WorkoutPresetExercise[];
@@ -50,8 +56,11 @@ export interface PaginatedWorkoutPresets {
 
 export interface WorkoutPlanAssignment {
   id?: string;
-  template_id: string;
-  day_of_week: number;
+  template_id?: string;
+  day_of_week?: number | null;
+  session_index?: number | null;
+  session_name?: string | null;
+  sort_order?: number | null;
   workout_preset_id?: string;
   workout_preset_name?: string; // Populated from backend join
   exercise_id?: string;
@@ -71,9 +80,18 @@ export interface WorkoutPlanTemplate {
   start_date?: string;
   end_date?: string | null;
   is_active?: boolean;
+  schedule_type?: 'weekly' | 'sequential';
+  entry_mode?: 'prompt' | 'prefill';
   created_at?: string;
   updated_at?: string;
   assignments?: WorkoutPlanAssignment[];
+  next_assignment?: WorkoutPlanAssignment | null;
+  next_assignments?: WorkoutPlanAssignment[];
+  sequence_position?: {
+    current: number;
+    total: number;
+    session_name?: string | null;
+  } | null;
 }
 
 // New interface for exercises coming from presets, where sets, reps, and weight are guaranteed
@@ -92,18 +110,14 @@ export interface ExerciseToLog extends Exercise {
 
 // The combined type for an exercise block
 export type SortableExerciseItemData =
-  | WorkoutPresetExercise
-  | WorkoutPlanAssignment
-  | ExerciseEntryResponse;
+  WorkoutPresetExercise | WorkoutPlanAssignment | ExerciseEntryResponse;
 
 // The combined type for a single set
 export type SortableSetData =
-  | ExerciseEntrySetRequest
-  | ExerciseEntrySetResponse;
+  ExerciseEntrySetRequest | ExerciseEntrySetResponse;
 
 // The combined type for presets list (used for labels)
 export type PresetMetadata = WorkoutPreset | PresetSessionResponse;
 
 export type SetFieldKey =
-  | keyof ExerciseEntrySetResponse
-  | keyof ExerciseEntrySetRequest;
+  keyof ExerciseEntrySetResponse | keyof ExerciseEntrySetRequest;

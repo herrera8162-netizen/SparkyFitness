@@ -3,8 +3,6 @@ import { debug } from '@/utils/logging';
 import { getUserLoggingLevel } from '@/utils/userPreferences';
 import type { ActivityDetailsResponse } from '@/types/exercises';
 import {
-  ExerciseHistoryResponse,
-  exerciseHistoryResponseSchema,
   ExerciseSessionResponse,
   exerciseSessionResponseSchema,
   ExerciseEntryResponse,
@@ -21,6 +19,16 @@ import {
 import z from 'zod';
 import { parseJsonArray } from './exerciseService';
 
+/** The user's own previously logged workout locations, most recent first. */
+export const fetchWorkoutLocations = async (): Promise<string[]> => {
+  const data: unknown = await apiCall('/exercise-preset-entries/locations', {
+    method: 'GET',
+  });
+  return Array.isArray(data)
+    ? data.filter((value): value is string => typeof value === 'string')
+    : [];
+};
+
 export const fetchExerciseEntries = async (
   date: string,
   userId?: string
@@ -36,28 +44,6 @@ export const fetchExerciseEntries = async (
     }
   );
   return z.array(exerciseSessionResponseSchema).parse(response);
-};
-
-export const fetchExerciseEntryHistoryV2 = async (
-  page: number = 1,
-  pageSize: number = 20,
-  userId?: string
-): Promise<ExerciseHistoryResponse> => {
-  const params = new URLSearchParams({
-    page: page.toString(),
-    pageSize: pageSize.toString(),
-  });
-  if (userId) {
-    params.append('userId', userId);
-  }
-
-  const response = await apiCall(
-    `/v2/exercise-entries/history?${params.toString()}`,
-    {
-      method: 'GET',
-    }
-  );
-  return exerciseHistoryResponseSchema.parse(response);
 };
 
 export const createExerciseEntry = async (
@@ -101,20 +87,22 @@ export const createExerciseEntry = async (
 
 export const logWorkoutPreset = async (
   workoutPresetId: string | number,
-  entryDate: string
+  entryDate: string,
+  workoutPlanAssignmentId?: number | string | null
 ): Promise<void> => {
   return apiCall('/exercise-preset-entries', {
     method: 'POST',
     body: JSON.stringify({
-      workout_preset_id: workoutPresetId,
+      workout_preset_id: Number(workoutPresetId),
       entry_date: entryDate,
+      ...(workoutPlanAssignmentId != null ? { workoutPlanAssignmentId } : {}),
     }),
   });
 };
 
 export const createPresetSession = async (
   payload: CreatePresetSessionRequest
-): Promise<void> => {
+): Promise<PresetSessionResponse> => {
   return apiCall('/exercise-preset-entries', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -290,3 +278,10 @@ export const getActivityDetails = async (
     }
   );
 };
+export async function fetchExerciseProgressionStats(exerciseId: string) {
+  const response = await fetch(`/api/v2/exercises/${exerciseId}/stats`, {
+    credentials: 'include',
+  });
+  if (!response.ok) return null;
+  return response.json();
+}

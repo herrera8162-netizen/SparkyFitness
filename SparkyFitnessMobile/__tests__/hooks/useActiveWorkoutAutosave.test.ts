@@ -44,7 +44,9 @@ jest.mock('../../src/services/notifications', () => ({
   fireRestCompleteCue: jest.fn(),
 }));
 
-const mockUpdateWorkout = updateWorkout as jest.MockedFunction<typeof updateWorkout>;
+const mockUpdateWorkout = updateWorkout as jest.MockedFunction<
+  typeof updateWorkout
+>;
 const mockInvalidate = invalidateExerciseCache as jest.MockedFunction<
   typeof invalidateExerciseCache
 >;
@@ -182,7 +184,7 @@ describe('useActiveWorkoutAutosave', () => {
         exercises: { sets: { completed_at: string | null }[] }[];
       };
       expect(payload.exercises[0].sets[0].completed_at).toBe(
-        new Date(completedMs).toISOString(),
+        new Date(completedMs).toISOString()
       );
       expect(payload.exercises[0].sets[1].completed_at).toBeNull();
     });
@@ -225,6 +227,7 @@ describe('useActiveWorkoutAutosave', () => {
       expect(mockUpdateWorkout).toHaveBeenCalledTimes(1);
       expect(mockUpdateWorkout).toHaveBeenCalledWith('session-1', {
         name: 'Push Day',
+        location: null,
         exercises: expect.any(Array),
       });
     });
@@ -235,9 +238,12 @@ describe('useActiveWorkoutAutosave', () => {
       await advance(AUTOSAVE_DEBOUNCE_MS);
 
       expect(getStore().hasUnsavedChanges).toBe(false);
-      expect(mockSyncCache).toHaveBeenCalledWith(queryClient, expect.objectContaining({
-        id: 'session-1',
-      }));
+      expect(mockSyncCache).toHaveBeenCalledWith(
+        queryClient,
+        expect.objectContaining({
+          id: 'session-1',
+        })
+      );
       // Date-keyed caches are only invalidated at flush points.
       expect(mockInvalidate).not.toHaveBeenCalled();
     });
@@ -248,9 +254,10 @@ describe('useActiveWorkoutAutosave', () => {
 
       let resolveFirst!: (session: PresetSessionResponse) => void;
       mockUpdateWorkout.mockImplementationOnce(
-        () => new Promise((resolve) => {
-          resolveFirst = resolve;
-        }),
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          })
       );
 
       await advance(AUTOSAVE_DEBOUNCE_MS);
@@ -286,9 +293,10 @@ describe('useActiveWorkoutAutosave', () => {
 
       let resolveFirst!: (session: PresetSessionResponse) => void;
       mockUpdateWorkout.mockImplementationOnce(
-        () => new Promise((resolve) => {
-          resolveFirst = resolve;
-        }),
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          })
       );
       await advance(AUTOSAVE_DEBOUNCE_MS);
       const staleServerEcho = getStore().session!;
@@ -300,9 +308,10 @@ describe('useActiveWorkoutAutosave', () => {
 
       let resolveTrailing!: (session: PresetSessionResponse) => void;
       mockUpdateWorkout.mockImplementationOnce(
-        () => new Promise((resolve) => {
-          resolveTrailing = resolve;
-        }),
+        () =>
+          new Promise((resolve) => {
+            resolveTrailing = resolve;
+          })
       );
       await advance(AUTOSAVE_DEBOUNCE_MS);
       await act(async () => {
@@ -339,9 +348,10 @@ describe('useActiveWorkoutAutosave', () => {
 
       let resolveFirst!: (session: PresetSessionResponse) => void;
       mockUpdateWorkout.mockImplementationOnce(
-        () => new Promise((resolve) => {
-          resolveFirst = resolve;
-        }),
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          })
       );
       await advance(AUTOSAVE_DEBOUNCE_MS);
       expect(mockUpdateWorkout).toHaveBeenCalledTimes(1);
@@ -399,7 +409,7 @@ describe('useActiveWorkoutAutosave', () => {
           'session source: sparky',
           'status: unknown',
           'server response: network down',
-        ],
+        ]
       );
     });
 
@@ -456,7 +466,7 @@ describe('useActiveWorkoutAutosave', () => {
           'session source: sparky',
           'status: 409',
           `server response: ${body}`,
-        ],
+        ]
       );
     });
 
@@ -495,7 +505,7 @@ describe('useActiveWorkoutAutosave', () => {
           'session source: Workout Plan',
           'status: unknown',
           'server response: network down',
-        ],
+        ]
       );
     });
   });
@@ -588,7 +598,9 @@ describe('useActiveWorkoutAutosave', () => {
 
   describe('saveActiveWorkoutSession', () => {
     it("returns 'clean' when there is nothing to save", async () => {
-      await expect(saveActiveWorkoutSession(queryClient)).resolves.toBe('clean');
+      await expect(saveActiveWorkoutSession(queryClient)).resolves.toBe(
+        'clean'
+      );
       expect(mockUpdateWorkout).not.toHaveBeenCalled();
     });
 
@@ -601,12 +613,51 @@ describe('useActiveWorkoutAutosave', () => {
         hasUnsavedChanges: true,
       });
 
-      await expect(saveActiveWorkoutSession(queryClient)).resolves.toBe('clean');
+      await expect(saveActiveWorkoutSession(queryClient)).resolves.toBe(
+        'clean'
+      );
       expect(mockUpdateWorkout).not.toHaveBeenCalled();
       expect(mockAddLog).toHaveBeenCalledWith(
         'Active workout autosave skipped: session has no exercises',
-        'WARNING',
+        'WARNING'
       );
+    });
+
+    it('never overlaps two saves, even from different callers', async () => {
+      startAndEdit(80);
+      let resolveFirst!: (session: PresetSessionResponse) => void;
+      mockUpdateWorkout.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          })
+      );
+
+      // e.g. the autosave hook and the watch bridge's per-set flush.
+      const first = saveActiveWorkoutSession(queryClient);
+      const second = saveActiveWorkoutSession(queryClient);
+      await act(async () => {
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      expect(mockUpdateWorkout).toHaveBeenCalledTimes(1);
+      const echo = getStore().session!;
+
+      // An edit lands while the first request is in flight.
+      act(() => {
+        getStore().updateSetField('101', { weight: 90 });
+      });
+
+      await act(async () => {
+        resolveFirst(echo);
+        await jest.advanceTimersByTimeAsync(0);
+      });
+      await expect(first).resolves.toBe('saved');
+      await expect(second).resolves.toBe('saved');
+
+      // The queued save ran after the first response and sent the fresh state.
+      expect(mockUpdateWorkout).toHaveBeenCalledTimes(2);
+      const sent = mockUpdateWorkout.mock.calls[1]![1].exercises![0]!;
+      expect(sent.sets![0]!.weight).toBe(90);
     });
 
     it('captures the revision and entry-id order at send time and hands them to applyServerSession', async () => {
@@ -620,7 +671,7 @@ describe('useActiveWorkoutAutosave', () => {
         expect(spy).toHaveBeenCalledWith(
           expect.objectContaining({ id: 'session-1' }),
           revisionAtSend,
-          ['ex-uuid-1'],
+          ['ex-uuid-1']
         );
       } finally {
         useActiveWorkoutStore.setState({ applyServerSession: original });
@@ -631,7 +682,9 @@ describe('useActiveWorkoutAutosave', () => {
   describe('flushActiveWorkoutBeforeClear', () => {
     it('saves, invalidates the entry date, and resolves true', async () => {
       startAndEdit();
-      await expect(flushActiveWorkoutBeforeClear(queryClient)).resolves.toBe(true);
+      await expect(flushActiveWorkoutBeforeClear(queryClient)).resolves.toBe(
+        true
+      );
       expect(mockUpdateWorkout).toHaveBeenCalledTimes(1);
       expect(mockInvalidate).toHaveBeenCalledWith(queryClient, '2026-03-20');
     });
@@ -639,7 +692,9 @@ describe('useActiveWorkoutAutosave', () => {
     it('resolves false on failure without invalidating', async () => {
       mockUpdateWorkout.mockRejectedValue(new Error('network down'));
       startAndEdit();
-      await expect(flushActiveWorkoutBeforeClear(queryClient)).resolves.toBe(false);
+      await expect(flushActiveWorkoutBeforeClear(queryClient)).resolves.toBe(
+        false
+      );
       expect(mockInvalidate).not.toHaveBeenCalled();
       expect(getStore().hasUnsavedChanges).toBe(true);
     });

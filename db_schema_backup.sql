@@ -137,6 +137,34 @@ $$;
 
 
 --
+-- Name: cleanup_openfoodfacts_queue_on_opt_out(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.cleanup_openfoodfacts_queue_on_opt_out() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  DELETE FROM public.openfoodfacts_sync_queue WHERE user_id = NEW.user_id;
+  RETURN NULL;
+END;
+$$;
+
+
+--
+-- Name: cleanup_openfoodfacts_queue_on_preference_delete(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.cleanup_openfoodfacts_queue_on_preference_delete() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  DELETE FROM public.openfoodfacts_sync_queue WHERE user_id = OLD.user_id;
+  RETURN NULL;
+END;
+$$;
+
+
+--
 -- Name: clear_old_chat_history(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -249,6 +277,13 @@ BEGIN
     user_id, provider_name, provider_type, is_active, is_public, created_at, updated_at
   ) VALUES (
     p_admin_user_id, 'Swiss Food Database', 'swissfood', TRUE, TRUE, now(), now()
+  ) ON CONFLICT (user_id, provider_name) DO UPDATE SET is_public = TRUE;
+
+  -- Canadian Nutrient File
+  INSERT INTO public.external_data_providers (
+    user_id, provider_name, provider_type, is_active, is_public, created_at, updated_at
+  ) VALUES (
+    p_admin_user_id, 'Canadian Nutrient File', 'canadian-nutrient-file', TRUE, TRUE, now(), now()
   ) ON CONFLICT (user_id, provider_name) DO UPDATE SET is_public = TRUE;
 END;
 $$;
@@ -402,6 +437,28 @@ $$;
 
 
 --
+-- Name: create_symptom_policy(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.create_symptom_policy(table_name text) RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  EXECUTE format('DROP POLICY IF EXISTS select_policy ON public.%I;', table_name);
+  EXECUTE format('DROP POLICY IF EXISTS modify_policy ON public.%I;', table_name);
+
+  EXECUTE format('
+    CREATE POLICY select_policy ON public.%I FOR SELECT TO PUBLIC
+    USING (has_symptom_read_access(user_id));
+    CREATE POLICY modify_policy ON public.%I FOR ALL TO PUBLIC
+    USING (has_symptom_access(user_id))
+    WITH CHECK (has_symptom_access(user_id));
+  ', table_name, table_name);
+END;
+$$;
+
+
+--
 -- Name: create_user_centric_policy(text); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -444,6 +501,42 @@ CREATE FUNCTION public.current_user_id() RETURNS uuid
     LANGUAGE sql STABLE
     AS $$
   SELECT NULLIF(current_setting('app.user_id', true), '')::uuid;
+$$;
+
+
+--
+-- Name: eligible_openfoodfacts_foods(uuid[], uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.eligible_openfoodfacts_foods(target_food_ids uuid[] DEFAULT NULL::uuid[], target_user_id uuid DEFAULT NULL::uuid) RETURNS TABLE(food_id uuid, user_id uuid)
+    LANGUAGE sql STABLE
+    AS $$
+  SELECT food.id, food.user_id
+    FROM public.foods food
+    JOIN public.user_preferences preferences
+      ON preferences.user_id = food.user_id
+     AND preferences.auto_contribute_openfoodfacts = TRUE
+    JOIN public.global_settings settings
+      ON settings.id = 1
+     AND settings.allow_openfoodfacts_contributions = TRUE
+   WHERE food.user_id IS NOT NULL
+     AND (target_food_ids IS NULL OR food.id = ANY(target_food_ids))
+     AND (target_user_id IS NULL OR food.user_id = target_user_id)
+     AND food.is_custom IS TRUE
+     AND (food.provider_type IS NULL OR LOWER(BTRIM(food.provider_type)) = 'custom')
+     AND NULLIF(BTRIM(food.name), '') IS NOT NULL
+     AND public.normalize_openfoodfacts_gtin(food.barcode) IS NOT NULL
+     AND EXISTS (
+       SELECT 1
+         FROM public.food_variants variant
+        WHERE variant.food_id = food.id
+          AND variant.is_default IS TRUE
+          AND variant.serving_size > 0
+          AND LOWER(BTRIM(variant.serving_unit)) IN (
+            'g', 'kg', 'mg', 'oz', 'lb', 'lbs',
+            'ml', 'l', 'liter', 'liters', 'cup', 'cups', 'tbsp', 'tsp'
+          )
+     );
 $$;
 
 
@@ -605,7 +698,8 @@ CREATE FUNCTION public.has_any_meaningful_permission(perms jsonb) RETURNS boolea
     (perms->>'can_manage_diary')::boolean = true OR
     (perms->>'can_manage_checkin')::boolean = true OR
     (perms->>'can_view_reports')::boolean = true OR
-    (perms->>'can_manage_medications')::boolean = true
+    (perms->>'can_manage_medications')::boolean = true OR
+    (perms->>'can_manage_symptoms')::boolean = true
   );
 $$;
 
@@ -800,6 +894,45 @@ $$;
 
 
 --
+-- Name: has_symptom_access(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.has_symptom_access(owner_uuid uuid) RETURNS boolean
+    LANGUAGE sql STABLE
+    AS $$
+  SELECT authenticated_user_id() = owner_uuid OR EXISTS (
+    SELECT 1 FROM public.family_access fa
+    WHERE fa.owner_user_id = owner_uuid
+    AND fa.family_user_id = authenticated_user_id()
+    AND fa.is_active = true
+    AND (fa.access_end_date IS NULL OR fa.access_end_date > now())
+    AND (fa.access_permissions->>'can_manage_symptoms')::boolean = true
+  );
+$$;
+
+
+--
+-- Name: has_symptom_read_access(uuid); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.has_symptom_read_access(owner_uuid uuid) RETURNS boolean
+    LANGUAGE sql STABLE
+    AS $$
+  SELECT authenticated_user_id() = owner_uuid OR EXISTS (
+    SELECT 1 FROM public.family_access fa
+    WHERE fa.owner_user_id = owner_uuid
+    AND fa.family_user_id = authenticated_user_id()
+    AND fa.is_active = true
+    AND (fa.access_end_date IS NULL OR fa.access_end_date > now())
+    AND (
+      (fa.access_permissions->>'can_manage_symptoms')::boolean = true OR
+      (fa.access_permissions->>'can_view_reports')::boolean = true
+    )
+  );
+$$;
+
+
+--
 -- Name: is_admin(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -900,6 +1033,218 @@ $$;
 
 
 --
+-- Name: normalize_openfoodfacts_gtin(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.normalize_openfoodfacts_gtin(raw_code text) RETURNS text
+    LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE
+    AS $_$
+DECLARE
+  normalized TEXT := BTRIM(raw_code);
+  weighted_sum INTEGER;
+  expected_check_digit INTEGER;
+BEGIN
+  IF normalized !~ '^[0-9]+$'
+     OR normalized ~ '^0+$'
+     OR CHAR_LENGTH(normalized) NOT IN (8, 9, 10, 11, 12, 13, 14) THEN
+    RETURN NULL;
+  END IF;
+
+  IF CHAR_LENGTH(normalized) BETWEEN 9 AND 12 THEN
+    normalized := LPAD(normalized, 13, '0');
+  ELSIF CHAR_LENGTH(normalized) = 14 AND LEFT(normalized, 1) = '0' THEN
+    normalized := SUBSTRING(normalized FROM 2);
+  END IF;
+
+  IF LEFT(normalized, 1) = '2'
+     OR (CHAR_LENGTH(normalized) = 13 AND LEFT(normalized, 2) = '02') THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT COALESCE(
+           SUM(
+             SUBSTRING(normalized FROM position FOR 1)::INTEGER *
+             CASE
+               WHEN (CHAR_LENGTH(normalized) - position) % 2 = 1 THEN 3
+               ELSE 1
+             END
+           ),
+           0
+         )
+    INTO weighted_sum
+    FROM GENERATE_SERIES(1, CHAR_LENGTH(normalized) - 1) AS position;
+
+  expected_check_digit := (10 - (weighted_sum % 10)) % 10;
+  IF expected_check_digit <> RIGHT(normalized, 1)::INTEGER THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN normalized;
+END;
+$_$;
+
+
+--
+-- Name: queue_openfoodfacts_food_updates(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.queue_openfoodfacts_food_updates() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  changed_food_ids UUID[];
+BEGIN
+  SELECT ARRAY_AGG(changed.id)
+    INTO changed_food_ids
+    FROM (
+      SELECT new_food.id
+        FROM new_foods new_food
+        JOIN old_foods old_food ON old_food.id = new_food.id
+       WHERE old_food.user_id IS DISTINCT FROM new_food.user_id
+          OR old_food.name IS DISTINCT FROM new_food.name
+          OR old_food.brand IS DISTINCT FROM new_food.brand
+          OR old_food.barcode IS DISTINCT FROM new_food.barcode
+          OR old_food.is_custom IS DISTINCT FROM new_food.is_custom
+          OR old_food.provider_type IS DISTINCT FROM new_food.provider_type
+    ) changed;
+
+  PERFORM public.refresh_openfoodfacts_sync_queue(changed_food_ids);
+  RETURN NULL;
+END;
+$$;
+
+
+--
+-- Name: queue_openfoodfacts_variant_deletes(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.queue_openfoodfacts_variant_deletes() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  changed_food_ids UUID[];
+BEGIN
+  SELECT ARRAY_AGG(DISTINCT variant.food_id)
+    INTO changed_food_ids
+    FROM old_variants variant
+   WHERE variant.is_default IS TRUE;
+
+  PERFORM public.refresh_openfoodfacts_sync_queue(changed_food_ids);
+  RETURN NULL;
+END;
+$$;
+
+
+--
+-- Name: queue_openfoodfacts_variant_inserts(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.queue_openfoodfacts_variant_inserts() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  changed_food_ids UUID[];
+BEGIN
+  SELECT ARRAY_AGG(DISTINCT variant.food_id)
+    INTO changed_food_ids
+    FROM new_variants variant
+   WHERE variant.is_default IS TRUE;
+
+  PERFORM public.refresh_openfoodfacts_sync_queue(changed_food_ids);
+  RETURN NULL;
+END;
+$$;
+
+
+--
+-- Name: queue_openfoodfacts_variant_updates(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.queue_openfoodfacts_variant_updates() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  changed_food_ids UUID[];
+BEGIN
+  SELECT ARRAY_AGG(DISTINCT changed.food_id)
+    INTO changed_food_ids
+    FROM (
+      SELECT old_variant.food_id
+        FROM old_variants old_variant
+        JOIN new_variants new_variant ON new_variant.id = old_variant.id
+       WHERE (old_variant.is_default IS TRUE OR new_variant.is_default IS TRUE)
+         AND (
+           old_variant.food_id IS DISTINCT FROM new_variant.food_id OR
+           old_variant.serving_size IS DISTINCT FROM new_variant.serving_size OR
+           old_variant.serving_unit IS DISTINCT FROM new_variant.serving_unit OR
+           old_variant.calories IS DISTINCT FROM new_variant.calories OR
+           old_variant.protein IS DISTINCT FROM new_variant.protein OR
+           old_variant.carbs IS DISTINCT FROM new_variant.carbs OR
+           old_variant.fat IS DISTINCT FROM new_variant.fat OR
+           old_variant.saturated_fat IS DISTINCT FROM new_variant.saturated_fat OR
+           old_variant.trans_fat IS DISTINCT FROM new_variant.trans_fat OR
+           old_variant.cholesterol IS DISTINCT FROM new_variant.cholesterol OR
+           old_variant.sodium IS DISTINCT FROM new_variant.sodium OR
+           old_variant.potassium IS DISTINCT FROM new_variant.potassium OR
+           old_variant.dietary_fiber IS DISTINCT FROM new_variant.dietary_fiber OR
+           old_variant.sugars IS DISTINCT FROM new_variant.sugars OR
+           old_variant.vitamin_a IS DISTINCT FROM new_variant.vitamin_a OR
+           old_variant.vitamin_c IS DISTINCT FROM new_variant.vitamin_c OR
+           old_variant.calcium IS DISTINCT FROM new_variant.calcium OR
+           old_variant.iron IS DISTINCT FROM new_variant.iron OR
+           old_variant.is_default IS DISTINCT FROM new_variant.is_default
+         )
+      UNION
+      SELECT new_variant.food_id
+        FROM old_variants old_variant
+        JOIN new_variants new_variant ON new_variant.id = old_variant.id
+       WHERE (old_variant.is_default IS TRUE OR new_variant.is_default IS TRUE)
+         AND old_variant.food_id IS DISTINCT FROM new_variant.food_id
+    ) changed;
+
+  PERFORM public.refresh_openfoodfacts_sync_queue(changed_food_ids);
+  RETURN NULL;
+END;
+$$;
+
+
+--
+-- Name: refresh_openfoodfacts_sync_queue(uuid[]); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.refresh_openfoodfacts_sync_queue(changed_food_ids uuid[]) RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF COALESCE(CARDINALITY(changed_food_ids), 0) = 0 THEN
+    RETURN;
+  END IF;
+
+  DELETE FROM public.openfoodfacts_sync_queue queue
+   WHERE queue.food_id = ANY(changed_food_ids)
+     AND NOT EXISTS (
+       SELECT 1
+         FROM public.eligible_openfoodfacts_foods(changed_food_ids, NULL) eligible
+        WHERE eligible.food_id = queue.food_id
+     );
+
+  INSERT INTO public.openfoodfacts_sync_queue (food_id, user_id)
+  SELECT eligible.food_id, eligible.user_id
+    FROM public.eligible_openfoodfacts_foods(changed_food_ids, NULL) eligible
+  ON CONFLICT (food_id) DO UPDATE
+  SET user_id = EXCLUDED.user_id,
+      revision = nextval('public.openfoodfacts_sync_revision_seq'),
+      status = 'pending',
+      attempt_count = 0,
+      next_attempt_at = NOW(),
+      lease_expires_at = NULL,
+      last_error = NULL,
+      updated_at = NOW();
+END;
+$$;
+
+
+--
 -- Name: seed_global_providers_for_first_admin(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -955,6 +1300,53 @@ $$;
 
 
 --
+-- Name: set_openfoodfacts_backfill_on_global_enable(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.set_openfoodfacts_backfill_on_global_enable() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  UPDATE public.user_preferences
+     SET openfoodfacts_backfill_pending = TRUE,
+         updated_at = NOW()
+   WHERE auto_contribute_openfoodfacts IS TRUE;
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: set_openfoodfacts_backfill_on_preference_insert(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.set_openfoodfacts_backfill_on_preference_insert() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  NEW.openfoodfacts_backfill_pending := NEW.auto_contribute_openfoodfacts;
+  RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: set_openfoodfacts_backfill_on_preference_update(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.set_openfoodfacts_backfill_on_preference_update() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF OLD.auto_contribute_openfoodfacts IS DISTINCT FROM NEW.auto_contribute_openfoodfacts THEN
+    NEW.openfoodfacts_backfill_pending := NEW.auto_contribute_openfoodfacts;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+
+--
 -- Name: set_updated_at_timestamp(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -997,6 +1389,37 @@ SELECT CASE
     ELSE NULL
 END;
 $_$;
+
+
+--
+-- Name: sf_volume_unit_to_ml(text); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.sf_volume_unit_to_ml(unit text) RETURNS numeric
+    LANGUAGE sql IMMUTABLE
+    AS $$
+SELECT CASE lower(btrim(coalesce(unit, '')))
+    WHEN 'ml'     THEN 1
+    WHEN 'l'      THEN 1000
+    WHEN 'liter'  THEN 1000
+    WHEN 'liters' THEN 1000
+    WHEN 'cup'    THEN 236.588
+    WHEN 'cups'   THEN 236.588
+    WHEN 'tbsp'   THEN 14.7868
+    WHEN 'tsp'    THEN 4.92892
+    WHEN 'fl oz'  THEN 29.5735
+    WHEN 'floz'   THEN 29.5735
+    WHEN 'fl_oz'  THEN 29.5735
+    ELSE NULL          -- 'oz' is a WEIGHT ounce in the food vocabulary
+END::numeric;
+$$;
+
+
+--
+-- Name: FUNCTION sf_volume_unit_to_ml(unit text); Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON FUNCTION public.sf_volume_unit_to_ml(unit text) IS 'Food serving unit -> millilitres, NULL for non-volume units. Returns NULL for ''oz'' by design: in the food vocabulary oz is a weight ounce. The water-container vocabulary is separate and treats oz as fluid.';
 
 
 --
@@ -1121,7 +1544,7 @@ COMMENT ON TABLE public.account IS 'Better Auth account table - stores credentia
 
 CREATE TABLE public.admin_activity_logs (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
-    admin_user_id uuid NOT NULL,
+    admin_user_id uuid,
     target_user_id uuid,
     action_type character varying(255) NOT NULL,
     details jsonb,
@@ -1264,8 +1687,17 @@ CREATE TABLE public.check_in_measurements (
     updated_by_user_id uuid,
     muscle_mass_kg numeric(5,2),
     bone_mass_kg numeric(5,2),
-    body_water_percentage numeric(5,2)
+    body_water_percentage numeric(5,2),
+    bmr numeric(6,1),
+    CONSTRAINT check_in_measurements_bmr_check CHECK (((bmr IS NULL) OR ((bmr >= (600)::numeric) AND (bmr <= (6000)::numeric))))
 );
+
+
+--
+-- Name: COLUMN check_in_measurements.bmr; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.check_in_measurements.bmr IS 'Basal Metabolic Rate (BMR) in kcal, measured from smart weight scale or synced from health provider. Applies only to its own entry_date; days without a reading fall back to the user''s BMR formula.';
 
 
 --
@@ -1469,7 +1901,8 @@ CREATE TABLE public.daily_health_metrics (
     body_battery_highest integer,
     body_battery_lowest integer,
     created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now()
+    updated_at timestamp with time zone DEFAULT now(),
+    total_calories_captured_at timestamp with time zone
 );
 
 
@@ -1540,7 +1973,7 @@ COMMENT ON COLUMN public.day_classification_cache.day_of_week IS '0=Sun, 1=Mon, 
 CREATE TABLE public.exercise_entries (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     user_id uuid NOT NULL,
-    exercise_id uuid NOT NULL,
+    exercise_id uuid,
     duration_minutes numeric NOT NULL,
     calories_burned numeric NOT NULL,
     entry_date date DEFAULT CURRENT_DATE,
@@ -1613,7 +2046,10 @@ CREATE TABLE public.exercise_entries (
     weather_humidity_percentage numeric(5,2),
     gear_name text,
     gear_external_id text,
-    CONSTRAINT exercise_entries_modality_check CHECK ((modality = ANY (ARRAY['weight_reps'::text, 'reps_only'::text, 'duration'::text, 'duration_distance'::text])))
+    watch_telemetry_observed_at timestamp with time zone,
+    watch_duration_minutes numeric,
+    record_timezone text,
+    CONSTRAINT exercise_entries_modality_check CHECK ((modality = ANY (ARRAY['weight_reps'::text, 'reps_only'::text, 'bodyweight_reps'::text, 'weight_duration'::text, 'weight_distance'::text, 'duration'::text, 'duration_distance'::text])))
 );
 
 
@@ -1636,6 +2072,13 @@ COMMENT ON COLUMN public.exercise_entries.superset_group IS 'Client-assigned sup
 --
 
 COMMENT ON COLUMN public.exercise_entries.entry_time IS 'Optional wall-clock local start time of the exercise session (no timezone). NULL = not recorded.';
+
+
+--
+-- Name: COLUMN exercise_entries.record_timezone; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.exercise_entries.record_timezone IS 'IANA timezone entry_time is expressed in (e.g. America/New_York). NULL when unknown; read paths fall back to the profile timezone.';
 
 
 --
@@ -1716,7 +2159,9 @@ CREATE TABLE public.exercise_entry_laps (
     elevation_gain_meters numeric(7,2),
     elevation_loss_meters numeric(7,2),
     created_at timestamp with time zone DEFAULT now(),
-    updated_at timestamp with time zone DEFAULT now()
+    updated_at timestamp with time zone DEFAULT now(),
+    moving_time_seconds integer,
+    avg_moving_speed_mps numeric(6,2)
 );
 
 
@@ -1739,7 +2184,8 @@ CREATE TABLE public.exercise_entry_sets (
     rpe numeric(3,1),
     completed_at timestamp with time zone,
     is_pr boolean DEFAULT false NOT NULL,
-    distance numeric
+    distance numeric,
+    rir numeric(3,1)
 );
 
 
@@ -1762,6 +2208,13 @@ COMMENT ON COLUMN public.exercise_entry_sets.completed_at IS 'Client-recorded mo
 --
 
 COMMENT ON COLUMN public.exercise_entry_sets.is_pr IS 'Whether this set was a personal record (heavier than the prior best weight, or more reps at the top weight) when checked off during a live workout. Warmup sets never earn PRs.';
+
+
+--
+-- Name: COLUMN exercise_entry_sets.rir; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.exercise_entry_sets.rir IS 'Reps In Reserve (0-10 scale)';
 
 
 --
@@ -1799,8 +2252,25 @@ CREATE TABLE public.exercise_preset_entries (
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
     created_by_user_id uuid,
     notes text,
-    source text DEFAULT 'manual'::text NOT NULL
+    source text DEFAULT 'manual'::text NOT NULL,
+    location character varying(255),
+    workout_format character varying(20) DEFAULT 'standard'::character varying NOT NULL,
+    CONSTRAINT chk_exercise_preset_entries_format CHECK (((workout_format)::text = ANY ((ARRAY['standard'::character varying, 'interval'::character varying, 'tabata'::character varying, 'amrap'::character varying, 'emom'::character varying, 'for_time'::character varying])::text[])))
 );
+
+
+--
+-- Name: COLUMN exercise_preset_entries.location; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.exercise_preset_entries.location IS 'Optional location or gym name for the workout session';
+
+
+--
+-- Name: COLUMN exercise_preset_entries.workout_format; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.exercise_preset_entries.workout_format IS 'Workout format of the source preset at the time the session was logged; not updated when the preset is edited or deleted';
 
 
 --
@@ -1831,7 +2301,7 @@ CREATE TABLE public.exercises (
     images text,
     is_quick_exercise boolean DEFAULT false,
     modality text DEFAULT 'weight_reps'::text NOT NULL,
-    CONSTRAINT exercises_modality_check CHECK ((modality = ANY (ARRAY['weight_reps'::text, 'reps_only'::text, 'duration'::text, 'duration_distance'::text])))
+    CONSTRAINT exercises_modality_check CHECK ((modality = ANY (ARRAY['weight_reps'::text, 'reps_only'::text, 'bodyweight_reps'::text, 'weight_duration'::text, 'weight_distance'::text, 'duration'::text, 'duration_distance'::text])))
 );
 
 
@@ -1872,7 +2342,8 @@ CREATE TABLE public.external_data_providers (
     sync_frequency text DEFAULT 'manual'::text,
     oauth_state text,
     sort_order integer,
-    is_public boolean DEFAULT false NOT NULL
+    is_public boolean DEFAULT false NOT NULL,
+    sync_started_at timestamp with time zone
 );
 
 
@@ -1994,7 +2465,11 @@ CREATE TABLE public.food_entries (
     source_id character varying(255),
     entry_time time without time zone,
     images jsonb DEFAULT '[]'::jsonb NOT NULL,
-    CONSTRAINT chk_food_or_meal_id CHECK ((((food_id IS NOT NULL) AND (meal_id IS NULL)) OR ((food_id IS NULL) AND (meal_id IS NOT NULL)))),
+    notes text,
+    caffeine_mg numeric,
+    water_ml numeric,
+    alcohol_g numeric,
+    CONSTRAINT chk_food_or_meal_id CHECK (((food_id IS NULL) OR (meal_id IS NULL))),
     CONSTRAINT food_entries_images_is_array CHECK ((jsonb_typeof(images) = 'array'::text)),
     CONSTRAINT food_entries_serving_size_positive CHECK ((serving_size > (0)::numeric))
 );
@@ -2022,6 +2497,34 @@ COMMENT ON COLUMN public.food_entries.entry_time IS 'Optional wall-clock local t
 
 
 --
+-- Name: COLUMN food_entries.notes; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.food_entries.notes IS 'Per-occurrence markdown note for a single diary entry. Never derived from foods.notes.';
+
+
+--
+-- Name: COLUMN food_entries.caffeine_mg; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.food_entries.caffeine_mg IS 'Log-time snapshot of the variant''s caffeine_mg. NULL on rows predating this column.';
+
+
+--
+-- Name: COLUMN food_entries.water_ml; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.food_entries.water_ml IS 'Log-time snapshot of the variant''s water_ml. NULL on rows predating this column.';
+
+
+--
+-- Name: COLUMN food_entries.alcohol_g; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.food_entries.alcohol_g IS 'Log-time snapshot of the variant''s alcohol_g. NULL on rows predating this column.';
+
+
+--
 -- Name: food_entry_meals; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2042,6 +2545,9 @@ CREATE TABLE public.food_entry_meals (
     legacy_serving_unit_math boolean DEFAULT false NOT NULL,
     entry_time time without time zone,
     images jsonb DEFAULT '[]'::jsonb NOT NULL,
+    notes text,
+    entry_total_servings numeric,
+    CONSTRAINT food_entry_meals_entry_total_servings_positive CHECK (((entry_total_servings IS NULL) OR (entry_total_servings > (0)::numeric))),
     CONSTRAINT food_entry_meals_images_is_array CHECK ((jsonb_typeof(images) = 'array'::text))
 );
 
@@ -2072,6 +2578,20 @@ COMMENT ON COLUMN public.food_entry_meals.legacy_serving_unit_math IS 'TRUE for 
 --
 
 COMMENT ON COLUMN public.food_entry_meals.entry_time IS 'Optional wall-clock local time of day the logged meal was eaten (no timezone). NULL = not recorded.';
+
+
+--
+-- Name: COLUMN food_entry_meals.notes; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.food_entry_meals.notes IS 'Per-occurrence markdown note for a single logged meal. Never derived from meals.notes.';
+
+
+--
+-- Name: COLUMN food_entry_meals.entry_total_servings; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.food_entry_meals.entry_total_servings IS 'Snapshotted total dish yield of the meal in its unit when logged. NULL falls back to the live meal template.';
 
 
 --
@@ -2123,11 +2643,44 @@ CREATE TABLE public.food_variants (
     ai_confidence text,
     allergens text[],
     traces text[],
+    caffeine_mg numeric DEFAULT 0,
+    water_ml numeric DEFAULT 0,
+    alcohol_g numeric DEFAULT 0,
+    abv_percent numeric,
+    CONSTRAINT food_variants_abv_percent_range CHECK (((abv_percent IS NULL) OR ((abv_percent >= (0)::numeric) AND (abv_percent <= (100)::numeric)))),
     CONSTRAINT food_variants_ai_confidence_check CHECK (((ai_confidence = ANY (ARRAY['high'::text, 'medium'::text, 'low'::text])) OR (ai_confidence IS NULL))),
     CONSTRAINT food_variants_glycemic_index_check CHECK ((glycemic_index = ANY (ARRAY['None'::text, 'Very Low'::text, 'Low'::text, 'Medium'::text, 'High'::text, 'Very High'::text]))),
     CONSTRAINT food_variants_serving_size_positive CHECK ((serving_size > (0)::numeric)),
     CONSTRAINT food_variants_source_check CHECK ((source = ANY (ARRAY['manual'::text, 'ai_estimate'::text, 'imported'::text])))
 );
+
+
+--
+-- Name: COLUMN food_variants.caffeine_mg; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.food_variants.caffeine_mg IS 'Caffeine in milligrams per serving_size of this variant. First-class column rather than a custom nutrient so it can be trended, goal-tracked, and imported from providers by alias (see shared/src/nutrients/micronutrientCatalog.ts, fixedField: caffeine_mg).';
+
+
+--
+-- Name: COLUMN food_variants.water_ml; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.food_variants.water_ml IS 'Water content in millilitres per serving_size of this variant. 0/NULL means "unknown"; readers then fall back to the logged volume when the entry''s unit is a volume unit (see public.sf_volume_unit_to_ml). NOTE: ''oz'' in the food unit vocabulary is a WEIGHT ounce and is NOT a volume fallback; ''fl oz'' is.';
+
+
+--
+-- Name: COLUMN food_variants.alcohol_g; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.food_variants.alcohol_g IS 'Grams of pure ethanol per serving_size. INFORMATIONAL ONLY -- never converted to calories; the calories column already includes them. Standard-drink counts are derived from user_preferences.standard_drink_grams, never stored.';
+
+
+--
+-- Name: COLUMN food_variants.abv_percent; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.food_variants.abv_percent IS 'Alcohol by volume, 0-100. Derivation metadata for alcohol_g (grams = volume_ml * abv/100 * 0.789), not a nutrient. NOTE: OpenFoodFacts'' alcohol_100g field is ABV and maps HERE, not to alcohol_g. USDA nutrient 1018 is grams/100 g and maps to alcohol_g.';
 
 
 --
@@ -2149,9 +2702,16 @@ CREATE TABLE public.foods (
     is_quick_food boolean DEFAULT false NOT NULL,
     provider_verified boolean DEFAULT false NOT NULL,
     images jsonb DEFAULT '[]'::jsonb NOT NULL,
-    is_cooked boolean DEFAULT false NOT NULL,
+    notes text,
     CONSTRAINT foods_images_is_array CHECK ((jsonb_typeof(images) = 'array'::text))
 );
+
+
+--
+-- Name: COLUMN foods.notes; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.foods.notes IS 'Owner-authored markdown reference note for this food (e.g. how it is ordered or prepared).';
 
 
 --
@@ -2166,8 +2726,22 @@ CREATE TABLE public.global_settings (
     mfa_mandatory boolean DEFAULT false,
     allow_user_ai_config boolean DEFAULT true NOT NULL,
     default_vision_ai_service_id uuid,
+    allow_openfoodfacts_contributions boolean DEFAULT false NOT NULL,
+    allow_private_network_ai boolean DEFAULT false NOT NULL,
+    allow_private_network_food_providers boolean DEFAULT false NOT NULL,
+    public_api_docs boolean DEFAULT false NOT NULL,
+    dev_tools_enabled boolean DEFAULT false NOT NULL,
+    mock_data_enabled boolean DEFAULT false NOT NULL,
+    enable_passkey_login boolean DEFAULT true NOT NULL,
     CONSTRAINT single_row_check CHECK ((id = 1))
 );
+
+
+--
+-- Name: COLUMN global_settings.allow_openfoodfacts_contributions; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.global_settings.allow_openfoodfacts_contributions IS 'Server-wide gate for Open Food Facts contributions. Each single-food upload requires owner confirmation.';
 
 
 --
@@ -2208,7 +2782,9 @@ CREATE TABLE public.goal_presets (
     dinner_percentage numeric,
     snacks_percentage numeric,
     custom_nutrients jsonb DEFAULT '{}'::jsonb,
-    custom_meal_percentages jsonb DEFAULT '{}'::jsonb
+    custom_meal_percentages jsonb DEFAULT '{}'::jsonb,
+    caffeine_mg numeric,
+    alcohol_g numeric
 );
 
 
@@ -2245,7 +2821,7 @@ CREATE TABLE public.health_metric_samples (
     samples jsonb DEFAULT '[]'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
-    CONSTRAINT chk_health_metric_samples_metric CHECK ((metric = ANY (ARRAY['heart_rate'::text, 'hrv'::text, 'respiration'::text, 'spo2'::text, 'stress'::text, 'body_battery'::text])))
+    CONSTRAINT chk_health_metric_samples_metric CHECK ((metric = ANY (ARRAY['heart_rate'::text, 'hrv'::text, 'respiration'::text, 'spo2'::text, 'stress'::text, 'body_battery'::text, 'skin_temperature'::text])))
 );
 
 
@@ -2306,8 +2882,32 @@ CREATE TABLE public.meal_foods (
     custom_nutrients jsonb,
     child_meal_id uuid,
     item_type character varying(50) DEFAULT 'food'::character varying NOT NULL,
+    caffeine_mg numeric,
+    water_ml numeric,
+    alcohol_g numeric,
     CONSTRAINT chk_meal_foods_item_type CHECK (((((item_type)::text = 'food'::text) AND (food_id IS NOT NULL) AND (child_meal_id IS NULL)) OR (((item_type)::text = 'meal'::text) AND (food_id IS NULL))))
 );
+
+
+--
+-- Name: COLUMN meal_foods.caffeine_mg; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.meal_foods.caffeine_mg IS 'Log-time snapshot of the variant''s caffeine_mg. NULL on rows predating this column.';
+
+
+--
+-- Name: COLUMN meal_foods.water_ml; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.meal_foods.water_ml IS 'Log-time snapshot of the variant''s water_ml. NULL on rows predating this column.';
+
+
+--
+-- Name: COLUMN meal_foods.alcohol_g; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.meal_foods.alcohol_g IS 'Log-time snapshot of the variant''s alcohol_g. NULL on rows predating this column.';
 
 
 --
@@ -2409,6 +3009,7 @@ CREATE TABLE public.meals (
     serving_unit text DEFAULT 'serving'::text NOT NULL,
     total_servings numeric DEFAULT 1.0 NOT NULL,
     images jsonb DEFAULT '[]'::jsonb NOT NULL,
+    notes text,
     CONSTRAINT meals_images_is_array CHECK ((jsonb_typeof(images) = 'array'::text))
 );
 
@@ -2432,6 +3033,13 @@ COMMENT ON COLUMN public.meals.serving_unit IS 'Unit of measurement for the serv
 --
 
 COMMENT ON COLUMN public.meals.total_servings IS 'How many servings the recipe yields. Full recipe quantity = serving_size × total_servings.';
+
+
+--
+-- Name: COLUMN meals.notes; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.meals.notes IS 'Owner-authored markdown reference note for this meal (e.g. a recipe).';
 
 
 --
@@ -2736,6 +3344,69 @@ CREATE TABLE public.onboarding_status (
 
 
 --
+-- Name: openfoodfacts_product_read_rate_limit; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.openfoodfacts_product_read_rate_limit (
+    id smallint DEFAULT 1 NOT NULL,
+    next_product_read_at timestamp with time zone DEFAULT '1970-01-01 00:00:00+00'::timestamp with time zone CONSTRAINT openfoodfacts_product_read_rate_l_next_product_read_at_not_null NOT NULL,
+    reservation_token uuid,
+    reservation_expires_at timestamp with time zone,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT openfoodfacts_product_read_rate_limit_reservation_check CHECK (((reservation_token IS NULL) = (reservation_expires_at IS NULL))),
+    CONSTRAINT openfoodfacts_product_read_rate_limit_singleton_check CHECK ((id = 1))
+);
+
+
+--
+-- Name: TABLE openfoodfacts_product_read_rate_limit; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.openfoodfacts_product_read_rate_limit IS 'System-only singleton leasing and spacing all Open Food Facts Product Opener product reads across server instances.';
+
+
+--
+-- Name: openfoodfacts_sync_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.openfoodfacts_sync_revision_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: openfoodfacts_sync_queue; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.openfoodfacts_sync_queue (
+    food_id uuid NOT NULL,
+    user_id uuid NOT NULL,
+    revision bigint DEFAULT nextval('public.openfoodfacts_sync_revision_seq'::regclass) NOT NULL,
+    status text DEFAULT 'pending'::text NOT NULL,
+    attempt_count integer DEFAULT 0 NOT NULL,
+    next_attempt_at timestamp with time zone DEFAULT now() NOT NULL,
+    lease_expires_at timestamp with time zone,
+    last_error text,
+    last_succeeded_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT openfoodfacts_sync_queue_attempt_count_check CHECK ((attempt_count >= 0)),
+    CONSTRAINT openfoodfacts_sync_queue_revision_check CHECK ((revision > 0)),
+    CONSTRAINT openfoodfacts_sync_queue_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'processing'::text, 'failed'::text, 'succeeded'::text])))
+);
+
+
+--
+-- Name: TABLE openfoodfacts_sync_queue; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.openfoodfacts_sync_queue IS 'Durable, revision-safe state and history for automatic Open Food Facts product contributions.';
+
+
+--
 -- Name: passkey; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2943,6 +3614,18 @@ COMMENT ON COLUMN public.profiles.social_jetlag_hours IS 'Calculated Social Jetl
 
 
 --
+-- Name: rate_limit; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.rate_limit (
+    id uuid NOT NULL,
+    key text NOT NULL,
+    count integer NOT NULL,
+    last_request bigint NOT NULL
+);
+
+
+--
 -- Name: session; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2954,7 +3637,8 @@ CREATE TABLE public.session (
     updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     ip_address text,
     user_agent text,
-    user_id uuid NOT NULL
+    user_id uuid NOT NULL,
+    impersonated_by uuid
 );
 
 
@@ -3105,7 +3789,7 @@ CREATE TABLE public.sso_provider (
     id uuid DEFAULT gen_random_uuid() NOT NULL,
     provider_id text NOT NULL,
     issuer text NOT NULL,
-    client_id text NOT NULL,
+    client_id text,
     client_secret text,
     discovery_endpoint text,
     authorization_endpoint text,
@@ -3117,7 +3801,10 @@ CREATE TABLE public.sso_provider (
     domain text DEFAULT 'default.internal'::text NOT NULL,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    oidc_config jsonb
+    oidc_config jsonb,
+    saml_config text,
+    user_id uuid,
+    organization_id text
 );
 
 
@@ -3141,6 +3828,69 @@ CREATE TABLE public.symptom_entries (
     source character varying(50) DEFAULT 'manual'::character varying NOT NULL,
     custom_fields jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    started_at timestamp with time zone,
+    ended_at timestamp with time zone,
+    body_locations text[] DEFAULT '{}'::text[] NOT NULL,
+    qualities text[] DEFAULT '{}'::text[] NOT NULL,
+    associated_symptoms text[] DEFAULT '{}'::text[] NOT NULL,
+    triggers text[] DEFAULT '{}'::text[] NOT NULL,
+    phases jsonb DEFAULT '{}'::jsonb NOT NULL,
+    impact character varying(20),
+    peak_severity numeric,
+    severity_timeline jsonb DEFAULT '[]'::jsonb NOT NULL,
+    CONSTRAINT symptom_entries_episode_order_check CHECK (((ended_at IS NULL) OR (started_at IS NULL) OR (ended_at >= started_at))),
+    CONSTRAINT symptom_entries_impact_check CHECK (((impact IS NULL) OR ((impact)::text = ANY ((ARRAY['none'::character varying, 'mild'::character varying, 'moderate'::character varying, 'severe'::character varying])::text[]))))
+);
+
+
+--
+-- Name: symptom_entry_photos; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.symptom_entry_photos (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    symptom_entry_id uuid NOT NULL,
+    file_path text NOT NULL,
+    caption text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: symptom_entry_treatments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.symptom_entry_treatments (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    symptom_entry_id uuid NOT NULL,
+    kind character varying(20) DEFAULT 'relief'::character varying NOT NULL,
+    medication_id uuid,
+    medication_entry_id uuid,
+    name_snapshot text NOT NULL,
+    dose_snapshot text,
+    taken_at timestamp with time zone,
+    effectiveness character varying(10),
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT symptom_entry_treatments_effectiveness_check CHECK (((effectiveness IS NULL) OR ((effectiveness)::text = ANY ((ARRAY['none'::character varying, 'partial'::character varying, 'full'::character varying])::text[])))),
+    CONSTRAINT symptom_entry_treatments_kind_check CHECK (((kind)::text = ANY ((ARRAY['medication'::character varying, 'relief'::character varying])::text[])))
+);
+
+
+--
+-- Name: symptom_free_days; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.symptom_free_days (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    entry_date date NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
@@ -3155,7 +3905,10 @@ CREATE TABLE public.two_factor (
     secret text,
     backup_codes text,
     created_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
-    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL
+    updated_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    verified boolean DEFAULT true NOT NULL,
+    failed_verification_count integer DEFAULT 0 NOT NULL,
+    locked_until timestamp with time zone
 );
 
 
@@ -3243,19 +3996,6 @@ CREATE TABLE public.user_custom_nutrients (
 
 
 --
--- Name: user_custom_symptom_locations; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.user_custom_symptom_locations (
-    id uuid DEFAULT gen_random_uuid() NOT NULL,
-    user_id uuid NOT NULL,
-    name text NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
-
---
 -- Name: user_custom_symptoms; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3268,7 +4008,17 @@ CREATE TABLE public.user_custom_symptoms (
     unit character varying(20),
     is_glp1_flagged boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    category character varying(30) DEFAULT 'general'::character varying NOT NULL,
+    template character varying(30) DEFAULT 'generic'::character varying NOT NULL,
+    sections jsonb DEFAULT '{}'::jsonb NOT NULL,
+    custom_field_defs jsonb DEFAULT '[]'::jsonb NOT NULL,
+    is_episodic boolean DEFAULT false NOT NULL,
+    color character varying(20),
+    icon character varying(40),
+    is_pinned boolean DEFAULT false NOT NULL,
+    sort_order integer DEFAULT 0 NOT NULL,
+    is_archived boolean DEFAULT false NOT NULL
 );
 
 
@@ -3300,6 +4050,57 @@ CREATE TABLE public.user_dashboard_layouts (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
+
+
+--
+-- Name: user_fasting_preferences; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_fasting_preferences (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    auto_calculate boolean DEFAULT false NOT NULL,
+    default_protocol text DEFAULT '16-8'::text NOT NULL,
+    target_fasting_hours numeric(4,1) DEFAULT 16.0 NOT NULL,
+    target_eating_hours numeric(4,1) DEFAULT 8.0 NOT NULL,
+    calorie_threshold integer DEFAULT 10 NOT NULL,
+    pre_end_alert_minutes integer DEFAULT 30 NOT NULL,
+    eating_window_alert boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT user_fasting_preferences_calorie_threshold_check CHECK (((calorie_threshold >= 0) AND (calorie_threshold <= 500))),
+    CONSTRAINT user_fasting_preferences_eating_hours_check CHECK (((target_eating_hours >= (0)::numeric) AND (target_eating_hours <= (24)::numeric))),
+    CONSTRAINT user_fasting_preferences_fasting_hours_check CHECK (((target_fasting_hours > (0)::numeric) AND (target_fasting_hours <= (168)::numeric))),
+    CONSTRAINT user_fasting_preferences_pre_end_alert_check CHECK (((pre_end_alert_minutes >= 0) AND (pre_end_alert_minutes <= 180)))
+);
+
+
+--
+-- Name: TABLE user_fasting_preferences; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.user_fasting_preferences IS 'Per-user preferences for intermittent fasting targets, auto-calculation from food entries, and notification timing.';
+
+
+--
+-- Name: COLUMN user_fasting_preferences.auto_calculate; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_fasting_preferences.auto_calculate IS 'Whether fasting windows and current fasting status are automatically calculated from food entries.';
+
+
+--
+-- Name: COLUMN user_fasting_preferences.calorie_threshold; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_fasting_preferences.calorie_threshold IS 'Minimum calories in a food entry required to break a fast (ignoring plain water, black coffee, etc.).';
+
+
+--
+-- Name: COLUMN user_fasting_preferences.pre_end_alert_minutes; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_fasting_preferences.pre_end_alert_minutes IS 'Advance warning notification in minutes before the target fasting goal is reached.';
 
 
 --
@@ -3340,8 +4141,24 @@ CREATE TABLE public.user_goals (
     snacks_percentage numeric,
     water_goal_ml numeric(10,3),
     custom_nutrients jsonb DEFAULT '{}'::jsonb,
-    custom_meal_percentages jsonb DEFAULT '{}'::jsonb
+    custom_meal_percentages jsonb DEFAULT '{}'::jsonb,
+    caffeine_mg numeric,
+    alcohol_g numeric
 );
+
+
+--
+-- Name: COLUMN user_goals.caffeine_mg; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_goals.caffeine_mg IS 'Daily caffeine ceiling in mg. NULL means "use the default" (400, FDA: not generally associated with dangerous effects in healthy adults). Direction defaults to "maximum" via shared BUILTIN_MAXIMUM_GOAL_NUTRIENTS.';
+
+
+--
+-- Name: COLUMN user_goals.alcohol_g; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_goals.alcohol_g IS 'Daily ethanol ceiling in grams. NULL means "use the default" (28 g = 2 US standard drinks, the higher of the two sex-specific US Dietary Guidelines figures -- a default that scolds is worse than one the user raises). Displayed as standard drinks via user_preferences.standard_drink_grams.';
 
 
 --
@@ -3541,16 +4358,30 @@ CREATE TABLE public.user_preferences (
     active_vision_ai_service_id uuid,
     added_sugar_algorithm text DEFAULT 'WHO_IDEAL'::text NOT NULL,
     time_format text DEFAULT 'h:mm A'::text NOT NULL,
+    food_search_all_providers_default boolean DEFAULT false NOT NULL,
     calorie_safety_floor_mode text DEFAULT 'standard'::text NOT NULL,
     calorie_safety_floor_value integer DEFAULT 1200 NOT NULL,
-    soda_display_unit character varying(50) DEFAULT 'ml'::character varying,
-    auto_tag_entry_time boolean DEFAULT true,
+    auto_contribute_openfoodfacts boolean DEFAULT false NOT NULL,
+    openfoodfacts_backfill_pending boolean DEFAULT false NOT NULL,
+    openfoodfacts_product_language text DEFAULT 'en'::text NOT NULL,
+    chart_scale_mode text DEFAULT 'time'::text NOT NULL,
+    add_food_water_to_intake boolean DEFAULT false NOT NULL,
+    standard_drink_grams numeric(5,2) DEFAULT 14.00 NOT NULL,
+    weekly_alcohol_limit_g numeric(7,2),
+    caffeine_half_life_hours numeric(3,1) DEFAULT 5.0 NOT NULL,
+    target_bedtime time without time zone DEFAULT '22:30:00'::time without time zone NOT NULL,
+    adaptive_workout_suggestions boolean DEFAULT true NOT NULL,
     CONSTRAINT check_energy_unit CHECK (((energy_unit)::text = ANY ((ARRAY['kcal'::character varying, 'kJ'::character varying])::text[]))),
     CONSTRAINT logging_level_check CHECK ((logging_level = ANY (ARRAY['DEBUG'::text, 'INFO'::text, 'WARN'::text, 'ERROR'::text, 'SILENT'::text]))),
+    CONSTRAINT user_preferences_caffeine_half_life_range CHECK (((caffeine_half_life_hours >= 2.0) AND (caffeine_half_life_hours <= 8.0))),
     CONSTRAINT user_preferences_calorie_safety_floor_mode_check CHECK ((calorie_safety_floor_mode = ANY (ARRAY['standard'::text, 'custom'::text, 'disabled'::text]))),
     CONSTRAINT user_preferences_calorie_safety_floor_value_check CHECK (((calorie_safety_floor_value >= 800) AND (calorie_safety_floor_value <= 5000))),
+    CONSTRAINT user_preferences_chart_scale_mode_check CHECK ((chart_scale_mode = ANY (ARRAY['time'::text, 'point'::text]))),
+    CONSTRAINT user_preferences_openfoodfacts_product_language_check CHECK ((openfoodfacts_product_language ~ '^[a-z]{2}$'::text)),
+    CONSTRAINT user_preferences_standard_drink_grams_range CHECK (((standard_drink_grams > (0)::numeric) AND (standard_drink_grams <= (50)::numeric))),
     CONSTRAINT user_preferences_time_format_check CHECK ((time_format = ANY (ARRAY['HH:mm'::text, 'h:mm A'::text, 'h:mm a'::text]))),
-    CONSTRAINT user_preferences_timezone_not_empty CHECK (((timezone IS NULL) OR (timezone <> ''::text)))
+    CONSTRAINT user_preferences_timezone_not_empty CHECK (((timezone IS NULL) OR (timezone <> ''::text))),
+    CONSTRAINT user_preferences_weekly_alcohol_limit_positive CHECK (((weekly_alcohol_limit_g IS NULL) OR (weekly_alcohol_limit_g > (0)::numeric)))
 );
 
 
@@ -3590,6 +4421,93 @@ COMMENT ON COLUMN public.user_preferences.calorie_safety_floor_value IS 'Custom 
 
 
 --
+-- Name: COLUMN user_preferences.auto_contribute_openfoodfacts; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_preferences.auto_contribute_openfoodfacts IS 'Dormant food-owner preference for a future automatic Open Food Facts contribution release.';
+
+
+--
+-- Name: COLUMN user_preferences.openfoodfacts_backfill_pending; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_preferences.openfoodfacts_backfill_pending IS 'Dormant internal cursor flag for a future bounded automatic catalog backfill.';
+
+
+--
+-- Name: COLUMN user_preferences.openfoodfacts_product_language; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_preferences.openfoodfacts_product_language IS 'Two-letter language code printed on the product packaging and used for Open Food Facts product names.';
+
+
+--
+-- Name: COLUMN user_preferences.chart_scale_mode; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_preferences.chart_scale_mode IS 'Date-axis layout for report charts: time (continuous, gaps preserved) or point (categorical, entries evenly spaced).';
+
+
+--
+-- Name: COLUMN user_preferences.add_food_water_to_intake; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_preferences.add_food_water_to_intake IS 'When true, water_ml on logged food entries (explicit column, or the volume fallback via sf_volume_unit_to_ml) is folded into the daily water total alongside water_intake_entries. A food entry already represented by a linked water_intake_entries row (food_entry_id) is excluded, so nothing double-counts. Default false: opt-in only, so no existing user sees a change on upgrade.';
+
+
+--
+-- Name: COLUMN user_preferences.standard_drink_grams; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_preferences.standard_drink_grams IS 'Grams of ethanol in one standard drink for this user''s jurisdiction. US 14, UK 8 (one unit), AU/EU 10, CA 13.45, JP 20. Display divisor only.';
+
+
+--
+-- Name: COLUMN user_preferences.weekly_alcohol_limit_g; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_preferences.weekly_alcohol_limit_g IS 'Optional weekly ethanol ceiling in grams (NULL = none). Weekly because every published guideline is weekly (UK CMO: 14 units/week) and the daily goal system has no weekly concept. Rolled up from reportRepository.getDailyNutritionTotalsRange, not a stored aggregate.';
+
+
+--
+-- Name: COLUMN user_preferences.caffeine_half_life_hours; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_preferences.caffeine_half_life_hours IS 'Elimination half-life used for the "active caffeine" estimate, 2-8 h, default 5. Population estimate, not a measurement.';
+
+
+--
+-- Name: COLUMN user_preferences.target_bedtime; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_preferences.target_bedtime IS 'The user''s intended bedtime, local wall-clock. First consumer is the caffeine cutoff; deliberately generic so a future sleep-goal feature reuses it rather than adding a second bedtime.';
+
+
+--
+-- Name: COLUMN user_preferences.adaptive_workout_suggestions; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_preferences.adaptive_workout_suggestions IS 'When true, workout suggestions adapt to session feedback (difficulty, pain). When false, progression behaves exactly as before feedback existed.';
+
+
+--
+-- Name: user_symptom_options; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_symptom_options (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    kind character varying(30) NOT NULL,
+    name text NOT NULL,
+    sort_order integer DEFAULT 0 NOT NULL,
+    is_hidden boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT user_symptom_options_kind_check CHECK (((kind)::text = ANY ((ARRAY['location'::character varying, 'head_location'::character varying, 'quality'::character varying, 'associated'::character varying, 'trigger'::character varying, 'relief'::character varying])::text[])))
+);
+
+
+--
 -- Name: user_water_containers; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3602,8 +4520,58 @@ CREATE TABLE public.user_water_containers (
     is_primary boolean DEFAULT false,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    servings_per_container integer DEFAULT 1 NOT NULL
+    servings_per_container integer DEFAULT 1 NOT NULL,
+    hydration_factor numeric(4,3) DEFAULT 1.000 NOT NULL,
+    linked_food_id uuid,
+    linked_variant_id uuid,
+    linked_meal_type_id uuid,
+    linked_quantity numeric DEFAULT 1 NOT NULL,
+    is_quick_add boolean DEFAULT false NOT NULL,
+    sort_order integer DEFAULT 0 NOT NULL,
+    CONSTRAINT user_water_containers_hydration_factor_range CHECK (((hydration_factor >= (0)::numeric) AND (hydration_factor <= (2)::numeric)))
 );
+
+
+--
+-- Name: COLUMN user_water_containers.volume; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_water_containers.volume IS 'Millilitres one press of "+" logs for an UNLINKED container. On a LINKED container it is instead an override meaning "the glass holds more liquid than the food itself" -- a cordial concentrate, an electrolyte tablet, a powder -- and 0 means "no override, take the volume from the linked food".';
+
+
+--
+-- Name: COLUMN user_water_containers.hydration_factor; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_water_containers.hydration_factor IS 'Multiplier applied to this container''s water credit (0-2, default 1.0). Scales ONLY hydration; a linked food''s calories, macros, caffeine and alcohol always count in full.';
+
+
+--
+-- Name: COLUMN user_water_containers.linked_food_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_water_containers.linked_food_id IS 'When set, pressing "+" on this container also logs this food to the diary and links the two rows. SET NULL on food deletion so the container survives as a plain water container.';
+
+
+--
+-- Name: COLUMN user_water_containers.linked_quantity; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_water_containers.linked_quantity IS 'How much of the linked food one press of "+" logs, in the linked variant''s own serving unit. Replaces servings_per_container for linked containers: the diary entry, and every nutrient on it, scales with this. Meaningless without linked_food_id; always 1 for unlinked containers.';
+
+
+--
+-- Name: COLUMN user_water_containers.is_quick_add; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_water_containers.is_quick_add IS 'True for a quick-add drink preset: rendered as a tile grid rather than in the hydration carousel, and never eligible to be the primary container.';
+
+
+--
+-- Name: COLUMN user_water_containers.sort_order; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_water_containers.sort_order IS 'User-arranged order within its group (presets or containers). Ties fall back to created_at.';
 
 
 --
@@ -3794,7 +4762,9 @@ CREATE TABLE public.water_intake_entries (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     created_by_user_id uuid,
     logged_at timestamp with time zone DEFAULT now() NOT NULL,
-    source_id character varying(255)
+    source_id character varying(255),
+    food_entry_id uuid,
+    hydration_factor numeric(4,3)
 );
 
 
@@ -3803,6 +4773,20 @@ CREATE TABLE public.water_intake_entries (
 --
 
 COMMENT ON COLUMN public.water_intake_entries.source_id IS 'Provider-stable record id for idempotent re-sync (e.g. HealthKit uuid, Health Connect metadata.id). NULL for manual or pre-migration synced entries.';
+
+
+--
+-- Name: COLUMN water_intake_entries.food_entry_id; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.water_intake_entries.food_entry_id IS 'Set when this drink was logged by a container linked to a food (#2115): the diary entry created alongside it. A food entry referenced here is EXCLUDED from the food-derived water sum, so its water is counted exactly once -- here, scaled by hydration_factor. NULL for every manual or provider-synced drink.';
+
+
+--
+-- Name: COLUMN water_intake_entries.hydration_factor; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.water_intake_entries.hydration_factor IS 'The factor in force when this drink was logged, snapshotted like container_name so later container edits do not rewrite history. NULL on rows predating the column (treat as 1.0).';
 
 
 --
@@ -3826,6 +4810,50 @@ CREATE TABLE public.weekly_goal_plans (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
+
+
+--
+-- Name: workout_feedback; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.workout_feedback (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    exercise_preset_entry_id uuid,
+    exercise_entry_id uuid,
+    difficulty text,
+    pain boolean DEFAULT false NOT NULL,
+    pain_note text,
+    created_by_user_id uuid,
+    updated_by_user_id uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT workout_feedback_difficulty_check CHECK (((difficulty IS NULL) OR (difficulty = ANY (ARRAY['too_easy'::text, 'just_right'::text, 'too_hard'::text])))),
+    CONSTRAINT workout_feedback_one_target CHECK (((exercise_preset_entry_id IS NULL) <> (exercise_entry_id IS NULL))),
+    CONSTRAINT workout_feedback_pain_note_length CHECK (((pain_note IS NULL) OR (char_length(pain_note) <= 500))),
+    CONSTRAINT workout_feedback_pain_note_requires_pain CHECK (((pain_note IS NULL) OR pain))
+);
+
+
+--
+-- Name: TABLE workout_feedback; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON TABLE public.workout_feedback IS 'How a logged workout (or one exercise in it) felt: difficulty and an optional pain flag/note. Drives adaptive workout suggestions.';
+
+
+--
+-- Name: COLUMN workout_feedback.difficulty; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.workout_feedback.difficulty IS 'too_easy | just_right | too_hard; null when only pain was reported.';
+
+
+--
+-- Name: COLUMN workout_feedback.pain_note; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.workout_feedback.pain_note IS 'Free-text pain/discomfort detail. Shared like the diary it describes.';
 
 
 --
@@ -3874,12 +4902,14 @@ ALTER SEQUENCE public.workout_plan_assignment_sets_id_seq OWNED BY public.workou
 CREATE TABLE public.workout_plan_template_assignments (
     id integer NOT NULL,
     template_id integer NOT NULL,
-    day_of_week integer NOT NULL,
+    day_of_week integer,
     workout_preset_id integer,
     exercise_id uuid,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
     sort_order integer DEFAULT 0,
+    session_index integer,
+    session_name character varying(100),
     CONSTRAINT chk_workout_assignment_type CHECK ((((workout_preset_id IS NOT NULL) AND (exercise_id IS NULL)) OR ((workout_preset_id IS NULL) AND (exercise_id IS NOT NULL))))
 );
 
@@ -3917,7 +4947,11 @@ CREATE TABLE public.workout_plan_templates (
     end_date date,
     is_active boolean DEFAULT false,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    schedule_type character varying(20) DEFAULT 'sequential'::character varying NOT NULL,
+    entry_mode character varying(20) DEFAULT 'prompt'::character varying NOT NULL,
+    CONSTRAINT chk_workout_plan_entry_mode CHECK (((entry_mode)::text = ANY ((ARRAY['prompt'::character varying, 'prefill'::character varying])::text[]))),
+    CONSTRAINT chk_workout_plan_schedule_type CHECK (((schedule_type)::text = ANY ((ARRAY['weekly'::character varying, 'sequential'::character varying])::text[])))
 );
 
 
@@ -3993,7 +5027,13 @@ CREATE TABLE public.workout_preset_exercises (
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
     updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
     sort_order integer DEFAULT 0,
-    superset_group integer
+    superset_group integer,
+    progression_mode character varying(30) DEFAULT 'rep_goal'::character varying,
+    rep_goal integer,
+    increment_type character varying(20) DEFAULT 'weight'::character varying,
+    increment_value numeric(6,2) DEFAULT 2.5,
+    equipment_brand character varying(100) DEFAULT NULL::character varying,
+    ramp_increment numeric(6,2)
 );
 
 
@@ -4002,6 +5042,13 @@ CREATE TABLE public.workout_preset_exercises (
 --
 
 COMMENT ON COLUMN public.workout_preset_exercises.superset_group IS 'Client-assigned superset group key, scoped to the parent workout preset. NULL = not in a superset. Members share the value and are kept adjacent via sort_order.';
+
+
+--
+-- Name: COLUMN workout_preset_exercises.ramp_increment; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.workout_preset_exercises.ramp_increment IS 'Kg added to each successive working set within one session (negative ramps down); null = off';
 
 
 --
@@ -4035,7 +5082,10 @@ CREATE TABLE public.workout_presets (
     description text,
     is_public boolean DEFAULT false,
     created_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
-    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP
+    updated_at timestamp with time zone DEFAULT CURRENT_TIMESTAMP,
+    workout_format character varying(20) DEFAULT 'standard'::character varying NOT NULL,
+    time_cap_seconds integer,
+    CONSTRAINT chk_workout_presets_format CHECK (((workout_format)::text = ANY ((ARRAY['standard'::character varying, 'interval'::character varying, 'tabata'::character varying, 'amrap'::character varying, 'emom'::character varying, 'for_time'::character varying])::text[])))
 );
 
 
@@ -4441,6 +5491,14 @@ ALTER TABLE ONLY public.fasting_logs
 
 
 --
+-- Name: food_entries food_entries_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.food_entries
+    ADD CONSTRAINT food_entries_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: food_entry_meals food_entry_meals_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4705,6 +5763,22 @@ ALTER TABLE ONLY public.onboarding_status
 
 
 --
+-- Name: openfoodfacts_product_read_rate_limit openfoodfacts_product_read_rate_limit_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.openfoodfacts_product_read_rate_limit
+    ADD CONSTRAINT openfoodfacts_product_read_rate_limit_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: openfoodfacts_sync_queue openfoodfacts_sync_queue_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.openfoodfacts_sync_queue
+    ADD CONSTRAINT openfoodfacts_sync_queue_pkey PRIMARY KEY (food_id);
+
+
+--
 -- Name: passkey passkey_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4769,6 +5843,22 @@ ALTER TABLE ONLY public.pregnancy_photos
 
 
 --
+-- Name: rate_limit rate_limit_key_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.rate_limit
+    ADD CONSTRAINT rate_limit_key_key UNIQUE (key);
+
+
+--
+-- Name: rate_limit rate_limit_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.rate_limit
+    ADD CONSTRAINT rate_limit_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: session session_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4830,6 +5920,30 @@ ALTER TABLE ONLY public.sso_provider
 
 ALTER TABLE ONLY public.symptom_entries
     ADD CONSTRAINT symptom_entries_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: symptom_entry_photos symptom_entry_photos_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.symptom_entry_photos
+    ADD CONSTRAINT symptom_entry_photos_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: symptom_entry_treatments symptom_entry_treatments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.symptom_entry_treatments
+    ADD CONSTRAINT symptom_entry_treatments_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: symptom_free_days symptom_free_days_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.symptom_free_days
+    ADD CONSTRAINT symptom_free_days_pkey PRIMARY KEY (id);
 
 
 --
@@ -4921,11 +6035,11 @@ ALTER TABLE ONLY public.external_data_providers
 
 
 --
--- Name: user_custom_symptom_locations unique_user_symptom_location_name; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: symptom_free_days unique_user_symptom_free_day; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
-ALTER TABLE ONLY public.user_custom_symptom_locations
-    ADD CONSTRAINT unique_user_symptom_location_name UNIQUE (user_id, name);
+ALTER TABLE ONLY public.symptom_free_days
+    ADD CONSTRAINT unique_user_symptom_free_day UNIQUE (user_id, entry_date);
 
 
 --
@@ -4934,6 +6048,14 @@ ALTER TABLE ONLY public.user_custom_symptom_locations
 
 ALTER TABLE ONLY public.user_custom_symptoms
     ADD CONSTRAINT unique_user_symptom_name UNIQUE (user_id, name);
+
+
+--
+-- Name: user_symptom_options unique_user_symptom_option; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_symptom_options
+    ADD CONSTRAINT unique_user_symptom_option UNIQUE (user_id, kind, name);
 
 
 --
@@ -5017,14 +6139,6 @@ ALTER TABLE ONLY public.user_custom_nutrients
 
 
 --
--- Name: user_custom_symptom_locations user_custom_symptom_locations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.user_custom_symptom_locations
-    ADD CONSTRAINT user_custom_symptom_locations_pkey PRIMARY KEY (id);
-
-
---
 -- Name: user_custom_symptoms user_custom_symptoms_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5062,6 +6176,22 @@ ALTER TABLE ONLY public.user_dashboard_layouts
 
 ALTER TABLE ONLY public."user"
     ADD CONSTRAINT user_email_key UNIQUE (email);
+
+
+--
+-- Name: user_fasting_preferences user_fasting_preferences_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_fasting_preferences
+    ADD CONSTRAINT user_fasting_preferences_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: user_fasting_preferences user_fasting_preferences_user_id_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_fasting_preferences
+    ADD CONSTRAINT user_fasting_preferences_user_id_key UNIQUE (user_id);
 
 
 --
@@ -5161,6 +6291,14 @@ ALTER TABLE ONLY public.user_preferences
 
 
 --
+-- Name: user_symptom_options user_symptom_options_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_symptom_options
+    ADD CONSTRAINT user_symptom_options_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: user_water_containers user_water_containers_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5206,6 +6344,14 @@ ALTER TABLE ONLY public.water_intake
 
 ALTER TABLE ONLY public.weekly_goal_plans
     ADD CONSTRAINT weekly_goal_plans_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: workout_feedback workout_feedback_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workout_feedback
+    ADD CONSTRAINT workout_feedback_pkey PRIMARY KEY (id);
 
 
 --
@@ -5589,6 +6735,27 @@ CREATE INDEX idx_food_favorites_user_id ON public.food_favorites USING btree (us
 
 
 --
+-- Name: idx_food_variants_default_lookup; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_food_variants_default_lookup ON public.food_variants USING btree (food_id, is_default, updated_at DESC, id);
+
+
+--
+-- Name: idx_food_variants_food_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_food_variants_food_id ON public.food_variants USING btree (food_id);
+
+
+--
+-- Name: idx_foods_is_quick_food_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_foods_is_quick_food_name ON public.foods USING btree (is_quick_food, name);
+
+
+--
 -- Name: idx_foods_provider_external_id_provider_type; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5600,6 +6767,13 @@ CREATE INDEX idx_foods_provider_external_id_provider_type ON public.foods USING 
 --
 
 CREATE INDEX idx_foods_provider_type_user_id ON public.foods USING btree (provider_type, user_id) WHERE (provider_type IS NOT NULL);
+
+
+--
+-- Name: idx_foods_shared_public_name; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_foods_shared_public_name ON public.foods USING btree (shared_with_public, is_quick_food, name);
 
 
 --
@@ -5799,6 +6973,13 @@ CREATE INDEX idx_pregnancy_photos_user_id ON public.pregnancy_photos USING btree
 
 
 --
+-- Name: idx_rate_limit_last_request; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_rate_limit_last_request ON public.rate_limit USING btree (last_request);
+
+
+--
 -- Name: idx_session_token; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5890,6 +7071,13 @@ CREATE INDEX idx_symptom_entries_medication_id ON public.symptom_entries USING b
 
 
 --
+-- Name: idx_symptom_entries_ongoing; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_symptom_entries_ongoing ON public.symptom_entries USING btree (user_id) WHERE ((started_at IS NOT NULL) AND (ended_at IS NULL));
+
+
+--
 -- Name: idx_symptom_entries_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5897,17 +7085,52 @@ CREATE INDEX idx_symptom_entries_user_id ON public.symptom_entries USING btree (
 
 
 --
+-- Name: idx_symptom_entries_user_symptom_date; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_symptom_entries_user_symptom_date ON public.symptom_entries USING btree (user_id, symptom_id, entry_date);
+
+
+--
+-- Name: idx_symptom_entry_photos_entry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_symptom_entry_photos_entry ON public.symptom_entry_photos USING btree (symptom_entry_id);
+
+
+--
+-- Name: idx_symptom_entry_photos_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_symptom_entry_photos_user ON public.symptom_entry_photos USING btree (user_id);
+
+
+--
+-- Name: idx_symptom_entry_treatments_entry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_symptom_entry_treatments_entry ON public.symptom_entry_treatments USING btree (symptom_entry_id);
+
+
+--
+-- Name: idx_symptom_entry_treatments_medication_entry; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_symptom_entry_treatments_medication_entry ON public.symptom_entry_treatments USING btree (medication_entry_id);
+
+
+--
+-- Name: idx_symptom_entry_treatments_user; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_symptom_entry_treatments_user ON public.symptom_entry_treatments USING btree (user_id);
+
+
+--
 -- Name: idx_user_custom_moods_user_id; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_user_custom_moods_user_id ON public.user_custom_moods USING btree (user_id);
-
-
---
--- Name: idx_user_custom_symptom_locations_user_id; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX idx_user_custom_symptom_locations_user_id ON public.user_custom_symptom_locations USING btree (user_id);
 
 
 --
@@ -5922,6 +7145,13 @@ CREATE INDEX idx_user_custom_symptoms_user_id ON public.user_custom_symptoms USI
 --
 
 CREATE INDEX idx_user_cycle_display_preferences_user_id ON public.user_cycle_display_preferences USING btree (user_id);
+
+
+--
+-- Name: idx_user_fasting_preferences_user_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_fasting_preferences_user_id ON public.user_fasting_preferences USING btree (user_id);
 
 
 --
@@ -5974,6 +7204,20 @@ CREATE INDEX idx_user_nutrient_goal_preferences_user_id ON public.user_nutrient_
 
 
 --
+-- Name: idx_user_symptom_options_user_kind; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_symptom_options_user_kind ON public.user_symptom_options USING btree (user_id, kind);
+
+
+--
+-- Name: idx_user_water_containers_user_quick_add; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_user_water_containers_user_quick_add ON public.user_water_containers USING btree (user_id, is_quick_add, sort_order);
+
+
+--
 -- Name: idx_verification_identifier; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5985,6 +7229,13 @@ CREATE INDEX idx_verification_identifier ON public.verification USING btree (ide
 --
 
 CREATE INDEX idx_vitals_user_date ON public.vitals_entries USING btree (user_id, entry_date DESC, "timestamp" DESC);
+
+
+--
+-- Name: idx_water_intake_entries_food_entry_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_water_intake_entries_food_entry_id ON public.water_intake_entries USING btree (food_entry_id) WHERE (food_entry_id IS NOT NULL);
 
 
 --
@@ -6002,10 +7253,31 @@ CREATE UNIQUE INDEX idx_water_intake_entries_user_source_source_id ON public.wat
 
 
 --
+-- Name: idx_workout_plan_assignments_template_session; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX idx_workout_plan_assignments_template_session ON public.workout_plan_template_assignments USING btree (template_id, session_index);
+
+
+--
 -- Name: idx_workout_preset_exercise_sets_preset_exercise_id; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX idx_workout_preset_exercise_sets_preset_exercise_id ON public.workout_preset_exercise_sets USING btree (workout_preset_exercise_id);
+
+
+--
+-- Name: openfoodfacts_sync_queue_due_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX openfoodfacts_sync_queue_due_idx ON public.openfoodfacts_sync_queue USING btree (next_attempt_at, lease_expires_at) WHERE (status = ANY (ARRAY['pending'::text, 'processing'::text]));
+
+
+--
+-- Name: openfoodfacts_sync_queue_user_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX openfoodfacts_sync_queue_user_status_idx ON public.openfoodfacts_sync_queue USING btree (user_id, status, updated_at DESC);
 
 
 --
@@ -6027,6 +7299,41 @@ CREATE UNIQUE INDEX unique_active_pregnancy ON public.pregnancies USING btree (u
 --
 
 CREATE UNIQUE INDEX unique_backup_settings_row ON public.backup_settings USING btree (((id IS NOT NULL)));
+
+
+--
+-- Name: workout_feedback_exercise_entry_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX workout_feedback_exercise_entry_unique ON public.workout_feedback USING btree (exercise_entry_id) WHERE (exercise_entry_id IS NOT NULL);
+
+
+--
+-- Name: workout_feedback_preset_entry_unique; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX workout_feedback_preset_entry_unique ON public.workout_feedback USING btree (exercise_preset_entry_id) WHERE (exercise_preset_entry_id IS NOT NULL);
+
+
+--
+-- Name: workout_feedback_user_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX workout_feedback_user_created_idx ON public.workout_feedback USING btree (user_id, created_at DESC);
+
+
+--
+-- Name: user_preferences cleanup_openfoodfacts_queue_on_opt_out; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cleanup_openfoodfacts_queue_on_opt_out AFTER UPDATE OF auto_contribute_openfoodfacts ON public.user_preferences FOR EACH ROW WHEN (((old.auto_contribute_openfoodfacts IS TRUE) AND (new.auto_contribute_openfoodfacts IS FALSE))) EXECUTE FUNCTION public.cleanup_openfoodfacts_queue_on_opt_out();
+
+
+--
+-- Name: user_preferences cleanup_openfoodfacts_queue_on_preference_delete; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER cleanup_openfoodfacts_queue_on_preference_delete AFTER DELETE ON public.user_preferences FOR EACH ROW EXECUTE FUNCTION public.cleanup_openfoodfacts_queue_on_preference_delete();
 
 
 --
@@ -6191,6 +7498,27 @@ CREATE TRIGGER set_timestamp BEFORE UPDATE ON public.symptom_entries FOR EACH RO
 
 
 --
+-- Name: symptom_entry_photos set_timestamp; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER set_timestamp BEFORE UPDATE ON public.symptom_entry_photos FOR EACH ROW EXECUTE FUNCTION public.trigger_set_timestamp();
+
+
+--
+-- Name: symptom_entry_treatments set_timestamp; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER set_timestamp BEFORE UPDATE ON public.symptom_entry_treatments FOR EACH ROW EXECUTE FUNCTION public.trigger_set_timestamp();
+
+
+--
+-- Name: symptom_free_days set_timestamp; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER set_timestamp BEFORE UPDATE ON public.symptom_free_days FOR EACH ROW EXECUTE FUNCTION public.trigger_set_timestamp();
+
+
+--
 -- Name: user_custom_moods set_timestamp; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -6202,13 +7530,6 @@ CREATE TRIGGER set_timestamp BEFORE UPDATE ON public.user_custom_moods FOR EACH 
 --
 
 CREATE TRIGGER set_timestamp BEFORE UPDATE ON public.user_custom_nutrients FOR EACH ROW EXECUTE FUNCTION public.trigger_set_timestamp();
-
-
---
--- Name: user_custom_symptom_locations set_timestamp; Type: TRIGGER; Schema: public; Owner: -
---
-
-CREATE TRIGGER set_timestamp BEFORE UPDATE ON public.user_custom_symptom_locations FOR EACH ROW EXECUTE FUNCTION public.trigger_set_timestamp();
 
 
 --
@@ -6237,6 +7558,13 @@ CREATE TRIGGER set_timestamp BEFORE UPDATE ON public.user_medication_display_pre
 --
 
 CREATE TRIGGER set_timestamp BEFORE UPDATE ON public.user_mood_display_preferences FOR EACH ROW EXECUTE FUNCTION public.trigger_set_timestamp();
+
+
+--
+-- Name: user_symptom_options set_timestamp; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER set_timestamp BEFORE UPDATE ON public.user_symptom_options FOR EACH ROW EXECUTE FUNCTION public.trigger_set_timestamp();
 
 
 --
@@ -6345,6 +7673,13 @@ CREATE TRIGGER update_oidc_providers_updated_at BEFORE UPDATE ON public.oidc_pro
 
 
 --
+-- Name: user_fasting_preferences update_user_fasting_preferences_updated_at; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER update_user_fasting_preferences_updated_at BEFORE UPDATE ON public.user_fasting_preferences FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
+
+--
 -- Name: user_oidc_links update_user_oidc_links_updated_at; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -6413,7 +7748,7 @@ ALTER TABLE ONLY public.account
 --
 
 ALTER TABLE ONLY public.admin_activity_logs
-    ADD CONSTRAINT admin_activity_logs_admin_user_id_fkey FOREIGN KEY (admin_user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+    ADD CONSTRAINT admin_activity_logs_admin_user_id_fkey FOREIGN KEY (admin_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
 
 
 --
@@ -6421,7 +7756,15 @@ ALTER TABLE ONLY public.admin_activity_logs
 --
 
 ALTER TABLE ONLY public.admin_activity_logs
-    ADD CONSTRAINT admin_activity_logs_target_user_id_fkey FOREIGN KEY (target_user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+    ADD CONSTRAINT admin_activity_logs_target_user_id_fkey FOREIGN KEY (target_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
+
+
+--
+-- Name: ai_service_settings ai_service_settings_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ai_service_settings
+    ADD CONSTRAINT ai_service_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
 
 
 --
@@ -6446,6 +7789,14 @@ ALTER TABLE ONLY public.check_in_measurements
 
 ALTER TABLE ONLY public.check_in_measurements
     ADD CONSTRAINT check_in_measurements_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
+-- Name: check_in_measurements check_in_measurements_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.check_in_measurements
+    ADD CONSTRAINT check_in_measurements_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
 
 
 --
@@ -6481,6 +7832,14 @@ ALTER TABLE ONLY public.custom_categories
 
 
 --
+-- Name: custom_categories custom_categories_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.custom_categories
+    ADD CONSTRAINT custom_categories_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
 -- Name: custom_measurements custom_measurements_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6494,6 +7853,14 @@ ALTER TABLE ONLY public.custom_measurements
 
 ALTER TABLE ONLY public.custom_measurements
     ADD CONSTRAINT custom_measurements_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
+-- Name: custom_measurements custom_measurements_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.custom_measurements
+    ADD CONSTRAINT custom_measurements_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
 
 
 --
@@ -6557,7 +7924,7 @@ ALTER TABLE ONLY public.day_classification_cache
 --
 
 ALTER TABLE ONLY public.exercise_entries
-    ADD CONSTRAINT exercise_entries_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+    ADD CONSTRAINT exercise_entries_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
 
 
 --
@@ -6573,7 +7940,15 @@ ALTER TABLE ONLY public.exercise_entries
 --
 
 ALTER TABLE ONLY public.exercise_entries
-    ADD CONSTRAINT exercise_entries_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+    ADD CONSTRAINT exercise_entries_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
+
+
+--
+-- Name: exercise_entries exercise_entries_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.exercise_entries
+    ADD CONSTRAINT exercise_entries_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
 
 
 --
@@ -6697,11 +8072,27 @@ ALTER TABLE ONLY public.exercise_preset_entries
 
 
 --
+-- Name: exercises exercises_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.exercises
+    ADD CONSTRAINT exercises_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
 -- Name: external_data_providers external_data_providers_provider_type_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.external_data_providers
     ADD CONSTRAINT external_data_providers_provider_type_fkey FOREIGN KEY (provider_type) REFERENCES public.external_provider_types(id);
+
+
+--
+-- Name: external_data_providers external_data_providers_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.external_data_providers
+    ADD CONSTRAINT external_data_providers_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
 
 
 --
@@ -6741,7 +8132,7 @@ ALTER TABLE ONLY public.user_preferences
 --
 
 ALTER TABLE ONLY public.exercise_entries
-    ADD CONSTRAINT fk_exercise_entries_exercise_id FOREIGN KEY (exercise_id) REFERENCES public.exercises(id) ON DELETE CASCADE;
+    ADD CONSTRAINT fk_exercise_entries_exercise_id FOREIGN KEY (exercise_id) REFERENCES public.exercises(id) ON DELETE SET NULL;
 
 
 --
@@ -6757,7 +8148,7 @@ ALTER TABLE ONLY public.meal_plan_template_assignments
 --
 
 ALTER TABLE ONLY public.food_entries
-    ADD CONSTRAINT fk_food_entries_food_id FOREIGN KEY (food_id) REFERENCES public.foods(id) ON DELETE CASCADE;
+    ADD CONSTRAINT fk_food_entries_food_id FOREIGN KEY (food_id) REFERENCES public.foods(id) ON DELETE SET NULL;
 
 
 --
@@ -6789,7 +8180,7 @@ ALTER TABLE ONLY public.food_variants
 --
 
 ALTER TABLE ONLY public.food_entries
-    ADD CONSTRAINT food_entries_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+    ADD CONSTRAINT food_entries_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
 
 
 --
@@ -6821,7 +8212,7 @@ ALTER TABLE ONLY public.food_entries
 --
 
 ALTER TABLE ONLY public.food_entries
-    ADD CONSTRAINT food_entries_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+    ADD CONSTRAINT food_entries_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
 
 
 --
@@ -6894,6 +8285,14 @@ ALTER TABLE ONLY public.food_favorites
 
 ALTER TABLE ONLY public.food_favorites
     ADD CONSTRAINT food_favorites_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
+-- Name: foods foods_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.foods
+    ADD CONSTRAINT foods_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
 
 
 --
@@ -7181,7 +8580,7 @@ ALTER TABLE ONLY public.medications
 --
 
 ALTER TABLE ONLY public.mood_entries
-    ADD CONSTRAINT mood_entries_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public."user"(id);
+    ADD CONSTRAINT mood_entries_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
 
 
 --
@@ -7189,7 +8588,7 @@ ALTER TABLE ONLY public.mood_entries
 --
 
 ALTER TABLE ONLY public.mood_entries
-    ADD CONSTRAINT mood_entries_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public."user"(id);
+    ADD CONSTRAINT mood_entries_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
 
 
 --
@@ -7222,6 +8621,22 @@ ALTER TABLE ONLY public.onboarding_data
 
 ALTER TABLE ONLY public.onboarding_status
     ADD CONSTRAINT onboarding_status_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
+-- Name: openfoodfacts_sync_queue openfoodfacts_sync_queue_food_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.openfoodfacts_sync_queue
+    ADD CONSTRAINT openfoodfacts_sync_queue_food_id_fkey FOREIGN KEY (food_id) REFERENCES public.foods(id) ON DELETE CASCADE;
+
+
+--
+-- Name: openfoodfacts_sync_queue openfoodfacts_sync_queue_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.openfoodfacts_sync_queue
+    ADD CONSTRAINT openfoodfacts_sync_queue_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
 
 
 --
@@ -7337,6 +8752,14 @@ ALTER TABLE ONLY public.profiles
 
 
 --
+-- Name: session session_impersonated_by_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.session
+    ADD CONSTRAINT session_impersonated_by_fkey FOREIGN KEY (impersonated_by) REFERENCES public."user"(id) ON DELETE SET NULL;
+
+
+--
 -- Name: session session_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7349,7 +8772,7 @@ ALTER TABLE ONLY public.session
 --
 
 ALTER TABLE ONLY public.sleep_entries
-    ADD CONSTRAINT sleep_entries_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public."user"(id);
+    ADD CONSTRAINT sleep_entries_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
 
 
 --
@@ -7357,7 +8780,7 @@ ALTER TABLE ONLY public.sleep_entries
 --
 
 ALTER TABLE ONLY public.sleep_entries
-    ADD CONSTRAINT sleep_entries_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public."user"(id);
+    ADD CONSTRAINT sleep_entries_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
 
 
 --
@@ -7373,7 +8796,7 @@ ALTER TABLE ONLY public.sleep_entries
 --
 
 ALTER TABLE ONLY public.sleep_entry_stages
-    ADD CONSTRAINT sleep_entry_stages_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public."user"(id);
+    ADD CONSTRAINT sleep_entry_stages_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
 
 
 --
@@ -7389,7 +8812,7 @@ ALTER TABLE ONLY public.sleep_entry_stages
 --
 
 ALTER TABLE ONLY public.sleep_entry_stages
-    ADD CONSTRAINT sleep_entry_stages_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public."user"(id);
+    ADD CONSTRAINT sleep_entry_stages_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
 
 
 --
@@ -7406,6 +8829,22 @@ ALTER TABLE ONLY public.sleep_entry_stages
 
 ALTER TABLE ONLY public.sleep_need_calculations
     ADD CONSTRAINT sleep_need_calculations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sparky_chat_history sparky_chat_history_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sparky_chat_history
+    ADD CONSTRAINT sparky_chat_history_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sso_provider sso_provider_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.sso_provider
+    ADD CONSTRAINT sso_provider_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
 
 
 --
@@ -7430,6 +8869,62 @@ ALTER TABLE ONLY public.symptom_entries
 
 ALTER TABLE ONLY public.symptom_entries
     ADD CONSTRAINT symptom_entries_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
+-- Name: symptom_entry_photos symptom_entry_photos_symptom_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.symptom_entry_photos
+    ADD CONSTRAINT symptom_entry_photos_symptom_entry_id_fkey FOREIGN KEY (symptom_entry_id) REFERENCES public.symptom_entries(id) ON DELETE CASCADE;
+
+
+--
+-- Name: symptom_entry_photos symptom_entry_photos_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.symptom_entry_photos
+    ADD CONSTRAINT symptom_entry_photos_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
+-- Name: symptom_entry_treatments symptom_entry_treatments_medication_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.symptom_entry_treatments
+    ADD CONSTRAINT symptom_entry_treatments_medication_entry_id_fkey FOREIGN KEY (medication_entry_id) REFERENCES public.medication_entries(id) ON DELETE SET NULL;
+
+
+--
+-- Name: symptom_entry_treatments symptom_entry_treatments_medication_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.symptom_entry_treatments
+    ADD CONSTRAINT symptom_entry_treatments_medication_id_fkey FOREIGN KEY (medication_id) REFERENCES public.medications(id) ON DELETE SET NULL;
+
+
+--
+-- Name: symptom_entry_treatments symptom_entry_treatments_symptom_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.symptom_entry_treatments
+    ADD CONSTRAINT symptom_entry_treatments_symptom_entry_id_fkey FOREIGN KEY (symptom_entry_id) REFERENCES public.symptom_entries(id) ON DELETE CASCADE;
+
+
+--
+-- Name: symptom_entry_treatments symptom_entry_treatments_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.symptom_entry_treatments
+    ADD CONSTRAINT symptom_entry_treatments_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
+-- Name: symptom_free_days symptom_free_days_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.symptom_free_days
+    ADD CONSTRAINT symptom_free_days_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
 
 
 --
@@ -7465,14 +8960,6 @@ ALTER TABLE ONLY public.user_custom_nutrients
 
 
 --
--- Name: user_custom_symptom_locations user_custom_symptom_locations_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.user_custom_symptom_locations
-    ADD CONSTRAINT user_custom_symptom_locations_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
-
-
---
 -- Name: user_custom_symptoms user_custom_symptoms_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7494,6 +8981,22 @@ ALTER TABLE ONLY public.user_cycle_display_preferences
 
 ALTER TABLE ONLY public.user_dashboard_layouts
     ADD CONSTRAINT user_dashboard_layouts_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
+-- Name: user_fasting_preferences user_fasting_preferences_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_fasting_preferences
+    ADD CONSTRAINT user_fasting_preferences_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
+-- Name: user_goals user_goals_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_goals
+    ADD CONSTRAINT user_goals_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
 
 
 --
@@ -7585,6 +9088,46 @@ ALTER TABLE ONLY public.user_preferences
 
 
 --
+-- Name: user_preferences user_preferences_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_preferences
+    ADD CONSTRAINT user_preferences_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
+-- Name: user_symptom_options user_symptom_options_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_symptom_options
+    ADD CONSTRAINT user_symptom_options_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
+
+
+--
+-- Name: user_water_containers user_water_containers_linked_food_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_water_containers
+    ADD CONSTRAINT user_water_containers_linked_food_id_fkey FOREIGN KEY (linked_food_id) REFERENCES public.foods(id) ON DELETE SET NULL;
+
+
+--
+-- Name: user_water_containers user_water_containers_linked_meal_type_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_water_containers
+    ADD CONSTRAINT user_water_containers_linked_meal_type_id_fkey FOREIGN KEY (linked_meal_type_id) REFERENCES public.meal_types(id) ON DELETE SET NULL;
+
+
+--
+-- Name: user_water_containers user_water_containers_linked_variant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.user_water_containers
+    ADD CONSTRAINT user_water_containers_linked_variant_id_fkey FOREIGN KEY (linked_variant_id) REFERENCES public.food_variants(id) ON DELETE SET NULL;
+
+
+--
 -- Name: user_water_containers user_water_containers_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7621,7 +9164,15 @@ ALTER TABLE ONLY public.water_intake_entries
 --
 
 ALTER TABLE ONLY public.water_intake_entries
-    ADD CONSTRAINT water_intake_entries_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public."user"(id);
+    ADD CONSTRAINT water_intake_entries_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
+
+
+--
+-- Name: water_intake_entries water_intake_entries_food_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.water_intake_entries
+    ADD CONSTRAINT water_intake_entries_food_entry_id_fkey FOREIGN KEY (food_entry_id) REFERENCES public.food_entries(id) ON DELETE CASCADE;
 
 
 --
@@ -7638,6 +9189,14 @@ ALTER TABLE ONLY public.water_intake_entries
 
 ALTER TABLE ONLY public.water_intake
     ADD CONSTRAINT water_intake_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
+
+
+--
+-- Name: water_intake water_intake_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.water_intake
+    ADD CONSTRAINT water_intake_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
 
 
 --
@@ -7702,6 +9261,46 @@ ALTER TABLE ONLY public.weekly_goal_plans
 
 ALTER TABLE ONLY public.weekly_goal_plans
     ADD CONSTRAINT weekly_goal_plans_wednesday_fkey FOREIGN KEY (wednesday_preset_id) REFERENCES public.goal_presets(id) ON DELETE SET NULL;
+
+
+--
+-- Name: workout_feedback workout_feedback_created_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workout_feedback
+    ADD CONSTRAINT workout_feedback_created_by_user_id_fkey FOREIGN KEY (created_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
+
+
+--
+-- Name: workout_feedback workout_feedback_exercise_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workout_feedback
+    ADD CONSTRAINT workout_feedback_exercise_entry_id_fkey FOREIGN KEY (exercise_entry_id) REFERENCES public.exercise_entries(id) ON DELETE CASCADE;
+
+
+--
+-- Name: workout_feedback workout_feedback_exercise_preset_entry_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workout_feedback
+    ADD CONSTRAINT workout_feedback_exercise_preset_entry_id_fkey FOREIGN KEY (exercise_preset_entry_id) REFERENCES public.exercise_preset_entries(id) ON DELETE CASCADE;
+
+
+--
+-- Name: workout_feedback workout_feedback_updated_by_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workout_feedback
+    ADD CONSTRAINT workout_feedback_updated_by_user_id_fkey FOREIGN KEY (updated_by_user_id) REFERENCES public."user"(id) ON DELETE SET NULL;
+
+
+--
+-- Name: workout_feedback workout_feedback_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.workout_feedback
+    ADD CONSTRAINT workout_feedback_user_id_fkey FOREIGN KEY (user_id) REFERENCES public."user"(id) ON DELETE CASCADE;
 
 
 --
@@ -7917,10 +9516,24 @@ CREATE POLICY delete_policy ON public.food_entries FOR DELETE USING (public.has_
 
 
 --
+-- Name: openfoodfacts_product_read_rate_limit deny_all_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY deny_all_policy ON public.openfoodfacts_product_read_rate_limit USING (false) WITH CHECK (false);
+
+
+--
 -- Name: passkey_registration_tickets deny_all_policy; Type: POLICY; Schema: public; Owner: -
 --
 
 CREATE POLICY deny_all_policy ON public.passkey_registration_tickets USING (false) WITH CHECK (false);
+
+
+--
+-- Name: rate_limit deny_all_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY deny_all_policy ON public.rate_limit USING (false) WITH CHECK (false);
 
 
 --
@@ -8449,7 +10062,28 @@ CREATE POLICY modify_policy ON public.sleep_need_calculations USING (((public.au
 -- Name: symptom_entries modify_policy; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY modify_policy ON public.symptom_entries USING (public.has_medication_access(user_id)) WITH CHECK (public.has_medication_access(user_id));
+CREATE POLICY modify_policy ON public.symptom_entries USING ((public.has_symptom_access(user_id) AND (((source)::text <> 'cycle'::text) OR (public.authenticated_user_id() = user_id)))) WITH CHECK ((public.has_symptom_access(user_id) AND (((source)::text <> 'cycle'::text) OR (public.authenticated_user_id() = user_id))));
+
+
+--
+-- Name: symptom_entry_photos modify_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY modify_policy ON public.symptom_entry_photos USING (public.has_symptom_access(user_id)) WITH CHECK (public.has_symptom_access(user_id));
+
+
+--
+-- Name: symptom_entry_treatments modify_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY modify_policy ON public.symptom_entry_treatments USING (public.has_symptom_access(user_id)) WITH CHECK (public.has_symptom_access(user_id));
+
+
+--
+-- Name: symptom_free_days modify_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY modify_policy ON public.symptom_free_days USING (public.has_symptom_access(user_id)) WITH CHECK (public.has_symptom_access(user_id));
 
 
 --
@@ -8474,17 +10108,10 @@ CREATE POLICY modify_policy ON public.user_custom_nutrients USING (public.has_di
 
 
 --
--- Name: user_custom_symptom_locations modify_policy; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY modify_policy ON public.user_custom_symptom_locations USING (public.has_medication_access(user_id)) WITH CHECK (public.has_medication_access(user_id));
-
-
---
 -- Name: user_custom_symptoms modify_policy; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY modify_policy ON public.user_custom_symptoms USING (public.has_medication_access(user_id)) WITH CHECK (public.has_medication_access(user_id));
+CREATE POLICY modify_policy ON public.user_custom_symptoms USING (public.has_symptom_access(user_id)) WITH CHECK (public.has_symptom_access(user_id));
 
 
 --
@@ -8537,6 +10164,13 @@ CREATE POLICY modify_policy ON public.user_preferences USING ((public.authentica
 
 
 --
+-- Name: user_symptom_options modify_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY modify_policy ON public.user_symptom_options USING (public.has_symptom_access(user_id)) WITH CHECK (public.has_symptom_access(user_id));
+
+
+--
 -- Name: user_water_containers modify_policy; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -8569,6 +10203,17 @@ CREATE POLICY modify_policy ON public.water_intake_entries USING (public.has_dia
 --
 
 CREATE POLICY modify_policy ON public.weekly_goal_plans USING (public.has_diary_access(user_id)) WITH CHECK (public.has_diary_access(user_id));
+
+
+--
+-- Name: workout_feedback modify_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY modify_policy ON public.workout_feedback USING (public.has_diary_access(user_id)) WITH CHECK ((public.has_diary_access(user_id) AND (((exercise_preset_entry_id IS NOT NULL) AND (EXISTS ( SELECT 1
+   FROM public.exercise_preset_entries epe
+  WHERE ((epe.id = workout_feedback.exercise_preset_entry_id) AND (epe.user_id = workout_feedback.user_id))))) OR ((exercise_entry_id IS NOT NULL) AND (EXISTS ( SELECT 1
+   FROM public.exercise_entries ee
+  WHERE ((ee.id = workout_feedback.exercise_entry_id) AND (ee.user_id = workout_feedback.user_id))))))));
 
 
 --
@@ -8626,6 +10271,18 @@ ALTER TABLE public.onboarding_data ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.onboarding_status ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: openfoodfacts_product_read_rate_limit; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.openfoodfacts_product_read_rate_limit ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: openfoodfacts_sync_queue; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.openfoodfacts_sync_queue ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: api_key owner_policy; Type: POLICY; Schema: public; Owner: -
@@ -8689,6 +10346,13 @@ CREATE POLICY owner_policy ON public.meal_plan_template_assignments USING (((EXI
 
 
 --
+-- Name: openfoodfacts_sync_queue owner_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY owner_policy ON public.openfoodfacts_sync_queue USING ((user_id = public.authenticated_user_id())) WITH CHECK ((user_id = public.authenticated_user_id()));
+
+
+--
 -- Name: pregnancies owner_policy; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -8735,6 +10399,13 @@ CREATE POLICY owner_policy ON public.sparky_chat_history USING ((user_id = publi
 --
 
 CREATE POLICY owner_policy ON public.user_cycle_display_preferences USING ((user_id = public.authenticated_user_id())) WITH CHECK ((user_id = public.authenticated_user_id()));
+
+
+--
+-- Name: user_fasting_preferences owner_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY owner_policy ON public.user_fasting_preferences USING ((user_id = public.authenticated_user_id())) WITH CHECK ((user_id = public.authenticated_user_id()));
 
 
 --
@@ -8828,6 +10499,12 @@ ALTER TABLE public.pregnancy_photos ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: rate_limit; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.rate_limit ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: exercise_entries select_exercise_preset_entry_linked_policy; Type: POLICY; Schema: public; Owner: -
@@ -9155,7 +10832,28 @@ CREATE POLICY select_policy ON public.sleep_need_calculations FOR SELECT USING (
 -- Name: symptom_entries select_policy; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY select_policy ON public.symptom_entries FOR SELECT USING (public.has_medication_read_access(user_id));
+CREATE POLICY select_policy ON public.symptom_entries FOR SELECT USING ((public.has_symptom_read_access(user_id) AND (((source)::text <> 'cycle'::text) OR (public.authenticated_user_id() = user_id))));
+
+
+--
+-- Name: symptom_entry_photos select_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY select_policy ON public.symptom_entry_photos FOR SELECT USING (public.has_symptom_read_access(user_id));
+
+
+--
+-- Name: symptom_entry_treatments select_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY select_policy ON public.symptom_entry_treatments FOR SELECT USING (public.has_symptom_read_access(user_id));
+
+
+--
+-- Name: symptom_free_days select_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY select_policy ON public.symptom_free_days FOR SELECT USING (public.has_symptom_read_access(user_id));
 
 
 --
@@ -9180,17 +10878,10 @@ CREATE POLICY select_policy ON public.user_custom_nutrients FOR SELECT USING (pu
 
 
 --
--- Name: user_custom_symptom_locations select_policy; Type: POLICY; Schema: public; Owner: -
---
-
-CREATE POLICY select_policy ON public.user_custom_symptom_locations FOR SELECT USING (public.has_medication_read_access(user_id));
-
-
---
 -- Name: user_custom_symptoms select_policy; Type: POLICY; Schema: public; Owner: -
 --
 
-CREATE POLICY select_policy ON public.user_custom_symptoms FOR SELECT USING (public.has_medication_read_access(user_id));
+CREATE POLICY select_policy ON public.user_custom_symptoms FOR SELECT USING (public.has_symptom_read_access(user_id));
 
 
 --
@@ -9243,6 +10934,13 @@ CREATE POLICY select_policy ON public.user_preferences FOR SELECT USING (public.
 
 
 --
+-- Name: user_symptom_options select_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY select_policy ON public.user_symptom_options FOR SELECT USING (public.has_symptom_read_access(user_id));
+
+
+--
 -- Name: user_water_containers select_policy; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -9275,6 +10973,13 @@ CREATE POLICY select_policy ON public.water_intake_entries FOR SELECT USING (pub
 --
 
 CREATE POLICY select_policy ON public.weekly_goal_plans FOR SELECT USING (public.has_diary_read_access(user_id));
+
+
+--
+-- Name: workout_feedback select_policy; Type: POLICY; Schema: public; Owner: -
+--
+
+CREATE POLICY select_policy ON public.workout_feedback FOR SELECT USING (public.has_diary_read_access(user_id));
 
 
 --
@@ -9340,6 +11045,24 @@ ALTER TABLE public.sparky_chat_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.symptom_entries ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: symptom_entry_photos; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.symptom_entry_photos ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: symptom_entry_treatments; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.symptom_entry_treatments ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: symptom_free_days; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.symptom_free_days ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: external_data_providers update_policy; Type: POLICY; Schema: public; Owner: -
 --
 
@@ -9372,12 +11095,6 @@ ALTER TABLE public.user_custom_moods ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_custom_nutrients ENABLE ROW LEVEL SECURITY;
 
 --
--- Name: user_custom_symptom_locations; Type: ROW SECURITY; Schema: public; Owner: -
---
-
-ALTER TABLE public.user_custom_symptom_locations ENABLE ROW LEVEL SECURITY;
-
---
 -- Name: user_custom_symptoms; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -9394,6 +11111,12 @@ ALTER TABLE public.user_cycle_display_preferences ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.user_dashboard_layouts ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: user_fasting_preferences; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_fasting_preferences ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: user_goals; Type: ROW SECURITY; Schema: public; Owner: -
@@ -9450,6 +11173,12 @@ ALTER TABLE public.user_oidc_links ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_preferences ENABLE ROW LEVEL SECURITY;
 
 --
+-- Name: user_symptom_options; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.user_symptom_options ENABLE ROW LEVEL SECURITY;
+
+--
 -- Name: user_water_containers; Type: ROW SECURITY; Schema: public; Owner: -
 --
 
@@ -9478,6 +11207,12 @@ ALTER TABLE public.water_intake_entries ENABLE ROW LEVEL SECURITY;
 --
 
 ALTER TABLE public.weekly_goal_plans ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: workout_feedback; Type: ROW SECURITY; Schema: public; Owner: -
+--
+
+ALTER TABLE public.workout_feedback ENABLE ROW LEVEL SECURITY;
 
 --
 -- Name: workout_plan_assignment_sets; Type: ROW SECURITY; Schema: public; Owner: -
@@ -9565,6 +11300,20 @@ GRANT ALL ON FUNCTION public.check_family_access(p_family_user_id uuid, p_owner_
 
 
 --
+-- Name: FUNCTION cleanup_openfoodfacts_queue_on_opt_out(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.cleanup_openfoodfacts_queue_on_opt_out() TO sparky_app;
+
+
+--
+-- Name: FUNCTION cleanup_openfoodfacts_queue_on_preference_delete(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.cleanup_openfoodfacts_queue_on_preference_delete() TO sparky_app;
+
+
+--
 -- Name: FUNCTION clear_old_chat_history(); Type: ACL; Schema: public; Owner: -
 --
 
@@ -9642,6 +11391,13 @@ GRANT ALL ON FUNCTION public.create_shared_owner_policy(table_name text, id_colu
 
 
 --
+-- Name: FUNCTION create_symptom_policy(table_name text); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.create_symptom_policy(table_name text) TO sparky_app;
+
+
+--
 -- Name: FUNCTION create_user_centric_policy(table_name text); Type: ACL; Schema: public; Owner: -
 --
 
@@ -9660,6 +11416,13 @@ GRANT ALL ON FUNCTION public.create_user_preferences() TO sparky_app;
 --
 
 GRANT ALL ON FUNCTION public.current_user_id() TO sparky_app;
+
+
+--
+-- Name: FUNCTION eligible_openfoodfacts_foods(target_food_ids uuid[], target_user_id uuid); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.eligible_openfoodfacts_foods(target_food_ids uuid[], target_user_id uuid) TO sparky_app;
 
 
 --
@@ -9775,6 +11538,20 @@ GRANT ALL ON FUNCTION public.has_profile_read_access(owner_uuid uuid) TO sparky_
 
 
 --
+-- Name: FUNCTION has_symptom_access(owner_uuid uuid); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.has_symptom_access(owner_uuid uuid) TO sparky_app;
+
+
+--
+-- Name: FUNCTION has_symptom_read_access(owner_uuid uuid); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.has_symptom_read_access(owner_uuid uuid) TO sparky_app;
+
+
+--
 -- Name: FUNCTION is_admin(); Type: ACL; Schema: public; Owner: -
 --
 
@@ -9786,6 +11563,48 @@ GRANT ALL ON FUNCTION public.is_admin() TO sparky_app;
 --
 
 GRANT ALL ON FUNCTION public.manage_goal_timeline(p_user_id uuid, p_start_date date, p_calories numeric, p_protein numeric, p_carbs numeric, p_fat numeric, p_water_goal integer, p_saturated_fat numeric, p_polyunsaturated_fat numeric, p_monounsaturated_fat numeric, p_trans_fat numeric, p_cholesterol numeric, p_sodium numeric, p_potassium numeric, p_dietary_fiber numeric, p_sugars numeric, p_vitamin_a numeric, p_vitamin_c numeric, p_calcium numeric, p_iron numeric) TO sparky_app;
+
+
+--
+-- Name: FUNCTION normalize_openfoodfacts_gtin(raw_code text); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.normalize_openfoodfacts_gtin(raw_code text) TO sparky_app;
+
+
+--
+-- Name: FUNCTION queue_openfoodfacts_food_updates(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.queue_openfoodfacts_food_updates() TO sparky_app;
+
+
+--
+-- Name: FUNCTION queue_openfoodfacts_variant_deletes(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.queue_openfoodfacts_variant_deletes() TO sparky_app;
+
+
+--
+-- Name: FUNCTION queue_openfoodfacts_variant_inserts(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.queue_openfoodfacts_variant_inserts() TO sparky_app;
+
+
+--
+-- Name: FUNCTION queue_openfoodfacts_variant_updates(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.queue_openfoodfacts_variant_updates() TO sparky_app;
+
+
+--
+-- Name: FUNCTION refresh_openfoodfacts_sync_queue(changed_food_ids uuid[]); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.refresh_openfoodfacts_sync_queue(changed_food_ids uuid[]) TO sparky_app;
 
 
 --
@@ -9810,6 +11629,27 @@ GRANT ALL ON FUNCTION public.set_first_user_as_admin() TO sparky_app;
 
 
 --
+-- Name: FUNCTION set_openfoodfacts_backfill_on_global_enable(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.set_openfoodfacts_backfill_on_global_enable() TO sparky_app;
+
+
+--
+-- Name: FUNCTION set_openfoodfacts_backfill_on_preference_insert(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.set_openfoodfacts_backfill_on_preference_insert() TO sparky_app;
+
+
+--
+-- Name: FUNCTION set_openfoodfacts_backfill_on_preference_update(); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.set_openfoodfacts_backfill_on_preference_update() TO sparky_app;
+
+
+--
 -- Name: FUNCTION set_updated_at_timestamp(); Type: ACL; Schema: public; Owner: -
 --
 
@@ -9828,6 +11668,13 @@ GRANT ALL ON FUNCTION public.set_user_id(user_id uuid) TO sparky_app;
 --
 
 GRANT ALL ON FUNCTION public.sf_try_numeric(txt text) TO sparky_app;
+
+
+--
+-- Name: FUNCTION sf_volume_unit_to_ml(unit text); Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON FUNCTION public.sf_volume_unit_to_ml(unit text) TO sparky_app;
 
 
 --
@@ -10279,6 +12126,27 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.onboarding_status TO sparky_ap
 
 
 --
+-- Name: TABLE openfoodfacts_product_read_rate_limit; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.openfoodfacts_product_read_rate_limit TO sparky_app;
+
+
+--
+-- Name: SEQUENCE openfoodfacts_sync_revision_seq; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,USAGE ON SEQUENCE public.openfoodfacts_sync_revision_seq TO sparky_app;
+
+
+--
+-- Name: TABLE openfoodfacts_sync_queue; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.openfoodfacts_sync_queue TO sparky_app;
+
+
+--
 -- Name: TABLE passkey; Type: ACL; Schema: public; Owner: -
 --
 
@@ -10335,6 +12203,13 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.profiles TO sparky_app;
 
 
 --
+-- Name: TABLE rate_limit; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.rate_limit TO sparky_app;
+
+
+--
 -- Name: TABLE session; Type: ACL; Schema: public; Owner: -
 --
 
@@ -10384,6 +12259,27 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.symptom_entries TO sparky_app;
 
 
 --
+-- Name: TABLE symptom_entry_photos; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.symptom_entry_photos TO sparky_app;
+
+
+--
+-- Name: TABLE symptom_entry_treatments; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.symptom_entry_treatments TO sparky_app;
+
+
+--
+-- Name: TABLE symptom_free_days; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.symptom_free_days TO sparky_app;
+
+
+--
 -- Name: TABLE two_factor; Type: ACL; Schema: public; Owner: -
 --
 
@@ -10419,13 +12315,6 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.user_custom_nutrients TO spark
 
 
 --
--- Name: TABLE user_custom_symptom_locations; Type: ACL; Schema: public; Owner: -
---
-
-GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.user_custom_symptom_locations TO sparky_app;
-
-
---
 -- Name: TABLE user_custom_symptoms; Type: ACL; Schema: public; Owner: -
 --
 
@@ -10444,6 +12333,13 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.user_cycle_display_preferences
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.user_dashboard_layouts TO sparky_app;
+
+
+--
+-- Name: TABLE user_fasting_preferences; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.user_fasting_preferences TO sparky_app;
 
 
 --
@@ -10524,6 +12420,13 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.user_preferences TO sparky_app
 
 
 --
+-- Name: TABLE user_symptom_options; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.user_symptom_options TO sparky_app;
+
+
+--
 -- Name: TABLE user_water_containers; Type: ACL; Schema: public; Owner: -
 --
 
@@ -10584,6 +12487,13 @@ GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.water_intake_entries TO sparky
 --
 
 GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.weekly_goal_plans TO sparky_app;
+
+
+--
+-- Name: TABLE workout_feedback; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT SELECT,INSERT,DELETE,UPDATE ON TABLE public.workout_feedback TO sparky_app;
 
 
 --

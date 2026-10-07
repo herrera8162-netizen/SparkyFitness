@@ -1,7 +1,11 @@
 import { renderHook, waitFor, act } from '@testing-library/react-native';
 import { useCopyFoodEntries } from '../../src/hooks/useCopyFoodEntries';
 import { copyFoodEntries } from '../../src/services/api/foodEntriesApi';
-import { createTestQueryClient, createQueryWrapper, type QueryClient } from './queryTestUtils';
+import {
+  createTestQueryClient,
+  createQueryWrapper,
+  type QueryClient,
+} from './queryTestUtils';
 
 jest.mock('../../src/services/api/foodEntriesApi', () => ({
   copyFoodEntries: jest.fn(),
@@ -11,7 +15,9 @@ jest.mock('react-native-toast-message', () => ({
   show: jest.fn(),
 }));
 
-const mockCopyFoodEntries = copyFoodEntries as jest.MockedFunction<typeof copyFoodEntries>;
+const mockCopyFoodEntries = copyFoodEntries as jest.MockedFunction<
+  typeof copyFoodEntries
+>;
 
 const payload = {
   sourceDate: '2026-05-15',
@@ -32,7 +38,7 @@ describe('useCopyFoodEntries', () => {
     queryClient.clear();
   });
 
-  test('invalidates the target day summary after a successful copy', async () => {
+  test('invalidates the target day summary and caffeine kinetics after a successful copy', async () => {
     const invalidateSpy = jest.spyOn(queryClient, 'invalidateQueries');
     mockCopyFoodEntries.mockResolvedValue(undefined);
 
@@ -47,6 +53,11 @@ describe('useCopyFoodEntries', () => {
     await waitFor(() => {
       expect(invalidateSpy).toHaveBeenCalledWith({
         queryKey: ['dailySummary', '2026-05-16'],
+        refetchType: 'all',
+      });
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: ['caffeineActive', '2026-05-16'],
+        refetchType: 'all',
       });
     });
 

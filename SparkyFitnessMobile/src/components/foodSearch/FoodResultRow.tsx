@@ -14,12 +14,26 @@ import { useOpenLightbox } from '../LightboxProvider';
 import type { FoodInfoItem } from '../../types/foodInfo';
 import type { FoodItem, TopFoodItem } from '../../types/foods';
 
+/**
+ * Multi-select affordance for the food-search landing lists (#1980). When
+ * present, the row toggles basket selection instead of navigating, and shows
+ * a leading checkbox glyph. Colors come from the caller (which owns the
+ * theme's CSS variables) because this row keeps to className styling.
+ */
+export interface FoodRowSelection {
+  isSelected: boolean;
+  onToggle: () => void;
+  accentColor: string;
+  inactiveColor: string;
+}
+
 interface FoodResultRowProps {
   item: FoodItem | TopFoodItem;
   profileId?: string;
   isFavorite: boolean;
   favoriteGold: string;
   onSelect: (item: FoodInfoItem) => void;
+  selection?: FoodRowSelection;
 }
 
 const FoodResultRow: React.FC<FoodResultRowProps> = ({
@@ -28,9 +42,14 @@ const FoodResultRow: React.FC<FoodResultRowProps> = ({
   isFavorite,
   favoriteGold,
   onSelect,
+  selection,
 }) => {
   const { t } = useTranslation();
-  const status = deriveShareStatus(item.user_id, item.shared_with_public, profileId);
+  const status = deriveShareStatus(
+    item.user_id,
+    item.shared_with_public,
+    profileId
+  );
   const getImageSource = useFoodImageSourceContext();
   const openLightbox = useOpenLightbox();
   const images = usableFoodImages(item.images);
@@ -54,14 +73,47 @@ const FoodResultRow: React.FC<FoodResultRowProps> = ({
       <TouchableOpacity
         className="flex-1 flex-row justify-between items-center pr-4 py-2"
         activeOpacity={0.7}
-        onPress={() => onSelect(foodItemToFoodInfo(item))}
+        accessibilityRole={selection ? 'checkbox' : undefined}
+        accessibilityState={
+          selection ? { checked: selection.isSelected } : undefined
+        }
+        accessibilityLabel={
+          selection
+            ? t('foodSearch.multiSelect.foodCheckbox', {
+                defaultValue: 'Select {{name}}',
+                name: item.name,
+              })
+            : undefined
+        }
+        onPress={() =>
+          selection ? selection.onToggle() : onSelect(foodItemToFoodInfo(item))
+        }
       >
+        {selection ? (
+          <View className="ml-3">
+            <Icon
+              name={
+                selection.isSelected
+                  ? 'checkmark-circle-filled'
+                  : 'checkmark-circle'
+              }
+              size={22}
+              color={
+                selection.isSelected
+                  ? selection.accentColor
+                  : selection.inactiveColor
+              }
+            />
+          </View>
+        ) : null}
         <View className="flex-1 mx-3">
           <View className="flex-row items-start gap-1">
             <Text className="text-text-primary text-base font-medium flex-shrink">
               {item.name}
             </Text>
-            {item.provider_verified ? <VerifiedBadge size="sm" style={{ marginTop: 2 }} /> : null}
+            {item.provider_verified ? (
+              <VerifiedBadge size="sm" style={{ marginTop: 2 }} />
+            ) : null}
             <ShareStatusBadge status={status} style={{ marginTop: 3 }} />
             {isFavorite && (
               <Icon
@@ -69,21 +121,29 @@ const FoodResultRow: React.FC<FoodResultRowProps> = ({
                 size={16}
                 color={favoriteGold}
                 style={{ marginTop: 3 }}
-                accessibilityLabel={t('foodSearch.accessibility.favorite', { defaultValue: 'Favorite' })}
+                accessibilityLabel={t('foodSearch.accessibility.favorite', {
+                  defaultValue: 'Favorite',
+                })}
               />
             )}
           </View>
           {item.brand ? (
-            <Text className="text-text-secondary text-sm mt-0.5">{item.brand}</Text>
+            <Text className="text-text-secondary text-sm mt-0.5">
+              {item.brand}
+            </Text>
           ) : null}
         </View>
         <View className="items-end">
           <Text className="text-text-primary text-base font-semibold">
-            {item.default_variant.calories} {t('foodSearch.labels.caloriesUnit', { defaultValue: 'cal' })}
+            {Math.round(item.default_variant.calories)}{' '}
+            {t('foodSearch.labels.caloriesUnit', { defaultValue: 'cal' })}
           </Text>
           <Text className="text-text-secondary text-xs">
-{/* i18n-audit-ignore-next-line hardcoded-ui-text -- quantity and unit are literal data values. */}
-            <>{item.default_variant.serving_size} {formatServingUnit(item.default_variant.serving_unit)}</>
+            {/* i18n-audit-ignore-next-line hardcoded-ui-text -- quantity and unit are literal data values. */}
+            <>
+              {item.default_variant.serving_size}{' '}
+              {formatServingUnit(item.default_variant.serving_unit)}
+            </>
           </Text>
         </View>
       </TouchableOpacity>

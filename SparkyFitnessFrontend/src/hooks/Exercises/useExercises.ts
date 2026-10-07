@@ -10,7 +10,6 @@ import {
   assetKeys,
   exerciseEntryKeys,
   exerciseKeys,
-  suggestedExercisesKeys,
 } from '@/api/keys/exercises';
 import {
   loadExercises,
@@ -24,9 +23,10 @@ import {
   importExerciseHistory,
   importFitFiles,
   getExerciseById,
-  getSuggestedExercises,
   getBodyMapSvg,
+  BODY_MAP_SVG_VERSION,
 } from '@/api/Exercises/exerciseService';
+import type { BodyFigure } from '@workspace/shared';
 import i18n from '@/i18n';
 import {
   getActivityDetails,
@@ -35,8 +35,10 @@ import {
   getGroupedWorkoutSession,
 } from '@/api/Exercises/exerciseEntryService';
 import { ExerciseOwnershipFilter } from '@/types/exercises';
+import type { ExerciseDeleteMode } from '@/types/exercises';
 import { getComparisonDates } from '@/utils/reportUtil';
 import { useMemo } from 'react';
+import { useExerciseInvalidation } from '../useInvalidateKeys';
 
 // --- Queries ---
 
@@ -93,15 +95,13 @@ export const exerciseDeletionImpactOptions = (exerciseId: string | null) => ({
 // --- Mutations ---
 
 export const useCreateExerciseMutation = () => {
-  const queryClient = useQueryClient();
+  const invalidateExercise = useExerciseInvalidation();
   const { t } = useTranslation();
 
   return useMutation({
     mutationFn: (payload: FormData) => createExercise(payload),
     onSuccess: () => {
-      return queryClient.invalidateQueries({
-        queryKey: exerciseKeys.lists(),
-      });
+      invalidateExercise();
     },
     meta: {
       successMessage: t('common.success', 'Success'),
@@ -112,13 +112,14 @@ export const useCreateExerciseMutation = () => {
 
 export const useUpdateExerciseMutation = () => {
   const queryClient = useQueryClient();
+  const invalidateExercise = useExerciseInvalidation();
   const { t } = useTranslation();
 
   return useMutation({
     mutationFn: ({ id, payload }: { id: string; payload: FormData }) =>
       updateExercise(id, payload),
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: exerciseKeys.lists() });
+      invalidateExercise();
       queryClient.invalidateQueries({
         queryKey: exerciseKeys.detail(variables.id),
       });
@@ -137,21 +138,21 @@ export const useUpdateExerciseMutation = () => {
 };
 
 export const useDeleteExerciseMutation = () => {
-  const queryClient = useQueryClient();
+  const invalidateExercise = useExerciseInvalidation();
   const { t } = useTranslation();
 
   return useMutation({
     mutationFn: ({
       id,
-      forceDelete = false,
+      mode = 'delete',
+      clientDate,
     }: {
       id: string;
-      forceDelete?: boolean;
-    }) => deleteExercise(id, forceDelete),
+      mode?: ExerciseDeleteMode;
+      clientDate?: string;
+    }) => deleteExercise(id, mode, clientDate),
     onSuccess: () => {
-      return queryClient.invalidateQueries({
-        queryKey: exerciseKeys.lists(),
-      });
+      invalidateExercise();
     },
     meta: {
       errorMessage: t(
@@ -177,6 +178,7 @@ export const useDeleteExerciseMutation = () => {
 
 export const useUpdateExerciseShareStatusMutation = () => {
   const queryClient = useQueryClient();
+  const invalidateExercise = useExerciseInvalidation();
   const { t } = useTranslation();
 
   return useMutation({
@@ -188,7 +190,7 @@ export const useUpdateExerciseShareStatusMutation = () => {
       sharedWithPublic: boolean;
     }) => updateExerciseShareStatus(id, sharedWithPublic),
     onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({ queryKey: exerciseKeys.lists() });
+      invalidateExercise();
       queryClient.invalidateQueries({
         queryKey: exerciseKeys.detail(variables.id),
       });
@@ -295,22 +297,6 @@ export const exerciseByIdOptions = (id: string) => ({
     ),
   },
 });
-export const useSuggestedExercises = (limit: number) => {
-  const { t } = useTranslation();
-
-  return useQuery({
-    queryKey: suggestedExercisesKeys.byLimit(limit),
-    queryFn: () => getSuggestedExercises(limit),
-    enabled: limit > 0,
-    meta: {
-      errorMessage: t(
-        'exercise.failedToFetchSuggested',
-        'Could not load suggested exercises.'
-      ),
-    },
-  });
-};
-
 export const exerciseProgressOptions = (
   exerciseId: string,
   startDate: string,
@@ -353,10 +339,10 @@ export const useActivityDetailsQuery = (
   return useQuery(activityDetailsOptions(exerciseEntryId, providerName));
 };
 
-export const useBodyMapSvgQuery = () => {
+export const useBodyMapSvgQuery = (figure: BodyFigure = 'male') => {
   return useQuery({
-    queryKey: assetKeys.svg('muscle-male'),
-    queryFn: getBodyMapSvg,
+    queryKey: assetKeys.svg(`muscle-${figure}-${BODY_MAP_SVG_VERSION[figure]}`),
+    queryFn: () => getBodyMapSvg(figure),
     staleTime: Infinity,
     meta: {
       errorMessage: 'Error fetching body map SVG',

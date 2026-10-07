@@ -12,13 +12,15 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { getMoodDisplay } from '@/utils/moodUtils';
-import { BUILT_IN_MOODS } from '@workspace/shared';
+import { moodByName } from '@workspace/shared';
 import type { MoodEntry } from '@/types';
 import { useTranslation } from 'react-i18next';
 import { usePreferences } from '@/contexts/PreferencesContext';
+import { getTimeXAxisProps, prepareTimeChartData } from '@/utils/chartUtils';
 
+/** A built-in mood as "<emoji> <name>", or the raw tag for a user's own mood. */
 function moodTagLabel(tag: string): string {
-  const def = BUILT_IN_MOODS.find((m) => m.name === tag);
+  const def = moodByName(tag);
   return def ? `${def.emoji} ${def.displayName}` : tag;
 }
 
@@ -39,19 +41,26 @@ interface FormattedMoodEntry {
 
 const MoodChart = ({ data, title }: MoodChartProps) => {
   const { t } = useTranslation();
-  const { formatDateInUserTimezone } = usePreferences();
+  const { formatDateInUserTimezone, chartScaleMode } = usePreferences();
   const [isMounted, setIsMounted] = React.useState(false);
 
   React.useEffect(() => {
     setIsMounted(true);
   }, []);
 
-  const formattedData = data.map((entry) => ({
-    date: entry.entry_date,
-    moodValue: entry.mood_value,
-    moodDisplay: getMoodDisplay(entry.mood_value), // Get both emoji and label
-    notes: entry.notes,
-  }));
+  const formattedData = React.useMemo(
+    () =>
+      prepareTimeChartData(
+        data.map((entry) => ({
+          date: entry.entry_date,
+          moodValue: entry.mood_value,
+          moodDisplay: getMoodDisplay(entry.mood_value), // Get both emoji and label
+          notes: entry.notes,
+        })),
+        chartScaleMode
+      ),
+    [data, chartScaleMode]
+  );
 
   // Mood-tag frequency across the range (most common moods).
   const tagFrequency = React.useMemo(() => {
@@ -138,11 +147,11 @@ const MoodChart = ({ data, title }: MoodChartProps) => {
               >
                 <CartesianGrid />
                 <XAxis
-                  dataKey="date"
+                  {...getTimeXAxisProps({
+                    chartScaleMode,
+                    formatDate: formatDateInUserTimezone,
+                  })}
                   name={t('mood.date', 'Date')}
-                  tickFormatter={(tickItem) =>
-                    formatDateInUserTimezone(tickItem, 'MMM dd')
-                  }
                 />
                 <YAxis
                   type="number"

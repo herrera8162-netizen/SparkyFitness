@@ -12,6 +12,9 @@ import {
   useSuggestedExercises,
 } from '../../src/hooks';
 import { useExternalExerciseSearch } from '../../src/hooks/useExternalExerciseSearch';
+import { useExerciseAlternatives } from '../../src/hooks/useExerciseAlternatives';
+import type { ExerciseAlternative } from '@workspace/shared';
+import type { ExerciseReplaceContext } from '../../src/utils/exerciseReplace';
 import { useNavigationActionGuard } from '../../src/hooks/useNavigationActionGuard';
 import { importExercise } from '../../src/services/api/externalExerciseSearchApi';
 import {
@@ -28,6 +31,10 @@ jest.mock('../../src/hooks', () => ({
   useProfile: jest.fn(() => ({ profile: undefined, isLoading: false })),
   useServerConnection: jest.fn(),
   useSuggestedExercises: jest.fn(),
+}));
+
+jest.mock('../../src/hooks/useExerciseAlternatives', () => ({
+  useExerciseAlternatives: jest.fn(),
 }));
 
 jest.mock('../../src/hooks/useExternalExerciseSearch', () => ({
@@ -116,9 +123,13 @@ const mockUseExternalProviders = useExternalProviders as jest.MockedFunction<
   typeof useExternalProviders
 >;
 const mockUseExternalExerciseSearch =
-  useExternalExerciseSearch as jest.MockedFunction<typeof useExternalExerciseSearch>;
+  useExternalExerciseSearch as jest.MockedFunction<
+    typeof useExternalExerciseSearch
+  >;
 const mockUseNavigationActionGuard =
-  useNavigationActionGuard as jest.MockedFunction<typeof useNavigationActionGuard>;
+  useNavigationActionGuard as jest.MockedFunction<
+    typeof useNavigationActionGuard
+  >;
 const mockImportExercise = importExercise as jest.MockedFunction<
   typeof importExercise
 >;
@@ -163,19 +174,24 @@ const nutritionixItem: ExternalExerciseItem = {
 
 let queryClient: QueryClient;
 
-const renderScreen = () => {
-  queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const renderScreen = (replaceFor?: ExerciseReplaceContext) => {
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   const route = {
     key: 'ExerciseSearch-key',
     name: 'ExerciseSearch' as const,
-    params: { returnKey: 'workout-form-key' },
+    params: { returnKey: 'workout-form-key', replaceFor },
   };
   return render(
     <QueryClientProvider client={queryClient}>
       <SafeAreaProvider initialMetrics={{ insets, frame }}>
-        <ExerciseSearchScreen navigation={mockNavigation} route={route as any} />
+        <ExerciseSearchScreen
+          navigation={mockNavigation}
+          route={route as any}
+        />
       </SafeAreaProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 };
 
@@ -187,7 +203,10 @@ describe('ExerciseSearchScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     __resetAppPreferencesStoreForTests();
-    mockUseProfile.mockReturnValue({ profile: { id: 'user-1' }, isLoading: false } as any);
+    mockUseProfile.mockReturnValue({
+      profile: { id: 'user-1' },
+      isLoading: false,
+    } as any);
     mockNavigation.isFocused.mockReturnValue(true);
     mockUseServerConnection.mockReturnValue({
       isConnected: true,
@@ -209,9 +228,7 @@ describe('ExerciseSearchScreen', () => {
       isSearchError: false,
     } as any);
     mockUseExternalProviders.mockReturnValue({
-      providers: [
-        { id: 'p1', provider_name: 'Wger', provider_type: 'wger' },
-      ],
+      providers: [{ id: 'p1', provider_name: 'Wger', provider_type: 'wger' }],
       isLoading: false,
       isError: false,
       refetch: jest.fn(),
@@ -246,12 +263,14 @@ describe('ExerciseSearchScreen', () => {
           type: 'SET_PARAMS',
           payload: expect.objectContaining({
             params: expect.objectContaining({
-              selectedExercise: expect.objectContaining({ id: localExercise.id }),
+              selectedExercise: expect.objectContaining({
+                id: localExercise.id,
+              }),
               selectionNonce: expect.any(Number),
             }),
           }),
           source: 'workout-form-key',
-        }),
+        })
       );
       expect(mockNavigation.goBack).toHaveBeenCalled();
     });
@@ -321,13 +340,17 @@ describe('ExerciseSearchScreen', () => {
 
       pressHeaderMenuAction(mockNavigation, 'Mine');
 
-      expect(useAppPreferencesStore.getState().exerciseSearchOwnershipFilter).toBe('mine');
+      expect(
+        useAppPreferencesStore.getState().exerciseSearchOwnershipFilter
+      ).toBe('mine');
       expect(screen.getByText('Bench Press')).toBeTruthy();
       expect(screen.queryByText('Community Squat')).toBeNull();
     });
 
     it('names the filter and offers Show All when it empties the suggestions', () => {
-      useAppPreferencesStore.setState({ exerciseSearchOwnershipFilter: 'public' });
+      useAppPreferencesStore.setState({
+        exerciseSearchOwnershipFilter: 'public',
+      });
 
       const screen = renderScreen();
 
@@ -335,7 +358,9 @@ describe('ExerciseSearchScreen', () => {
 
       fireEvent.press(screen.getByText('Show All'));
 
-      expect(useAppPreferencesStore.getState().exerciseSearchOwnershipFilter).toBe('all');
+      expect(
+        useAppPreferencesStore.getState().exerciseSearchOwnershipFilter
+      ).toBe('all');
       expect(screen.getByText('Bench Press')).toBeTruthy();
     });
   });
@@ -350,7 +375,11 @@ describe('ExerciseSearchScreen', () => {
     });
 
     it('imports and selects on row tap', async () => {
-      const imported = { ...localExercise, id: 'imported-uuid', name: 'Wger Squat' };
+      const imported = {
+        ...localExercise,
+        id: 'imported-uuid',
+        name: 'Wger Squat',
+      };
       mockImportExercise.mockResolvedValue(imported);
       const screen = renderScreen();
       openOnlineTab(screen);
@@ -363,12 +392,14 @@ describe('ExerciseSearchScreen', () => {
             type: 'SET_PARAMS',
             payload: expect.objectContaining({
               params: expect.objectContaining({
-                selectedExercise: expect.objectContaining({ id: 'imported-uuid' }),
+                selectedExercise: expect.objectContaining({
+                  id: 'imported-uuid',
+                }),
               }),
             }),
             source: 'workout-form-key',
-          }),
-        ),
+          })
+        )
       );
       expect(mockImportExercise).toHaveBeenCalledWith('wger', '123');
       expect(mockNavigation.goBack).toHaveBeenCalled();
@@ -404,7 +435,11 @@ describe('ExerciseSearchScreen', () => {
       fireEvent.press(screen.getAllByTestId('exercise-thumbnail')[0]);
 
       expect(mockNavigation.navigate).toHaveBeenCalledWith('ExerciseDetail', {
-        item: expect.objectContaining({ id: '123', name: 'Wger Squat', source: 'wger' }),
+        item: expect.objectContaining({
+          id: '123',
+          name: 'Wger Squat',
+          source: 'wger',
+        }),
         hideWorkoutActions: true,
         selectionReturnKey: 'workout-form-key',
       });
@@ -429,7 +464,10 @@ describe('ExerciseSearchScreen', () => {
     it('disables the info buttons while an import is in flight', async () => {
       let resolveImport!: (exercise: Exercise) => void;
       mockImportExercise.mockImplementation(
-        () => new Promise((resolve) => { resolveImport = resolve; }),
+        () =>
+          new Promise((resolve) => {
+            resolveImport = resolve;
+          })
       );
       const screen = renderScreen();
       openOnlineTab(screen);
@@ -447,7 +485,10 @@ describe('ExerciseSearchScreen', () => {
     it('imports only once on a rapid double tap', async () => {
       let resolveImport!: (exercise: Exercise) => void;
       mockImportExercise.mockImplementation(
-        () => new Promise((resolve) => { resolveImport = resolve; }),
+        () =>
+          new Promise((resolve) => {
+            resolveImport = resolve;
+          })
       );
       const screen = renderScreen();
       openOnlineTab(screen);
@@ -463,7 +504,10 @@ describe('ExerciseSearchScreen', () => {
     });
 
     it('does not select or go back when focus is lost during the import', async () => {
-      mockImportExercise.mockResolvedValue({ ...localExercise, id: 'imported-uuid' });
+      mockImportExercise.mockResolvedValue({
+        ...localExercise,
+        id: 'imported-uuid',
+      });
       mockNavigation.isFocused.mockReturnValue(false);
       const invalidateSpy = jest.fn();
       const screen = renderScreen();
@@ -490,17 +534,197 @@ describe('ExerciseSearchScreen', () => {
 
       await waitFor(() =>
         expect(Toast.show).toHaveBeenCalledWith(
-          expect.objectContaining({ type: 'error', text1: 'Failed to add exercise' }),
-        ),
+          expect.objectContaining({
+            type: 'error',
+            text1: 'Failed to add exercise',
+          })
+        )
       );
       expect(mockNavigation.goBack).not.toHaveBeenCalled();
 
       // The in-flight guard must clear on failure, so a retry can succeed.
-      mockImportExercise.mockResolvedValueOnce({ ...localExercise, id: 'imported-uuid' });
+      mockImportExercise.mockResolvedValueOnce({
+        ...localExercise,
+        id: 'imported-uuid',
+      });
       fireEvent.press(screen.getByText('Wger Squat'));
 
       await waitFor(() => expect(mockNavigation.goBack).toHaveBeenCalled());
       expect(mockImportExercise).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('replace mode (Suggested tab)', () => {
+    const mockUseExerciseAlternatives =
+      useExerciseAlternatives as jest.MockedFunction<
+        typeof useExerciseAlternatives
+      >;
+    const replaceFor: ExerciseReplaceContext = {
+      exerciseId: localExercise.id,
+      exerciseName: 'Bench Press',
+      excludeIds: ['other-id'],
+    };
+    const base: Omit<ExerciseAlternative, 'origin' | 'id' | 'name'> = {
+      source: 'custom',
+      category: 'strength',
+      modality: 'weight_reps',
+      level: null,
+      mechanic: null,
+      force: null,
+      equipment: ['dumbbell'],
+      primary_muscles: ['chest'],
+      secondary_muscles: [],
+      images: [],
+      instructions: ['Press.'],
+      description: null,
+      calories_per_hour: 250,
+      score: 70,
+      reasons: ['same_primary_muscles', 'recently_performed'],
+      last_performed_date: '2026-09-20',
+    };
+    const libraryAlt: ExerciseAlternative = {
+      ...base,
+      origin: 'library',
+      id: '22222222-2222-4222-8222-222222222222',
+      name: 'Dumbbell Press',
+    };
+    const catalogAlt: ExerciseAlternative = {
+      ...base,
+      origin: 'catalog',
+      id: 'Cable_Crossover',
+      name: 'Cable Crossover',
+      source: 'free-exercise-db',
+      calories_per_hour: null,
+      reasons: ['same_primary_muscles'],
+      last_performed_date: null,
+    };
+
+    beforeEach(() => {
+      mockUseExerciseAlternatives.mockReturnValue({
+        data: {
+          source: {
+            id: localExercise.id,
+            name: 'Bench Press',
+            primary_muscles: ['chest'],
+            equipment: ['barbell'],
+          },
+          alternatives: [libraryAlt, catalogAlt],
+          rankable: true,
+          catalog_available: true,
+        },
+        isLoading: false,
+        isError: false,
+        refetch: jest.fn(),
+      } as any);
+    });
+
+    it('opens on ranked alternatives with their reasons', () => {
+      const screen = renderScreen(replaceFor);
+
+      expect(screen.getByText('Instead of Bench Press')).toBeTruthy();
+      expect(screen.getByText('Dumbbell Press')).toBeTruthy();
+      expect(screen.getAllByText('Same muscles').length).toBe(2);
+      expect(screen.getByText('Done recently')).toBeTruthy();
+      expect(screen.getByText('New')).toBeTruthy();
+      expect(mockUseExerciseAlternatives).toHaveBeenCalledWith(
+        localExercise.id,
+        'similar',
+        ['other-id']
+      );
+    });
+
+    it('switches to the different-equipment ranking', () => {
+      const screen = renderScreen(replaceFor);
+      fireEvent.press(screen.getByText('Other equipment'));
+      expect(mockUseExerciseAlternatives).toHaveBeenLastCalledWith(
+        localExercise.id,
+        'different_equipment',
+        ['other-id']
+      );
+    });
+
+    it('selects a library alternative with its calories and instructions', () => {
+      const screen = renderScreen(replaceFor);
+      fireEvent.press(screen.getByTestId(`alternative-${libraryAlt.id}`));
+      expect(mockNavigation.dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            params: expect.objectContaining({
+              selectedExercise: expect.objectContaining({
+                id: libraryAlt.id,
+                calories_per_hour: 250,
+                instructions: ['Press.'],
+              }),
+            }),
+          }),
+        })
+      );
+      expect(mockNavigation.goBack).toHaveBeenCalled();
+    });
+
+    it('imports a catalog alternative before selecting it', async () => {
+      mockImportExercise.mockResolvedValue({
+        ...localExercise,
+        id: 'imported-id',
+        name: 'Cable Crossover',
+      });
+      const screen = renderScreen(replaceFor);
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('alternative-Cable_Crossover'));
+      });
+      expect(mockImportExercise).toHaveBeenCalledWith(
+        'free-exercise-db',
+        'Cable_Crossover'
+      );
+      await waitFor(() =>
+        expect(mockNavigation.dispatch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            payload: expect.objectContaining({
+              params: expect.objectContaining({
+                selectedExercise: expect.objectContaining({
+                  id: 'imported-id',
+                }),
+              }),
+            }),
+          })
+        )
+      );
+    });
+
+    it('keeps free search one tap away', () => {
+      const screen = renderScreen(replaceFor);
+      fireEvent.press(screen.getByText('Search all exercises'));
+      expect(screen.getByText('Bench Press')).toBeTruthy();
+      expect(screen.getByPlaceholderText('Search exercises...')).toBeTruthy();
+    });
+
+    it('explains when the exercise has no muscles to rank against', () => {
+      mockUseExerciseAlternatives.mockReturnValue({
+        data: {
+          source: {
+            id: localExercise.id,
+            name: 'Bench Press',
+            primary_muscles: [],
+            equipment: [],
+          },
+          alternatives: [],
+          rankable: false,
+          catalog_available: true,
+        },
+        isLoading: false,
+        isError: false,
+        refetch: jest.fn(),
+      } as any);
+      const screen = renderScreen(replaceFor);
+      expect(
+        screen.getByText('No muscles recorded for Bench Press')
+      ).toBeTruthy();
+    });
+
+    it('shows no Suggested tab when adding rather than replacing', () => {
+      const screen = renderScreen();
+      expect(screen.queryByText('Suggested')).toBeNull();
+      expect(mockUseExerciseAlternatives).not.toHaveBeenCalled();
     });
   });
 });

@@ -6,17 +6,19 @@ import format from 'pg-format';
 import { log } from '../config/logging.js';
 import exerciseRepository from './exercise.js';
 import activityDetailsRepository from './activityDetailsRepository.js';
+import * as workoutTelemetryRepository from './workoutTelemetryRepository.js';
+import { bodyWeightJoinSql } from '../utils/exerciseLoadSql.js';
+import { assertSetWeightSign } from '../utils/setWeightSign.js';
+/**
+ * Updates a daily calorie import, retaining entries created against shared exercises.
+ * A matching exercise takes precedence; legacy matches require the same source.
+ */
 async function upsertExerciseEntryData(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  userId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  createdByUserId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  exerciseId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  caloriesBurned: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  date: any,
+  userId: string,
+  createdByUserId: string,
+  exerciseId: string,
+  caloriesBurned: number,
+  date: string,
   source = 'Health Data'
 ) {
   log('info', 'upsertExerciseEntryData received date parameter:', date);
@@ -48,8 +50,15 @@ async function upsertExerciseEntryData(
       );
     }
     const result = await client.query(
-      'SELECT id, calories_burned FROM exercise_entries WHERE user_id = $1 AND exercise_id = $2 AND entry_date = $3',
-      [userId, exerciseId, date]
+      `SELECT id, calories_burned FROM exercise_entries
+       WHERE user_id = $1 AND entry_date = $3
+         AND (exercise_id = $2 OR (
+           $4 = 'Active Calories' AND exercise_name = $4 AND source = $5
+           AND duration_minutes = 0 AND exercise_preset_entry_id IS NULL
+           AND source_id IS NULL
+         ))
+       ORDER BY (exercise_id = $2) DESC, created_at, id LIMIT 1`,
+      [userId, exerciseId, date, exerciseName, sourceValue]
     );
     existingEntry = result.rows[0];
   } catch (error) {
@@ -75,7 +84,7 @@ async function upsertExerciseEntryData(
     const updateClient = await getClient(userId);
     try {
       const updateResult = await updateClient.query(
-        'UPDATE exercise_entries SET calories_burned = $1, notes = $2, updated_by_user_id = $3, exercise_name = $4, source = $5, updated_at = now() WHERE id = $6 RETURNING *',
+        'UPDATE exercise_entries SET calories_burned = $1, notes = $2, updated_by_user_id = $3, exercise_name = $4, source = $5, exercise_id = $7, updated_at = now() WHERE id = $6 RETURNING *',
         [
           caloriesBurned,
           `Active calories logged from ${sourceLabel} (updated).`,
@@ -83,6 +92,7 @@ async function upsertExerciseEntryData(
           exerciseName,
           sourceValue,
           existingEntry.id,
+          exerciseId,
         ]
       );
       result = updateResult.rows[0];
@@ -139,7 +149,7 @@ async function _getExerciseEntryByIdWithClient(client: any, id: any) {
              COALESCE(
                (SELECT json_agg(set_data ORDER BY set_data.set_number)
                 FROM (
-                  SELECT ees.id, ees.set_number, ees.set_type, ees.reps, ees.weight, ees.duration, ees.rest_time, ees.notes, ees.rpe, to_char(ees.completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS completed_at, ees.is_pr, ees.distance
+                  SELECT ees.id, ees.set_number, ees.set_type, ees.reps, ees.weight, ees.duration, ees.rest_time, ees.notes, ees.rpe, ees.rir, to_char(ees.completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS completed_at, ees.is_pr, ees.distance
                   FROM exercise_entry_sets ees
                   WHERE ees.exercise_entry_id = ee.id
                 ) AS set_data
@@ -343,6 +353,251 @@ async function updateExerciseEntryTelemetryOnly(
   }
 }
 
+/** Partial payload accepted by applyWatchTelemetryAtomically. */
+export interface WatchTelemetryFields {
+  avg_heart_rate?: number | null;
+  max_heart_rate?: number | null;
+  /**
+   * Measured active energy, overriding the duration-and-sets estimate the
+   * server derives when an entry is saved without one.
+   */
+  calories_burned?: number | null;
+  /**
+   * The same measurement, kept in its own column as the durable record of
+   * provenance. `calories_burned` is the figure the diary totals and is
+   * recomputed whenever a session is edited; `active_calories` is a
+   * telemetry column, preserved across those edits, and is what lets the
+   * edit path tell a measurement apart from an estimate.
+   */
+  active_calories?: number | null;
+  /**
+   * Latest sample instant in the series this write came from. Later flushes
+   * of the same workout carry a later (or equal) value; an older in-flight
+   * request with the same max HR / calories must not overwrite avg HR or
+   * zones once a newer snapshot has committed.
+   */
+  watch_telemetry_observed_at?: string | Date | null;
+  /**
+   * Wall-clock minutes the watch spent on this exercise. A later flush must
+   * not replace a longer window with a shorter one. When this measurement
+   * exists it is the exercise's duration: the phone's share of elapsed time
+   * must not sit underneath it, or the exercises add up to more than the
+   * workout lasted.
+   */
+  duration_minutes?: number | null;
+  /** High-water mark of `duration_minutes` reported by the watch. */
+  watch_duration_minutes?: number | null;
+}
+
+/**
+ * Partial update of just avg/max heart rate on an existing exercise entry.
+ * Same "touch nothing else" contract as _updateExerciseEntryTelemetryOnlyWithClient
+ * rather than updateExerciseEntry, which merges the whole row and would need
+ * every other column resupplied. Used to fill in HR captured on a paired
+ * watch after the entry itself was already created by the live-workout
+ * start/reconcile flow.
+ */
+function watchTelemetrySetClause(fields: WatchTelemetryFields): {
+  columns: (keyof WatchTelemetryFields)[];
+  setClause: string;
+} {
+  const columns = (
+    Object.keys(fields) as (keyof WatchTelemetryFields)[]
+  ).filter((column) => fields[column] !== undefined);
+  return {
+    columns,
+    setClause: columns
+      .map((column, index) => `${column} = $${index + 1}`)
+      .join(', '),
+  };
+}
+
+async function _updateExerciseEntryWatchTelemetryWithClient(
+  client: workoutTelemetryRepository.TelemetryDbClient,
+  id: string,
+  userId: string,
+  fields: WatchTelemetryFields
+) {
+  const { columns, setClause } = watchTelemetrySetClause(fields);
+  if (columns.length === 0) return;
+  await client.query(
+    `UPDATE exercise_entries SET ${setClause}, updated_at = now()
+     WHERE id = $${columns.length + 1} AND user_id = $${columns.length + 2}`,
+    [...columns.map((column) => fields[column]), id, userId]
+  );
+}
+
+/**
+ * Drop proposed max-HR / calories that would roll a stored snapshot backwards.
+ * `skipHr` also means the caller must not replace zone rows from that series.
+ */
+function observedAtMs(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const ms =
+    value instanceof Date ? value.getTime() : Date.parse(String(value));
+  return Number.isFinite(ms) ? ms : null;
+}
+
+export function filterStaleWatchTelemetryFields(
+  entry: {
+    max_heart_rate?: unknown;
+    active_calories?: unknown;
+    watch_telemetry_observed_at?: unknown;
+    duration_minutes?: unknown;
+    watch_duration_minutes?: unknown;
+  },
+  fields: WatchTelemetryFields
+): { fields: WatchTelemetryFields; skipHr: boolean } {
+  const next: WatchTelemetryFields = { ...fields };
+  const incomingObserved = observedAtMs(next.watch_telemetry_observed_at);
+  const storedObserved = observedAtMs(entry.watch_telemetry_observed_at);
+  const staleSnapshot =
+    incomingObserved !== null &&
+    storedObserved !== null &&
+    incomingObserved <= storedObserved;
+  const storedMax = Number(entry.max_heart_rate);
+  const skipHr =
+    staleSnapshot ||
+    (typeof next.max_heart_rate === 'number' &&
+      entry.max_heart_rate !== null &&
+      entry.max_heart_rate !== undefined &&
+      Number.isFinite(storedMax) &&
+      next.max_heart_rate < storedMax);
+  if (skipHr) {
+    delete next.avg_heart_rate;
+    delete next.max_heart_rate;
+    delete next.watch_telemetry_observed_at;
+  }
+  const storedCalories = Number(entry.active_calories);
+  if (
+    typeof next.active_calories === 'number' &&
+    entry.active_calories !== null &&
+    entry.active_calories !== undefined &&
+    entry.active_calories !== '' &&
+    Number.isFinite(storedCalories) &&
+    next.active_calories < storedCalories
+  ) {
+    delete next.calories_burned;
+    delete next.active_calories;
+  }
+  const proposedDuration = next.duration_minutes;
+  const storedWatchDuration = finiteNonNegative(entry.watch_duration_minutes);
+  if (
+    typeof proposedDuration === 'number' &&
+    Number.isFinite(proposedDuration)
+  ) {
+    const watchHigh =
+      storedWatchDuration === null
+        ? proposedDuration
+        : Math.max(storedWatchDuration, proposedDuration);
+    const measured = Math.round(watchHigh * 100) / 100;
+    next.watch_duration_minutes = measured;
+    next.duration_minutes = measured;
+  }
+  return { fields: next, skipHr };
+}
+
+/** Finite minutes, or null when the column is empty. `''` must not become 0. */
+function finiteNonNegative(raw: unknown): number | null {
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+/**
+ * Duration written by an ordinary entry save. A watch measurement, when one
+ * exists, is this exercise's duration. The phone's share of the workout is
+ * used only when the watch never measured it.
+ */
+export function ordinaryDurationMinutes(
+  proposed: unknown,
+  stored: unknown,
+  watchMeasured: unknown
+): unknown {
+  if (proposed === undefined) return stored;
+  const watchMinutes = finiteNonNegative(watchMeasured);
+  if (watchMinutes !== null) return watchMinutes;
+  return proposed;
+}
+
+export type WatchTelemetryZoneSpec = {
+  zone_index: number;
+  zone_lower_bpm: number;
+  /** null for the open-ended top zone. */
+  zone_upper_bpm: number | null;
+  seconds_in_zone: number;
+};
+
+/**
+ * Lock the entry, reject a stale snapshot against that locked row, then write
+ * scalars and HR zones in the same transaction. Two flushes that both read
+ * the pre-lock snapshot can otherwise both pass and the older one commits last.
+ */
+async function applyWatchTelemetryAtomically(
+  id: string,
+  userId: string,
+  actingUserId: string,
+  proposed: WatchTelemetryFields,
+  zones: WatchTelemetryZoneSpec[] | null
+): Promise<void> {
+  const client = await getClient(userId, actingUserId);
+  try {
+    await client.query('BEGIN');
+    try {
+      const locked = await client.query(
+        'SELECT * FROM exercise_entries WHERE id = $1 AND user_id = $2 FOR UPDATE',
+        [id, userId]
+      );
+      const entry = locked.rows[0] as
+        | {
+            entry_date: string;
+            max_heart_rate?: unknown;
+            active_calories?: unknown;
+            watch_telemetry_observed_at?: unknown;
+          }
+        | undefined;
+      if (!entry) {
+        const error = new Error('Exercise entry not found.');
+        // @ts-expect-error TS(2339): Property 'status' does not exist on type 'Error'.
+        error.status = 404;
+        throw error;
+      }
+      const { fields, skipHr } = filterStaleWatchTelemetryFields(
+        entry,
+        proposed
+      );
+      await _updateExerciseEntryWatchTelemetryWithClient(
+        client,
+        id,
+        userId,
+        fields
+      );
+      if (!skipHr && zones !== null) {
+        await workoutTelemetryRepository._replaceExerciseEntryHrZonesWithClient(
+          client,
+          userId,
+          id,
+          zones.map((zone) => ({
+            user_id: userId,
+            exercise_entry_id: id,
+            entry_date: entry.entry_date,
+            zone_index: zone.zone_index,
+            zone_lower_bpm: zone.zone_lower_bpm,
+            zone_upper_bpm: zone.zone_upper_bpm,
+            seconds_in_zone: zone.seconds_in_zone,
+          }))
+        );
+      }
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    }
+  } finally {
+    if (client && typeof client.release === 'function') client.release();
+  }
+}
+
 async function _updateExerciseEntryWithClient(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   client: any,
@@ -354,8 +609,12 @@ async function _updateExerciseEntryWithClient(
   updateData: any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   updatedByUserId: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  entrySource: any
+  entrySource: string | undefined,
+  // A caller that can recover from a vanished row (the sync path, which just
+  // inserts a replacement) passes returnNullIfMissing and gets null instead of
+  // an exception. Callers acting on a user-chosen entry leave it unset, because
+  // for them a missing row really is an error.
+  options: { returnNullIfMissing?: boolean } = {}
 ) {
   // Fetch existing entry to get current snapshot values if not provided in updateData
   const existingEntryResult = await client.query(
@@ -363,6 +622,9 @@ async function _updateExerciseEntryWithClient(
     [id, userId]
   );
   if (existingEntryResult.rows.length === 0) {
+    if (options.returnNullIfMissing) {
+      return null;
+    }
     throw new Error('Exercise entry not found for update.');
   }
   const currentEntry = existingEntryResult.rows[0];
@@ -375,10 +637,11 @@ async function _updateExerciseEntryWithClient(
       updateData.exercise_id !== undefined
         ? updateData.exercise_id
         : currentEntry.exercise_id,
-    duration_minutes:
-      updateData.duration_minutes !== undefined
-        ? updateData.duration_minutes
-        : currentEntry.duration_minutes,
+    duration_minutes: ordinaryDurationMinutes(
+      updateData.duration_minutes,
+      currentEntry.duration_minutes,
+      currentEntry.watch_duration_minutes
+    ),
     calories_burned:
       updateData.calories_burned !== undefined
         ? updateData.calories_burned
@@ -391,6 +654,10 @@ async function _updateExerciseEntryWithClient(
       updateData.entry_time !== undefined
         ? updateData.entry_time
         : currentEntry.entry_time,
+    record_timezone:
+      updateData.record_timezone !== undefined
+        ? updateData.record_timezone
+        : currentEntry.record_timezone,
     notes:
       updateData.notes !== undefined ? updateData.notes : currentEntry.notes,
     workout_plan_assignment_id:
@@ -477,14 +744,23 @@ async function _updateExerciseEntryWithClient(
         ? updateData[column]
         : currentEntry[column];
   }
+  // Resolved again in the UPDATE against the row's own
+  // watch_duration_minutes: telemetry can commit the measurement between the
+  // read above and this write. When that column is set it is the duration,
+  // not a floor under the phone's share of the workout. A null proposal with
+  // no measurement leaves the column null.
   const telemetryParams = telemetryValuesFrom(mergedData);
   const telemetrySetClause = EXERCISE_ENTRY_TELEMETRY_COLUMNS.map(
     (column, index) => `${column} = $${32 + index}`
   ).join(',\n      ');
-  await client.query(
+  const updateResult = await client.query(
     `UPDATE exercise_entries SET
       exercise_id = $1,
-      duration_minutes = $2,
+      duration_minutes = CASE
+        WHEN watch_duration_minutes IS NOT NULL
+          THEN watch_duration_minutes
+        ELSE $2::numeric
+      END,
       calories_burned = $3,
       entry_date = $4,
       notes = $5,
@@ -513,6 +789,7 @@ async function _updateExerciseEntryWithClient(
       entry_time = $30,
       modality = $31,
       ${telemetrySetClause},
+      record_timezone = $${32 + EXERCISE_ENTRY_TELEMETRY_COLUMNS.length},
       updated_at = now()
     WHERE id = $28 AND user_id = $29
     RETURNING id`,
@@ -549,8 +826,23 @@ async function _updateExerciseEntryWithClient(
       mergedData.entry_time ?? null,
       mergedData.modality ?? null,
       ...telemetryParams,
+      mergedData.record_timezone ?? null,
     ]
   );
+  // The row can be deleted by a competing writer between the existence check
+  // above and this UPDATE: a successful UPDATE would hold a row lock until
+  // commit, so the only interleaving that reaches here with no row is one where
+  // the delete committed first. Left unchecked the UPDATE affects zero rows
+  // without erroring, and the child writes below then run against an id that no
+  // longer exists. Because the sets and activity-detail RLS policies resolve
+  // their parent through an EXISTS subquery, that surfaces as a row-level
+  // security violation rather than the foreign-key error it really is.
+  if (updateResult.rowCount === 0) {
+    if (options.returnNullIfMissing) {
+      return null;
+    }
+    throw new Error('Exercise entry not found for update.');
+  }
   // Handle sets update
   if (updateData.sets !== undefined) {
     // Only modify sets if they are explicitly provided
@@ -559,6 +851,7 @@ async function _updateExerciseEntryWithClient(
       [id]
     );
     if (Array.isArray(updateData.sets) && updateData.sets.length > 0) {
+      assertSetWeightSign(updateData.sets, mergedData.modality);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const setsValues = updateData.sets.map((set: any) => [
         id,
@@ -570,12 +863,13 @@ async function _updateExerciseEntryWithClient(
         set.rest_time,
         set.notes,
         set.rpe,
+        set.rir ?? null,
         set.completed_at ?? null,
         set.is_pr ?? false,
         set.distance ?? null,
       ]);
       const setsQuery = format(
-        'INSERT INTO exercise_entry_sets (exercise_entry_id, set_number, set_type, reps, weight, duration, rest_time, notes, rpe, completed_at, is_pr, distance) VALUES %L',
+        'INSERT INTO exercise_entry_sets (exercise_entry_id, set_number, set_type, reps, weight, duration, rest_time, notes, rpe, rir, completed_at, is_pr, distance) VALUES %L',
         setsValues
       );
       await client.query(setsQuery);
@@ -583,6 +877,26 @@ async function _updateExerciseEntryWithClient(
   }
   return _getExerciseEntryByIdWithClient(client, id);
 }
+// _updateExerciseEntryWithClient hands back the whole entry row, but the create
+// path below only needs the identity of the row it touched: the full entry is
+// re-read through _getExerciseEntryByIdWithClient before being returned.
+interface MatchedExerciseEntry {
+  id: string;
+}
+
+/**
+ * Serializes destructive range deletes and deduplicating writes for one
+ * user's provider source until the surrounding transaction ends.
+ */
+async function acquireExerciseEntrySyncLockWithClient(
+  client: PoolClient,
+  userId: string,
+  entrySource: string
+): Promise<void> {
+  const key = `exercise-entry-sync:${userId}:${entrySource}`;
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
+}
+
 async function _createExerciseEntryWithClient(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   client: any,
@@ -603,63 +917,109 @@ async function _createExerciseEntryWithClient(
     // Callers that must always insert (e.g. the chatbot, where logging the
     // same exercise twice in a day means two workouts) pass skipDuplicateCheck.
     const syncDuplicateCheck = entryData.source_id ? true : false;
+    if (syncDuplicateCheck) {
+      await acquireExerciseEntrySyncLockWithClient(client, userId, entrySource);
+    }
     const skipManualDuplicateCheck = [
       'HealthKit',
       'Health Connect',
       'Fitbit',
       'Strava',
+      'coros_mcp',
     ].includes(entrySource);
-    let existingEntryResult;
-    // 1. Attempt precise sync deduplication via source_id if available
-    if (syncDuplicateCheck) {
-      existingEntryResult = await client.query(
-        'SELECT id FROM exercise_entries WHERE user_id = $1 AND source = $2 AND source_id = $3',
-        [userId, entrySource, entryData.source_id]
-      );
-    }
-    // 2. If no source_id match and NOT a sync source, fall back to "Manual" deduplication (name/date).
-    // Skip this fallback when source_id was provided: a source_id miss means it's a genuinely new
-    // activity (different activityId), so we must INSERT rather than match on exercise_id + date.
-    if (
-      !existingEntryResult?.rows?.length &&
-      !exercisePresetEntryId &&
-      !skipManualDuplicateCheck &&
-      !syncDuplicateCheck &&
-      !options.skipDuplicateCheck
-    ) {
-      if (entryData.workout_plan_assignment_id) {
-        // If it's linked to a workout plan assignment, it's unique by that assignment ID and date.
+    // Both deduplication lookups live behind one function so that the update
+    // path can re-run exactly the lookup that produced its match. Returns the
+    // id of the matched entry, or null when this is a genuinely new one.
+    const findExistingEntryId = async (): Promise<string | null> => {
+      let existingEntryResult;
+      // 1. Attempt precise sync deduplication via source_id if available
+      if (syncDuplicateCheck) {
         existingEntryResult = await client.query(
-          'SELECT id FROM exercise_entries WHERE user_id = $1 AND workout_plan_assignment_id = $2 AND entry_date = $3',
-          [userId, entryData.workout_plan_assignment_id, entryData.entry_date]
-        );
-      } else {
-        // For manual entries (no assignment), keep traditional uniqueness check by exercise_id and date.
-        // We explicitly ensure workout_plan_assignment_id is NULL to avoid matching template-generated entries.
-        existingEntryResult = await client.query(
-          'SELECT id FROM exercise_entries WHERE user_id = $1 AND exercise_id = $2 AND entry_date = $3 AND source = $4 AND exercise_preset_entry_id IS NULL AND workout_plan_assignment_id IS NULL',
-          [userId, entryData.exercise_id, entryData.entry_date, entrySource]
+          'SELECT id FROM exercise_entries WHERE user_id = $1 AND source = $2 AND source_id = $3',
+          [userId, entrySource, entryData.source_id]
         );
       }
-    }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let newEntryId: any;
+      // 2. If no source_id match and NOT a sync source, fall back to "Manual" deduplication (name/date).
+      // Skip this fallback when source_id was provided: a source_id miss means it's a genuinely new
+      // activity (different activityId), so we must INSERT rather than match on exercise_id + date.
+      if (
+        !existingEntryResult?.rows?.length &&
+        !exercisePresetEntryId &&
+        !skipManualDuplicateCheck &&
+        !syncDuplicateCheck &&
+        !options.skipDuplicateCheck
+      ) {
+        if (entryData.workout_plan_assignment_id) {
+          // If it's linked to a workout plan assignment, it's unique by that assignment ID and date.
+          existingEntryResult = await client.query(
+            'SELECT id FROM exercise_entries WHERE user_id = $1 AND workout_plan_assignment_id = $2 AND entry_date = $3',
+            [userId, entryData.workout_plan_assignment_id, entryData.entry_date]
+          );
+        } else {
+          // For manual entries (no assignment), keep traditional uniqueness check by exercise_id and date.
+          // We explicitly ensure workout_plan_assignment_id is NULL to avoid matching template-generated entries.
+          existingEntryResult = await client.query(
+            'SELECT id FROM exercise_entries WHERE user_id = $1 AND exercise_id = $2 AND entry_date = $3 AND source = $4 AND exercise_preset_entry_id IS NULL AND workout_plan_assignment_id IS NULL',
+            [userId, entryData.exercise_id, entryData.entry_date, entrySource]
+          );
+        }
+      }
+      return existingEntryResult?.rows?.[0]?.id ?? null;
+    };
+    let newEntryId: string;
     let operation: 'created' | 'updated';
-    if (existingEntryResult && existingEntryResult.rows.length > 0) {
-      // Entry exists, update it
-      const existingEntryId = existingEntryResult.rows[0].id;
+    // The matched row can be gone by the time we update it. A provider sync
+    // range-deletes by source and day span before re-inserting, so an
+    // overlapping sync of the same source is enough. For delete-then-insert
+    // ingest a vanished parent means "insert", not "fail", so fall through to
+    // the create path below rather than writing children against a dead id.
+    let updatedEntry: MatchedExerciseEntry | null = null;
+    const existingEntryId = await findExistingEntryId();
+    if (existingEntryId) {
       log(
         'info',
         `Existing exercise entry found for user ${userId}, exercise ${entryData.exercise_id}, date ${entryData.entry_date}, source ${entrySource}. Updating entry ${existingEntryId}.`
       );
-      const updatedEntry = await _updateExerciseEntryWithClient(
+      updatedEntry = await _updateExerciseEntryWithClient(
         client,
         existingEntryId,
         userId,
         entryData,
         createdByUserId,
-        entrySource
+        entrySource,
+        { returnNullIfMissing: true }
       );
+      if (!updatedEntry) {
+        // The writer that deleted the row is a delete-then-insert sync, so it
+        // may already have committed its own replacement for the same natural
+        // key. exercise_entries has no unique constraint to catch a duplicate,
+        // so inserting blindly here would store the workout twice. Re-run the
+        // same lookup and update that row instead. Once only: a sync that keeps
+        // racing falls through to the insert rather than spinning, which leaves
+        // a much smaller window than the one this closes.
+        const replacementEntryId = await findExistingEntryId();
+        log(
+          'warn',
+          `Exercise entry ${existingEntryId} was deleted by a concurrent writer before it could be updated (user ${userId}, source ${entrySource}, date ${entryData.entry_date}). ${
+            replacementEntryId
+              ? `Updating the replacement entry ${replacementEntryId} that writer left behind.`
+              : 'Inserting a replacement.'
+          }`
+        );
+        if (replacementEntryId) {
+          updatedEntry = await _updateExerciseEntryWithClient(
+            client,
+            replacementEntryId,
+            userId,
+            entryData,
+            createdByUserId,
+            entrySource,
+            { returnNullIfMissing: true }
+          );
+        }
+      }
+    }
+    if (updatedEntry) {
       newEntryId = updatedEntry.id;
       operation = 'updated';
     } else {
@@ -713,6 +1073,7 @@ async function _createExerciseEntryWithClient(
         entryData.entry_time ?? null,
         snapshot.modality,
         ...telemetryValuesFrom(entryData),
+        entryData.record_timezone ?? null,
       ];
       const hasClientId = entryData.id !== undefined && entryData.id !== null;
       const idColumn = hasClientId ? ', id' : '';
@@ -724,7 +1085,7 @@ async function _createExerciseEntryWithClient(
         'equipment, primary_muscles, secondary_muscles, instructions, images, ' +
         'distance, avg_heart_rate, exercise_preset_entry_id, sort_order, steps, water_estimated, ' +
         'superset_group, entry_time, modality';
-      const allColumns = `${baseColumns}, ${EXERCISE_ENTRY_TELEMETRY_COLUMNS.join(', ')}${idColumn}`;
+      const allColumns = `${baseColumns}, ${EXERCISE_ENTRY_TELEMETRY_COLUMNS.join(', ')}, record_timezone${idColumn}`;
       const placeholders = entryValues
         .map((_, index) => `$${index + 1}`)
         .join(', ');
@@ -735,6 +1096,7 @@ async function _createExerciseEntryWithClient(
       );
       newEntryId = entryResult.rows[0].id;
       if (entryData.sets && entryData.sets.length > 0) {
+        assertSetWeightSign(entryData.sets, snapshot.modality);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const setsValues = entryData.sets.map((set: any) => [
           newEntryId,
@@ -746,12 +1108,13 @@ async function _createExerciseEntryWithClient(
           set.rest_time,
           set.notes,
           set.rpe,
+          set.rir ?? null,
           set.completed_at ?? null,
           set.is_pr ?? false,
           set.distance ?? null,
         ]);
         const setsQuery = format(
-          'INSERT INTO exercise_entry_sets (exercise_entry_id, set_number, set_type, reps, weight, duration, rest_time, notes, rpe, completed_at, is_pr, distance) VALUES %L',
+          'INSERT INTO exercise_entry_sets (exercise_entry_id, set_number, set_type, reps, weight, duration, rest_time, notes, rpe, rir, completed_at, is_pr, distance) VALUES %L',
           setsValues
         );
         await client.query(setsQuery);
@@ -769,6 +1132,20 @@ async function _createExerciseEntryWithClient(
     throw error;
   }
 }
+// The raw provider dump that belongs with the entry being written. A caller
+// that has one passes it here instead of storing it afterwards, so the pair is
+// written in a single transaction: exercise_entry_activity_details resolves its
+// parent through an EXISTS subquery in its RLS policy, so an insert against a
+// parent that is committed but has since been deleted fails as a row-level
+// security violation and the detail is silently lost.
+interface ExerciseEntryActivityDetail {
+  provider_name: string;
+  detail_type: string;
+  // Either the object itself or its JSON text; the repository normalises both.
+  detail_data: unknown;
+  created_by_user_id: string;
+  updated_by_user_id: string;
+}
 async function createExerciseEntry(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   userId: any,
@@ -778,12 +1155,15 @@ async function createExerciseEntry(
   createdByUserId: any,
   entrySource = 'Manual',
   exercisePresetEntryId: string | null = null,
-  options: { skipDuplicateCheck?: boolean } = {}
+  options: {
+    skipDuplicateCheck?: boolean;
+    activityDetail?: ExerciseEntryActivityDetail | null;
+  } = {}
 ) {
   const client = await getClient(userId);
   try {
     await client.query('BEGIN');
-    const { entry } = await _createExerciseEntryWithClient(
+    const { entry, operation } = await _createExerciseEntryWithClient(
       client,
       userId,
       entryData,
@@ -792,6 +1172,21 @@ async function createExerciseEntry(
       exercisePresetEntryId,
       options
     );
+    if (options.activityDetail) {
+      if (operation === 'updated') {
+        await activityDetailsRepository._deleteActivityDetailsByEntryIdAndProviderWithClient(
+          client,
+          userId,
+          entry.id,
+          options.activityDetail.provider_name,
+          options.activityDetail.detail_type
+        );
+      }
+      await activityDetailsRepository._createActivityDetailWithClient(client, {
+        ...options.activityDetail,
+        exercise_entry_id: entry.id,
+      });
+    }
     await client.query('COMMIT');
     return entry;
   } catch (error) {
@@ -886,10 +1281,9 @@ async function updateExerciseEntriesDateByPresetEntryIdWithClient(
   );
 }
 /**
- * The single non-null workout plan assignment id shared by the child
+ * The non-null workout plan assignment id associated with the child
  * exercise_entries of a grouped session, or null when the session is not
- * linked to a workout plan. Throws if the children carry more than one
- * distinct non-null assignment id.
+ * linked to a workout plan.
  */
 async function getWorkoutPlanAssignmentIdByPresetEntryIdWithClient(
   client: PoolClient,
@@ -907,12 +1301,6 @@ async function getWorkoutPlanAssignmentIdByPresetEntryIdWithClient(
         AND workout_plan_assignment_id IS NOT NULL`,
     [userId, presetEntryId]
   );
-
-  if (result.rows.length > 1) {
-    throw new Error(
-      'Grouped workout contains multiple workout plan assignment ids.'
-    );
-  }
 
   return result.rows[0]?.workout_plan_assignment_id ?? null;
 }
@@ -957,6 +1345,11 @@ async function _reconcileExerciseEntrySetsWithClient(
   sets: any
 ) {
   const incoming = Array.isArray(sets) ? sets : [];
+  const modalityResult = await client.query(
+    'SELECT modality FROM exercise_entries WHERE id = $1',
+    [exerciseEntryId]
+  );
+  assertSetWeightSign(incoming, modalityResult.rows[0]?.modality ?? null);
 
   const existingResult = await client.query(
     'SELECT id FROM exercise_entry_sets WHERE exercise_entry_id = $1',
@@ -1016,8 +1409,9 @@ async function _reconcileExerciseEntrySetsWithClient(
            rpe = $8,
            completed_at = $9,
            is_pr = $10,
-           distance = $11
-       WHERE id = $12 AND exercise_entry_id = $13`,
+           distance = $11,
+           rir = $12
+       WHERE id = $13 AND exercise_entry_id = $14`,
       [
         set.set_number,
         set.set_type ?? null,
@@ -1030,6 +1424,7 @@ async function _reconcileExerciseEntrySetsWithClient(
         set.completed_at ?? null,
         set.is_pr ?? false,
         set.distance ?? null,
+        set.rir ?? null,
         set.id,
         exerciseEntryId,
       ]
@@ -1048,12 +1443,13 @@ async function _reconcileExerciseEntrySetsWithClient(
       set.rest_time ?? null,
       set.notes ?? null,
       set.rpe ?? null,
+      set.rir ?? null,
       set.completed_at ?? null,
       set.is_pr ?? false,
       set.distance ?? null,
     ]);
     const setsQuery = format(
-      'INSERT INTO exercise_entry_sets (exercise_entry_id, set_number, set_type, reps, weight, duration, rest_time, notes, rpe, completed_at, is_pr, distance) VALUES %L',
+      'INSERT INTO exercise_entry_sets (exercise_entry_id, set_number, set_type, reps, weight, duration, rest_time, notes, rpe, rir, completed_at, is_pr, distance) VALUES %L',
       setsValues
     );
     await client.query(setsQuery);
@@ -1079,7 +1475,7 @@ async function getExerciseEntriesByDate(userId: any, selectedDate: any) {
   try {
     // 1. Fetch all exercise preset entries for the given date and user
     const presetEntriesResult = await client.query(
-      `SELECT id, workout_preset_id, name, description, notes, created_at, source
+      `SELECT id, workout_preset_id, name, description, notes, created_at, source, location
        FROM exercise_preset_entries
        WHERE user_id = $1 AND entry_date = $2
        ORDER BY created_at ASC`,
@@ -1093,7 +1489,7 @@ async function getExerciseEntriesByDate(userId: any, selectedDate: any) {
          COALESCE(
            (SELECT json_agg(set_data ORDER BY set_data.set_number)
             FROM (
-              SELECT ees.id, ees.set_number, ees.set_type, ees.reps, ees.weight, ees.duration, ees.rest_time, ees.notes, ees.rpe, to_char(ees.completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS completed_at, ees.is_pr, ees.distance
+              SELECT ees.id, ees.set_number, ees.set_type, ees.reps, ees.weight, ees.duration, ees.rest_time, ees.notes, ees.rpe, ees.rir, to_char(ees.completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS completed_at, ees.is_pr, ees.distance
               FROM exercise_entry_sets ees
               WHERE ees.exercise_entry_id = ee.id
             ) AS set_data
@@ -1119,6 +1515,7 @@ async function getExerciseEntriesByDate(userId: any, selectedDate: any) {
         name: preset.name,
         description: preset.description,
         notes: preset.notes,
+        location: preset.location ?? null,
         created_at: preset.created_at,
         source: preset.source,
         exercises: [], // This will hold the individual exercise entries
@@ -1289,6 +1686,10 @@ async function getExerciseProgressData(
          ee.exercise_preset_entry_id,
          epe.name AS exercise_preset_entry_name,
          e.category,
+         ee.modality,
+         -- Body weight that day, for a bodyweight exercise's load
+         -- (effectiveLoadKg in @workspace/shared).
+         bw.weight::float8 AS body_weight_kg,
          (
            ee.avg_heart_rate IS NOT NULL
            OR ee.max_heart_rate IS NOT NULL
@@ -1307,7 +1708,7 @@ async function getExerciseProgressData(
          COALESCE(
            (SELECT json_agg(set_data ORDER BY set_data.set_number)
             FROM (
-              SELECT ees.id, ees.set_number, ees.set_type, ees.reps, ees.weight, ees.duration, ees.rest_time, ees.notes, ees.rpe, to_char(ees.completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS completed_at, ees.is_pr, ees.distance
+              SELECT ees.id, ees.set_number, ees.set_type, ees.reps, ees.weight, ees.duration, ees.rest_time, ees.notes, ees.rpe, ees.rir, to_char(ees.completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS completed_at, ees.is_pr, ees.distance
               FROM exercise_entry_sets ees
               WHERE ees.exercise_entry_id = ee.id
             ) AS set_data
@@ -1316,6 +1717,7 @@ async function getExerciseProgressData(
        FROM exercise_entries ee
        LEFT JOIN exercise_preset_entries epe ON epe.id = ee.exercise_preset_entry_id
        LEFT JOIN exercises e ON e.id = ee.exercise_id
+       ${bodyWeightJoinSql('ee')}
        WHERE ee.user_id = $1
          AND ee.exercise_id = $2
          AND ee.entry_date BETWEEN $3 AND $4
@@ -1343,7 +1745,7 @@ async function getExerciseHistory(userId: any, exerciseId: any, limit = 5) {
          COALESCE(
            (SELECT json_agg(set_data ORDER BY set_data.set_number)
             FROM (
-              SELECT ees.id, ees.set_number, ees.set_type, ees.reps, ees.weight, ees.duration, ees.rest_time, ees.notes, ees.rpe, to_char(ees.completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS completed_at, ees.is_pr, ees.distance
+              SELECT ees.id, ees.set_number, ees.set_type, ees.reps, ees.weight, ees.duration, ees.rest_time, ees.notes, ees.rpe, ees.rir, to_char(ees.completed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS completed_at, ees.is_pr, ees.distance
               FROM exercise_entry_sets ees
               WHERE ees.exercise_entry_id = ee.id
             ) AS set_data
@@ -1374,13 +1776,21 @@ async function getBestSetForExercise(
       `SELECT ee.entry_date::TEXT AS entry_date, ees.weight, ees.reps, ees.set_number
          FROM exercise_entries ee
          JOIN exercise_entry_sets ees ON ees.exercise_entry_id = ee.id
+         -- LEFT JOIN: ad-hoc and imported entries have no session and count
+         -- as standard work.
+         LEFT JOIN exercise_preset_entries epe ON epe.id = ee.exercise_preset_entry_id
         WHERE ee.user_id = $1
           AND ee.exercise_id = $2
-          AND ees.weight IS NOT NULL
+          -- A bodyweight set with no weight is body weight alone: it ranks
+          -- as +0 so a plain pull-up can still hold the rep record.
+          AND (ees.weight IS NOT NULL OR ee.modality = 'bodyweight_reps')
           AND (ees.set_type IS NULL OR regexp_replace(LOWER(ees.set_type), '[^a-z0-9]', '', 'g') NOT LIKE 'warmup%')
+          AND COALESCE(epe.workout_format, 'standard') = 'standard'
           AND ($3::uuid IS NULL OR ee.exercise_preset_entry_id IS DISTINCT FROM $3)
-        ORDER BY ees.weight DESC,
+        ORDER BY COALESCE(ees.weight, 0) DESC,
                  ees.reps DESC NULLS LAST,
+                 ees.distance DESC NULLS LAST,
+                 ees.duration DESC NULLS LAST,
                  ee.entry_date DESC,
                  ee.created_at DESC,
                  ees.set_number DESC,
@@ -1488,8 +1898,24 @@ async function deleteExerciseEntriesByEntrySourceAndDateWithClient(
   startDate: string,
   endDate: string,
   entrySource: string,
-  excludedExerciseName?: string
+  excludedExerciseName?: string,
+  // source_ids present in the payload that triggered this cleanup. Those rows
+  // are about to be updated in place by the dedupe in
+  // _createExerciseEntryWithClient, which merges over the existing row and so
+  // keeps the telemetry columns the payload omits. Deleting them first would
+  // instead cascade away exercise_entry_gps_points / _laps / _hr_zones and
+  // re-insert a summary, silently dropping a workout's route and heart rate on
+  // the next sync that re-sends it without telemetry — which is exactly what
+  // the enriched-session reuse cache makes every sync do once a session has
+  // been collected once (#2191, #2300).
+  //
+  // Everything else in the span is still deleted, so a workout removed upstream
+  // still disappears here. The client splits workout chunks on day boundaries,
+  // so one request always carries every workout for the days it covers and this
+  // exclusion cannot strand another chunk's rows.
+  keepSourceIds?: string[]
 ) {
+  await acquireExerciseEntrySyncLockWithClient(client, userId, entrySource);
   // Get IDs of exercise entries to be deleted
   const entryIdsResult = await client.query(
     `SELECT id FROM exercise_entries
@@ -1504,8 +1930,20 @@ async function deleteExerciseEntriesByEntrySourceAndDateWithClient(
            WHERE e.id = exercise_entries.exercise_id
              AND e.name = $5
          )
+       )
+       AND (
+         $6::text[] IS NULL
+         OR source_id IS NULL
+         OR NOT (source_id = ANY($6::text[]))
        )`,
-    [userId, startDate, endDate, entrySource, excludedExerciseName ?? null]
+    [
+      userId,
+      startDate,
+      endDate,
+      entrySource,
+      excludedExerciseName ?? null,
+      keepSourceIds && keepSourceIds.length > 0 ? keepSourceIds : null,
+    ]
   );
   const entryIds = entryIdsResult.rows.map((row: { id: string }) => row.id);
   if (entryIds.length > 0) {
@@ -1550,7 +1988,8 @@ async function deleteExerciseEntriesByEntrySourceAndDate(
   startDate: string,
   endDate: string,
   entrySource: string,
-  excludedExerciseName?: string
+  excludedExerciseName?: string,
+  keepSourceIds?: string[]
 ) {
   const client = await getClient(userId);
   try {
@@ -1562,7 +2001,8 @@ async function deleteExerciseEntriesByEntrySourceAndDate(
         startDate,
         endDate,
         entrySource,
-        excludedExerciseName
+        excludedExerciseName,
+        keepSourceIds
       );
     await client.query('COMMIT');
     return deletedCount;
@@ -1596,6 +2036,36 @@ async function getDailyExerciseTotalsRange(
               SUM(COALESCE(steps, 0)) AS steps
        FROM exercise_entries
        WHERE user_id = $1 AND entry_date BETWEEN $2 AND $3
+       GROUP BY entry_date
+       ORDER BY entry_date ASC`,
+      [userId, startDate, endDate]
+    );
+    return result.rows;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Days with at least one logged workout in [startDate, endDate], with the
+ * entry count — the Reports workout heatmap's source (#2461). Device
+ * "Active Calories" summary rows are not workouts, matching the exercise
+ * dashboard's own filter; `IS DISTINCT FROM` keeps null-named rows counted.
+ */
+async function getWorkoutDayCounts(
+  userId: string,
+  startDate: string,
+  endDate: string
+): Promise<{ date: string; count: number }[]> {
+  const client = await getClient(userId);
+  try {
+    const result = await client.query(
+      `SELECT TO_CHAR(entry_date, 'YYYY-MM-DD') AS date,
+              COUNT(*)::int AS count
+       FROM exercise_entries
+       WHERE user_id = $1
+         AND entry_date BETWEEN $2 AND $3
+         AND exercise_name IS DISTINCT FROM 'Active Calories'
        GROUP BY entry_date
        ORDER BY entry_date ASC`,
       [userId, startDate, endDate]
@@ -1791,6 +2261,35 @@ async function getWaterEstimatedSumForDateRange(
   }
 }
 
+/**
+ * Queries which sourceIds already exist for a given user and source.
+ */
+async function getExistingSourceIds(
+  userId: string,
+  source: string,
+  sourceIds: string[]
+): Promise<Set<string>> {
+  if (sourceIds.length === 0) {
+    return new Set<string>();
+  }
+  const client = await getClient(userId);
+  try {
+    const res = await client.query(
+      'SELECT source_id FROM exercise_entries WHERE user_id = $1 AND source = $2 AND source_id = ANY($3::text[])',
+      [userId, source, sourceIds]
+    );
+    const existing = new Set<string>();
+    for (const row of res.rows as Array<{ source_id: string | null }>) {
+      if (row.source_id) {
+        existing.add(row.source_id);
+      }
+    }
+    return existing;
+  } finally {
+    client.release();
+  }
+}
+
 export { upsertExerciseEntryData };
 export { _createExerciseEntryWithClient };
 export { createExerciseEntry };
@@ -1812,12 +2311,14 @@ export { getRecentSessionsForExercise };
 export { deleteExerciseEntriesByEntrySourceAndDate };
 export { deleteExerciseEntriesByEntrySourceAndDateWithClient };
 export { getDailyExerciseTotalsRange };
+export { getWorkoutDayCounts };
 export { getDailyExerciseCalorieSplitRange };
 export { getExerciseDiaryRange };
 export { getRecentExerciseEntries };
 export { getExerciseUsage };
 export { getWaterEstimatedSumForDate };
 export { getWaterEstimatedSumForDateRange };
+export { getExistingSourceIds };
 export default {
   getDailyExerciseCalorieSplitRange,
   upsertExerciseEntryData,
@@ -1831,6 +2332,8 @@ export default {
   updateExerciseEntry,
   updateExerciseEntryTelemetryOnly,
   _updateExerciseEntryTelemetryOnlyWithClient,
+  applyWatchTelemetryAtomically,
+  filterStaleWatchTelemetryFields,
   updateExerciseEntriesDateByPresetEntryIdWithClient,
   getWorkoutPlanAssignmentIdByPresetEntryIdWithClient,
   deleteExerciseEntriesByPresetEntryIdWithClient,
@@ -1844,9 +2347,11 @@ export default {
   deleteExerciseEntriesByEntrySourceAndDate,
   deleteExerciseEntriesByEntrySourceAndDateWithClient,
   getDailyExerciseTotalsRange,
+  getWorkoutDayCounts,
   getExerciseDiaryRange,
   getRecentExerciseEntries,
   getExerciseUsage,
   getWaterEstimatedSumForDate,
   getWaterEstimatedSumForDateRange,
+  getExistingSourceIds,
 };

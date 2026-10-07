@@ -1,5 +1,6 @@
 import type { NativeStackHeaderItem } from '@react-navigation/native-stack';
 import { formatDateLabel } from './dateUtils';
+import { createNativeHeaderIconButtonItem } from './nativeHeaderItems';
 
 export type NativeHeaderDatePickerOptions = {
   selectedDate: string;
@@ -7,27 +8,47 @@ export type NativeHeaderDatePickerOptions = {
   onDatePress: () => void;
   onNextDate: () => void;
   tintColor: string;
+  dateTintColor?: string;
   accessibilityLabel: string;
   previousDayLabel?: string;
   nextDayLabel?: string;
   dateLabel?: string;
   t: import('i18next').TFunction;
   locale: string;
+  leadingAction?: {
+    sfSymbol: string;
+    onPress: () => void;
+    accessibilityLabel: string;
+    identifier: string;
+  };
 };
 
 export type NativeHeaderDatePickerNavigation = {
   setOptions: (options: {
     unstable_headerRightItems: () => NativeStackHeaderItem[];
+    unstable_headerLeftItems?: () => NativeStackHeaderItem[];
   }) => void;
 };
 
 export function setNativeHeaderDatePickerOptions(
   navigation: NativeHeaderDatePickerNavigation,
-  options: NativeHeaderDatePickerOptions,
+  options: NativeHeaderDatePickerOptions
 ) {
+  const leadingAction = options.leadingAction;
+
   navigation.setOptions({
-    unstable_headerRightItems: () =>
-      createNativeHeaderDatePickerItems(options),
+    unstable_headerRightItems: () => createNativeHeaderDatePickerItems(options),
+    unstable_headerLeftItems: leadingAction
+      ? () => [
+          createNativeHeaderIconButtonItem({
+            sfSymbol: leadingAction.sfSymbol,
+            onPress: leadingAction.onPress,
+            tintColor: options.tintColor,
+            accessibilityLabel: leadingAction.accessibilityLabel,
+            identifier: leadingAction.identifier,
+          }),
+        ]
+      : undefined,
   });
 }
 
@@ -37,6 +58,7 @@ export function createNativeHeaderDatePickerItems({
   onDatePress,
   onNextDate,
   tintColor,
+  dateTintColor,
   accessibilityLabel,
   previousDayLabel,
   nextDayLabel,
@@ -61,8 +83,12 @@ export function createNativeHeaderDatePickerItems({
       type: 'button',
       label: dateLabel ?? `${formatDateLabel(selectedDate, t, locale)} ▾`,
       onPress: onDatePress,
-      tintColor,
-      labelStyle: { fontSize: 15, fontWeight: '600', color: tintColor },
+      tintColor: dateTintColor ?? tintColor,
+      labelStyle: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: dateTintColor ?? tintColor,
+      },
       accessibilityLabel,
       identifier: 'date-picker',
       sharesBackground: true,
