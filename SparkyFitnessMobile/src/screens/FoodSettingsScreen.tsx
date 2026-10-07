@@ -216,7 +216,9 @@ const FoodSettingsScreen: React.FC<FoodSettingsScreenProps> = ({
         <View className="bg-surface rounded-xl p-3 mb-4 shadow-sm">
           <View className="flex-row justify-between items-center">
             <Text className="text-base font-semibold text-text-primary flex-shrink">
-              Auto-tag Log Entry Time
+              {t('foodSettings.autoTagEntryTime.title', {
+                defaultValue: 'Auto-tag Log Entry Time',
+              })}
             </Text>
             <Switch
               onValueChange={handleAutoTagEntryTimeToggle}
@@ -224,8 +226,10 @@ const FoodSettingsScreen: React.FC<FoodSettingsScreenProps> = ({
             />
           </View>
           <Text className="text-text-secondary text-sm mt-4">
-            Automatically set current time when logging new food or exercise
-            items. When disabled, log time remains empty.
+            {t('foodSettings.autoTagEntryTime.description', {
+              defaultValue:
+                'Automatically set current time when logging new food or exercise items. When disabled, log time remains empty.',
+            })}
           </Text>
         </View>
 

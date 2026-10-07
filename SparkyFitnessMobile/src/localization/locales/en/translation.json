@@ -3679,6 +3679,10 @@
       "default": "Default",
       "retryTitle": "Retry with Open Food Facts",
       "retryDescription": "If no result is found, try Open Food Facts automatically."
+    },
+    "autoTagEntryTime": {
+      "title": "Auto-tag Log Entry Time",
+      "description": "Automatically set current time when logging new food or exercise items. When disabled, log time remains empty."
     }
   },
   "workoutComplete": {
