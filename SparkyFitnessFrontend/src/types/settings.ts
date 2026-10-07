@@ -34,16 +34,6 @@ export interface WaterContainer {
   servings_per_container: number; // New field
 }
 
-export interface SodaContainer {
-  id: number;
-  user_id: string;
-  name: string;
-  volume: number;
-  unit: 'ml' | 'oz' | 'liter';
-  is_primary: boolean;
-  servings_per_container: number;
-}
-
 export interface FamilyAccess {
   id: string;
   owner_user_id: string;
