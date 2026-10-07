@@ -1026,8 +1026,9 @@ describe.runIf(RUN)('RLS permission matrix', () => {
       });
     });
 
-    // -- custom/library: delegates read when entitled, only owner writes (F1) -
-    describe('food_variants (custom, owner-only write)', () => {
+    // -- custom/library: delegates read when entitled; the owner and
+    // can_manage_diary delegates write, matching the foods/meals policy -
+    describe('food_variants (custom, owner + diary-delegate write)', () => {
       let foodId = '';
       let variantId = '';
       beforeAll(async () => {
@@ -1058,7 +1059,7 @@ describe.runIf(RUN)('RLS permission matrix', () => {
       crudSuite({
         table: 'food_variants',
         read: ['diary', 'reports', 'foodlib'],
-        write: [], // owner-only; no delegate may write
+        write: ['diary'],
         insert: () => ({
           sql: "INSERT INTO public.food_variants (food_id, serving_size, serving_unit) VALUES ($1, 2, 'g')",
           params: [foodId],
