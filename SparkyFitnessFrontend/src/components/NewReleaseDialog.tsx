@@ -1,10 +1,8 @@
 import type React from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { X, AlertTriangle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import {
   AlertDialog,
@@ -28,7 +26,6 @@ interface NewReleaseDialogProps {
   isOpen: boolean;
   onClose: () => void;
   releaseInfo: ReleaseInfo | null;
-  onDismissForVersion: (version: string) => void;
 }
 
 const formatGithubReleaseNotes = (notes: string): string => {
@@ -62,58 +59,15 @@ const NewReleaseDialog: React.FC<NewReleaseDialogProps> = ({
   isOpen,
   onClose,
   releaseInfo,
-  onDismissForVersion,
 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-
-  const [hasReadFully, setHasReadFully] = useState(false);
-  const [hasAcknowledged, setHasAcknowledged] = useState(false);
-  const [confirmationText, setConfirmationText] = useState('');
-
   const hasBreakingChange =
     releaseInfo?.releaseNotes?.toLowerCase().includes('breaking change') ??
     false;
 
-  const isConfirmedText =
-    !hasBreakingChange || confirmationText.trim().toUpperCase() === 'BREAKING';
-
-  const canClose = hasReadFully && hasAcknowledged && isConfirmedText;
-
-  const handleScroll = () => {
-    const container = scrollContainerRef.current;
-    if (!container) return;
-
-    // Check if user scrolled to bottom (with 5px margin of error)
-    const isAtBottom =
-      container.scrollHeight - container.scrollTop <=
-      container.clientHeight + 5;
-
-    if (isAtBottom) {
-      setHasReadFully(true);
-    }
-  };
-
-  useEffect(() => {
-    if (isOpen && releaseInfo) {
-      // Check if container has no scrollbar (content is short)
-      const timer = setTimeout(() => {
-        const container = scrollContainerRef.current;
-        if (container) {
-          if (container.scrollHeight <= container.clientHeight) {
-            setHasReadFully(true);
-          }
-        }
-      }, 100);
-
-      return () => clearTimeout(timer);
-    }
-  }, [isOpen, releaseInfo]);
-
   useEffect(() => {
     if (isOpen) {
       const handleMouseDown = (event: MouseEvent) => {
-        if (!canClose) return; // Block closing if not read/acknowledged
         if (
           contentRef.current &&
           !contentRef.current.contains(event.target as Node)
@@ -123,7 +77,7 @@ const NewReleaseDialog: React.FC<NewReleaseDialogProps> = ({
       };
 
       const handleKeyDown = (event: KeyboardEvent) => {
-        if (event.key === 'Escape' && canClose) {
+        if (event.key === 'Escape') {
           onClose();
         }
       };
@@ -136,33 +90,13 @@ const NewReleaseDialog: React.FC<NewReleaseDialogProps> = ({
         document.removeEventListener('keydown', handleKeyDown);
       };
     }
-  }, [isOpen, onClose, canClose]);
+  }, [isOpen, onClose]);
 
   if (!isOpen || !releaseInfo) {
     return null;
   }
 
-  const handleDismiss = () => {
-    if (canClose && releaseInfo) {
-      onDismissForVersion(releaseInfo.version);
-      onClose();
-    }
-  };
-
-  const handleKeyDownInput = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      if (canClose) {
-        handleDismiss();
-      }
-    }
-  };
-
   const handleOpenChange = (open: boolean) => {
-    // Prevent closing via overlay click or ESC unless requirements are met
-    if (!open && !canClose) {
-      return;
-    }
     if (!open) {
       onClose();
     }
@@ -193,11 +127,7 @@ const NewReleaseDialog: React.FC<NewReleaseDialogProps> = ({
               {new Date(releaseInfo.publishedAt).toLocaleDateString()}
             </p>
 
-            <div
-              ref={scrollContainerRef}
-              onScroll={handleScroll}
-              className="mt-3 p-3 border border-border rounded-md max-h-64 overflow-y-auto bg-muted/30"
-            >
+            <div className="mt-3 p-3 border border-border rounded-md max-h-64 overflow-y-auto bg-muted/30">
               <h3 className="font-semibold mb-2 text-sm text-foreground">
                 Release Notes:
               </h3>
@@ -304,96 +234,6 @@ const NewReleaseDialog: React.FC<NewReleaseDialogProps> = ({
               </div>
             </div>
 
-            {!hasReadFully && (
-              <p className="text-xs text-yellow-600 dark:text-yellow-500 font-medium animate-pulse mt-1">
-                ⚠️ Please scroll to the bottom of the release notes to finish
-                reading.
-              </p>
-            )}
-
-            {hasReadFully && (
-              <div
-                className={cn(
-                  'mt-4 flex items-start space-x-3 border rounded-md p-3 transition-colors',
-                  hasBreakingChange
-                    ? 'border-red-200 dark:border-red-950/50 bg-red-50 dark:bg-red-950/10'
-                    : 'border-border bg-muted/20'
-                )}
-              >
-                <Checkbox
-                  id="read-acknowledgement-chk"
-                  checked={hasAcknowledged}
-                  onCheckedChange={(checked) =>
-                    setHasAcknowledged(checked === true)
-                  }
-                  className={cn(
-                    'mt-0.5',
-                    hasBreakingChange &&
-                      'border-red-500 data-[state=checked]:bg-red-500 data-[state=checked]:text-white'
-                  )}
-                />
-                <div className="grid gap-1 w-full">
-                  <label
-                    htmlFor="read-acknowledgement-chk"
-                    className={cn(
-                      'text-xs font-semibold leading-none cursor-pointer',
-                      hasBreakingChange
-                        ? 'text-red-800 dark:text-red-300'
-                        : 'text-foreground'
-                    )}
-                  >
-                    {hasBreakingChange ? (
-                      <>
-                        I acknowledge that this release contains a{' '}
-                        <span className="underline decoration-wavy decoration-red-500">
-                          BREAKING CHANGE
-                        </span>{' '}
-                        and I have read the changes.
-                      </>
-                    ) : (
-                      'I have read and understood the release notes.'
-                    )}
-                  </label>
-                  <p
-                    className={cn(
-                      'text-xs leading-normal',
-                      hasBreakingChange
-                        ? 'text-red-700/80 dark:text-red-400/80 font-medium'
-                        : 'text-muted-foreground'
-                    )}
-                  >
-                    {hasBreakingChange
-                      ? 'Please contact the platform administrator to coordinate updates before proceeding.'
-                      : 'Checking this box confirms you are up-to-date with the latest changes.'}
-                  </p>
-
-                  {hasBreakingChange && (
-                    <div className="flex flex-col gap-1.5 mt-3">
-                      <label
-                        htmlFor="confirm-text-input"
-                        className="text-xs font-semibold text-red-800 dark:text-red-300"
-                      >
-                        To confirm you understand, please type{' '}
-                        <strong className="font-mono text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-950/40 px-1 py-0.5 rounded border border-red-200 dark:border-red-900/40">
-                          BREAKING
-                        </strong>{' '}
-                        below:
-                      </label>
-                      <Input
-                        id="confirm-text-input"
-                        type="text"
-                        value={confirmationText}
-                        onChange={(e) => setConfirmationText(e.target.value)}
-                        onKeyDown={handleKeyDownInput}
-                        placeholder="Type 'BREAKING' here"
-                        className="max-w-xs border-red-300 dark:border-red-900 focus-visible:ring-red-500 h-8 text-xs bg-background text-foreground"
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-
             <p className="mt-4 text-xs">
               View on GitHub:{' '}
               <a
@@ -408,17 +248,12 @@ const NewReleaseDialog: React.FC<NewReleaseDialogProps> = ({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter className="mt-4 sm:justify-center">
-          <AlertDialogCancel
-            onClick={handleDismiss}
-            disabled={!canClose}
-            className="w-full sm:w-auto"
-          >
-            Don't show again for this version
+          <AlertDialogCancel onClick={onClose} className="w-full sm:w-auto">
+            Close
           </AlertDialogCancel>
         </AlertDialogFooter>
         <AlertDialogCancel
           onClick={onClose}
-          disabled={!canClose}
           className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground p-0"
         >
           <X className="h-4 w-4" />

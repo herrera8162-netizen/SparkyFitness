@@ -159,8 +159,12 @@ const Root = () => {
     setShowNewReleaseDialog(true);
   };
 
-  const handleDismissRelease = (version: string) => {
-    localStorage.setItem('dismissedReleaseVersion', version);
+  // Closing the dialog any way marks the release as seen, so it only
+  // auto-opens once per update.
+  const handleCloseRelease = () => {
+    if (latestRelease) {
+      localStorage.setItem('dismissedReleaseVersion', latestRelease.version);
+    }
     setShowNewReleaseDialog(false);
   };
 
@@ -252,9 +256,8 @@ const Root = () => {
                         : 'closed'
                     }
                     isOpen={showNewReleaseDialog}
-                    onClose={() => setShowNewReleaseDialog(false)}
+                    onClose={handleCloseRelease}
                     releaseInfo={latestRelease}
-                    onDismissForVersion={handleDismissRelease}
                   />
                 </ErrorBoundary>
                 <ErrorBoundary
